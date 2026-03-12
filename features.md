@@ -77,7 +77,7 @@
 ## Feature 15: Config Manager — 4-Layer Merge
 - Description: [Epic 2: Complete Engine, Story 2.5] As a developer, I want to resolve config with 4 priority layers, so that global, per-type, per-pattern and per-step config work like Roast. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 16: Claude Code Session Management
 - Description: [Epic 2: Complete Engine, Story 2.6] As a developer, I want to reuse Claude Code sessions between agent steps, so that agent context persists and responses are smarter. Source: EPICS-AND-STORIES.md
