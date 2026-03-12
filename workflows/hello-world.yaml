@@ -1,0 +1,39 @@
+name: hello-world
+description: "Simple test workflow with cmd, gate, and repeat"
+
+scopes:
+  count_loop:
+    steps:
+      - name: count
+        type: cmd
+        run: "echo Iteration {{ scope.index }}"
+      - name: check
+        type: gate
+        condition: "{{ steps.count.exit_code == 0 }}"
+        on_pass: continue
+        message: "Count OK"
+
+steps:
+  - name: greet
+    type: cmd
+    run: "echo Hello from Minion Engine!"
+
+  - name: show_target
+    type: cmd
+    run: "echo Target is: {{ target }}"
+
+  - name: check_greet
+    type: gate
+    condition: "{{ steps.greet.exit_code == 0 }}"
+    on_pass: continue
+    on_fail: fail
+    message: "Greeting succeeded"
+
+  - name: loop_test
+    type: repeat
+    scope: count_loop
+    max_iterations: 3
+
+  - name: done
+    type: cmd
+    run: "echo All done! Workflow completed successfully."

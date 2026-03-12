@@ -1,0 +1,129 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::steps::StepOutput;
+
+/// Tree-structured context that stores step outputs
+pub struct Context {
+    steps: HashMap<String, StepOutput>,
+    variables: HashMap<String, serde_json::Value>,
+    parent: Option<Arc<Context>>,
+    pub scope_value: Option<serde_json::Value>,
+    pub scope_index: usize,
+    pub session_id: Option<String>,
+}
+
+impl Context {
+    pub fn new(target: String, vars: HashMap<String, serde_json::Value>) -> Self {
+        let mut variables = vars;
+        variables.insert("target".to_string(), serde_json::Value::String(target));
+
+        Self {
+            steps: HashMap::new(),
+            variables,
+            parent: None,
+            scope_value: None,
+            scope_index: 0,
+            session_id: None,
+        }
+    }
+
+    /// Store a step output
+    pub fn store(&mut self, name: &str, output: StepOutput) {
+        if let StepOutput::Agent(ref agent) = output {
+            if let Some(ref sid) = agent.session_id {
+                self.session_id = Some(sid.clone());
+            }
+        }
+        self.steps.insert(name.to_string(), output);
+    }
+
+    /// Get a step output (looks in parent if not found locally)
+    pub fn get_step(&self, name: &str) -> Option<&StepOutput> {
+        self.steps
+            .get(name)
+            .or_else(|| self.parent.as_ref().and_then(|p| p.get_step(name)))
+    }
+
+    /// Get a variable
+    pub fn get_var(&self, name: &str) -> Option<&serde_json::Value> {
+        self.variables
+            .get(name)
+            .or_else(|| self.parent.as_ref().and_then(|p| p.get_var(name)))
+    }
+
+    /// Get session ID (searches parent chain)
+    pub fn get_session(&self) -> Option<&str> {
+        self.session_id
+            .as_deref()
+            .or_else(|| self.parent.as_ref().and_then(|p| p.get_session()))
+    }
+
+    /// Create a child context for a scope
+    pub fn child(parent: Arc<Context>, scope_value: Option<serde_json::Value>, index: usize) -> Self {
+        Self {
+            steps: HashMap::new(),
+            variables: HashMap::new(),
+            parent: Some(parent.clone()),
+            scope_value,
+            scope_index: index,
+            session_id: parent.session_id.clone(),
+        }
+    }
+
+    /// Convert to Tera template context
+    pub fn to_tera_context(&self) -> tera::Context {
+        let mut ctx = tera::Context::new();
+
+        // Add variables
+        if let Some(parent) = &self.parent {
+            ctx = parent.to_tera_context();
+        }
+        for (k, v) in &self.variables {
+            ctx.insert(k, v);
+        }
+
+        // Add steps as a map
+        let mut steps_map = HashMap::new();
+        // First add parent steps
+        if let Some(parent) = &self.parent {
+            collect_steps(parent, &mut steps_map);
+        }
+        // Then local steps (override parent)
+        for (name, output) in &self.steps {
+            steps_map.insert(name.clone(), step_output_to_value(output));
+        }
+        ctx.insert("steps", &steps_map);
+
+        // Add scope
+        if let Some(sv) = &self.scope_value {
+            let mut scope_map = HashMap::new();
+            scope_map.insert("value".to_string(), sv.clone());
+            scope_map.insert("index".to_string(), serde_json::json!(self.scope_index));
+            ctx.insert("scope", &scope_map);
+        }
+
+        ctx
+    }
+
+    /// Render a template string with this context
+    pub fn render_template(&self, template: &str) -> Result<String, crate::error::StepError> {
+        let tera_ctx = self.to_tera_context();
+        tera::Tera::one_off(template, &tera_ctx, false)
+            .map_err(|e| crate::error::StepError::Template(format!("{e}")))
+    }
+}
+
+fn collect_steps(ctx: &Context, map: &mut HashMap<String, serde_json::Value>) {
+    if let Some(parent) = &ctx.parent {
+        collect_steps(parent, map);
+    }
+    for (name, output) in &ctx.steps {
+        map.insert(name.clone(), step_output_to_value(output));
+    }
+}
+
+fn step_output_to_value(output: &StepOutput) -> serde_json::Value {
+    // Serialize to JSON value for template access
+    serde_json::to_value(output).unwrap_or(serde_json::Value::Null)
+}
