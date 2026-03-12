@@ -1,0 +1,297 @@
+{
+  "generated": "2026-03-12",
+  "source_epics_file": "EPICS-AND-STORIES.md",
+  "project_context_file": null,
+  "mappings": [
+    {
+      "feature_number": 1,
+      "epic_number": 1,
+      "story_number": 1,
+      "epic_title": "MVP Foundation",
+      "story_title": "Project Bootstrap & CLI Skeleton",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 2,
+      "epic_number": 1,
+      "story_number": 2,
+      "epic_title": "MVP Foundation",
+      "story_title": "YAML Workflow Parser",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 3,
+      "epic_number": 1,
+      "story_number": 3,
+      "epic_title": "MVP Foundation",
+      "story_title": "Workflow Validator",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 4,
+      "epic_number": 1,
+      "story_number": 4,
+      "epic_title": "MVP Foundation",
+      "story_title": "Context Store & Template Engine",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 5,
+      "epic_number": 1,
+      "story_number": 5,
+      "epic_title": "MVP Foundation",
+      "story_title": "Engine Core — Dispatch Loop",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 6,
+      "epic_number": 1,
+      "story_number": 6,
+      "epic_title": "MVP Foundation",
+      "story_title": "Step — cmd (Shell Commands)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 7,
+      "epic_number": 1,
+      "story_number": 7,
+      "epic_title": "MVP Foundation",
+      "story_title": "Step — agent (Claude Code CLI Integration)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 8,
+      "epic_number": 1,
+      "story_number": 8,
+      "epic_title": "MVP Foundation",
+      "story_title": "Step — gate (Conditional Flow Control)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 9,
+      "epic_number": 1,
+      "story_number": 9,
+      "epic_title": "MVP Foundation",
+      "story_title": "Step — repeat (Bounded Retry Loop)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 10,
+      "epic_number": 1,
+      "story_number": 10,
+      "epic_title": "MVP Foundation",
+      "story_title": "MVP Integration — fix-issue Workflow",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 11,
+      "epic_number": 2,
+      "story_number": 1,
+      "epic_title": "Complete Engine",
+      "story_title": "Step — chat (Direct LLM API)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 12,
+      "epic_number": 2,
+      "story_number": 2,
+      "epic_title": "Complete Engine",
+      "story_title": "Step — map (Collection Processing)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 13,
+      "epic_number": 2,
+      "story_number": 3,
+      "epic_title": "Complete Engine",
+      "story_title": "Step — parallel (Independent Concurrent Steps)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 14,
+      "epic_number": 2,
+      "story_number": 4,
+      "epic_title": "Complete Engine",
+      "story_title": "Step — call (Scope Invocation)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 15,
+      "epic_number": 2,
+      "story_number": 5,
+      "epic_title": "Complete Engine",
+      "story_title": "Config Manager — 4-Layer Merge",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 16,
+      "epic_number": 2,
+      "story_number": 6,
+      "epic_title": "Complete Engine",
+      "story_title": "Claude Code Session Management",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 17,
+      "epic_number": 2,
+      "story_number": 7,
+      "epic_title": "Complete Engine",
+      "story_title": "Rich Terminal Display",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 18,
+      "epic_number": 2,
+      "story_number": 8,
+      "epic_title": "Complete Engine",
+      "story_title": "Step — template (Tera File Rendering)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 19,
+      "epic_number": 3,
+      "story_number": 1,
+      "epic_title": "Polish & Production",
+      "story_title": "Docker Sandbox Integration",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 20,
+      "epic_number": 3,
+      "story_number": 2,
+      "epic_title": "Polish & Production",
+      "story_title": "Dry-Run Mode",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 21,
+      "epic_number": 3,
+      "story_number": 3,
+      "epic_title": "Polish & Production",
+      "story_title": "Resume From Step",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 22,
+      "epic_number": 3,
+      "story_number": 4,
+      "epic_title": "Polish & Production",
+      "story_title": "JSON Output Mode",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 23,
+      "epic_number": 3,
+      "story_number": 5,
+      "epic_title": "Polish & Production",
+      "story_title": "CLI — init & list & inspect Commands",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 24,
+      "epic_number": 3,
+      "story_number": 6,
+      "epic_title": "Polish & Production",
+      "story_title": "Integration Tests",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 25,
+      "epic_number": 3,
+      "story_number": 7,
+      "epic_title": "Polish & Production",
+      "story_title": "Documentation",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 26,
+      "epic_number": 4,
+      "story_number": 1,
+      "epic_title": "Distribution",
+      "story_title": "cargo install",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 27,
+      "epic_number": 4,
+      "story_number": 2,
+      "epic_title": "Distribution",
+      "story_title": "Pre-compiled Binaries",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 28,
+      "epic_number": 4,
+      "story_number": 3,
+      "epic_title": "Distribution",
+      "story_title": "Homebrew Formula",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 29,
+      "epic_number": 4,
+      "story_number": 4,
+      "epic_title": "Distribution",
+      "story_title": "Workflow Gallery",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    }
+  ]
+}
