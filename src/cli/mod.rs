@@ -1,5 +1,6 @@
 mod commands;
 pub mod display;
+pub mod init_templates;
 
 use clap::{Parser, Subcommand};
 
@@ -16,8 +17,12 @@ enum Command {
     Execute(commands::ExecuteArgs),
     /// Validate a workflow YAML without running
     Validate(commands::ValidateArgs),
-    /// List available workflows
+    /// List available workflows (current dir, ./workflows/, ~/.minion/workflows/)
     List,
+    /// Create a new workflow from a template
+    Init(commands::InitArgs),
+    /// Inspect a workflow: show config, scopes, dependency graph and dry-run summary
+    Inspect(commands::InspectArgs),
     /// Show version
     Version,
 }
@@ -28,6 +33,8 @@ impl Cli {
             Command::Execute(args) => commands::execute(args).await,
             Command::Validate(args) => commands::validate(args).await,
             Command::List => commands::list().await,
+            Command::Init(args) => commands::init(args).await,
+            Command::Inspect(args) => commands::inspect(args).await,
             Command::Version => {
                 println!("minion {}", env!("CARGO_PKG_VERSION"));
                 Ok(())

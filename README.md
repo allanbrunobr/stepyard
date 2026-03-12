@@ -6,6 +6,29 @@ AI workflow engine that orchestrates Claude Code CLI through declarative YAML wo
 
 Minion Engine executes multi-step workflows that combine shell commands, Claude Code AI agent calls, conditional gates, and retry loops. It powers automated workflows like fixing GitHub issues end-to-end (fetch → plan → implement → lint → test → PR).
 
+```
+┌──────────────────────────────────────────────┐
+│              minion execute                  │
+│                                              │
+│  YAML Workflow                               │
+│  ┌─────────────────────────────────────┐    │
+│  │  steps:                             │    │
+│  │    cmd  → shell command             │    │
+│  │    agent → Claude Code CLI          │    │
+│  │    gate  → conditional branch       │    │
+│  │    repeat → retry loop              │    │
+│  │    map   → iterate over items       │    │
+│  │    parallel → concurrent steps      │    │
+│  │    call  → invoke a scope           │    │
+│  │    template → render prompt file    │    │
+│  └─────────────────────────────────────┘    │
+│                                              │
+│  Context Store: step outputs, variables      │
+│  Template Engine: Tera ({{ expressions }})   │
+│  Config: 4-layer merge (global/type/pattern/step) │
+└──────────────────────────────────────────────┘
+```
+
 ## Prerequisites
 
 - Rust 1.75+ (`rustup` recommended)
@@ -15,11 +38,8 @@ Minion Engine executes multi-step workflows that combine shell commands, Claude 
 ## Build
 
 ```bash
-# Build release binary
 cargo build --release
-
-# The binary is at:
-./target/release/minion
+# binary at: ./target/release/minion
 ```
 
 ## Install
@@ -28,45 +48,83 @@ cargo build --release
 cargo install --path .
 ```
 
+## Quick Start
+
+```bash
+# Create a new workflow from a template
+minion init my-workflow --template fix-issue
+
+# Run it
+minion execute my-workflow.yaml -- 247 --verbose
+
+# List available workflows
+minion list
+
+# Inspect a workflow (config, scopes, dependency graph)
+minion inspect my-workflow.yaml
+
+# Validate without running
+minion validate my-workflow.yaml
+```
+
 ## Usage
 
-### Execute a workflow
+### `minion execute`
 
 ```bash
-# Basic execution
-minion execute workflows/fix-issue.yaml -- 247
+minion execute <workflow.yaml> -- [target] [flags]
 
-# With verbose output (shows all step outputs)
-minion execute workflows/fix-issue.yaml -- 247 --verbose
-
-# With quiet output (errors only)
-minion execute workflows/fix-issue.yaml -- 247 --quiet
-
-# Set workflow variables
-minion execute workflows/my-workflow.yaml -- --var KEY=VALUE
-
-# Output results as JSON
-minion execute workflows/my-workflow.yaml -- --json
+Flags:
+  --verbose         Show all step outputs
+  --quiet           Only show errors
+  --json            Output final result as JSON
+  --var KEY=VALUE   Set a workflow variable (repeatable)
+  --timeout N       Override global timeout in seconds
 ```
 
-### Validate a workflow
+### `minion validate`
 
 ```bash
-# Check YAML is valid without running
-minion validate workflows/fix-issue.yaml
+minion validate <workflow.yaml>
 ```
 
-### List available workflows
+Parses and validates the workflow without executing steps.
+
+### `minion list`
 
 ```bash
 minion list
 ```
 
-### Show version
+Lists workflows found in:
+- Current directory
+- `./workflows/`
+- `~/.minion/workflows/`
+
+Shows name, description, and step count for each.
+
+### `minion init`
 
 ```bash
-minion version
+minion init <name> [--template <template>] [--output <dir>]
 ```
+
+Creates a new workflow YAML file from a built-in template.
+
+Available templates: `blank`, `fix-issue`, `code-review`, `security-audit`
+
+### `minion inspect`
+
+```bash
+minion inspect <workflow.yaml>
+```
+
+Shows:
+- Validation status
+- Resolved config layers
+- Scopes with step counts
+- Step dependency graph
+- Dry-run summary (step type breakdown)
 
 ## Workflow YAML Format
 
@@ -83,6 +141,9 @@ config:
     permissions: skip
   cmd:
     fail_on_error: true
+  patterns:
+    "^lint.*":
+      fail_on_error: false
 
 scopes:
   retry_loop:
@@ -96,6 +157,7 @@ scopes:
         type: gate
         condition: "{{ steps.run_cmd.exit_code == 0 }}"
         on_pass: break
+    outputs: "{{ steps.run_cmd.stdout }}"
 
 steps:
   - name: fetch_data
@@ -120,22 +182,32 @@ steps:
 |------|-------------|
 | `cmd` | Execute shell command |
 | `agent` | Invoke Claude Code CLI |
+| `chat` | Direct Anthropic/OpenAI API call |
 | `gate` | Evaluate condition, control flow |
 | `repeat` | Run a scope repeatedly (retry loop) |
+| `map` | Run a scope once per item in a list |
+| `parallel` | Run nested steps concurrently |
+| `call` | Invoke a scope once |
+| `template` | Render a prompt template file |
+
+See [docs/STEP-TYPES.md](docs/STEP-TYPES.md) for full documentation.
 
 ## Template Variables
 
-- `{{ target }}` — the target argument passed to execute
-- `{{ steps.<name>.stdout }}` — stdout of a cmd step
-- `{{ steps.<name>.exit_code }}` — exit code of a cmd step
-- `{{ steps.<name>.response }}` — response text of an agent step
-- `{{ scope.value }}` — current iteration value (in repeat scopes)
-- `{{ scope.index }}` — current iteration index (0-based)
+| Variable | Description |
+|----------|-------------|
+| `{{ target }}` | Target argument passed to execute |
+| `{{ steps.<name>.stdout }}` | stdout of a cmd step |
+| `{{ steps.<name>.stderr }}` | stderr of a cmd step |
+| `{{ steps.<name>.exit_code }}` | exit code of a cmd step |
+| `{{ steps.<name>.response }}` | response text of an agent/chat step |
+| `{{ scope.value }}` | current iteration value (in repeat/map scopes) |
+| `{{ scope.index }}` | current iteration index (0-based) |
+| `{{ vars.<key> }}` | variable set via `--var KEY=VALUE` |
 
 ## Example: Fix a GitHub Issue
 
 ```bash
-# Run the full fix-issue workflow on issue #247
 minion execute workflows/fix-issue.yaml -- 247 --verbose
 ```
 
@@ -158,17 +230,60 @@ cargo test
 
 ```
 src/
-  main.rs          # Entry point
-  lib.rs           # Module re-exports
-  cli/             # CLI commands (execute, validate, list, version)
-  engine/          # Engine core and context store
-  workflow/        # YAML schema, parser, validator
-  steps/           # Step executors (cmd, agent, gate, repeat)
-  config/          # 4-layer config resolution
-  control_flow.rs  # ControlFlow enum (skip, fail, break, next)
-  error.rs         # StepError enum
-workflows/         # Example workflow YAML files
-tests/             # Integration tests
+  main.rs                  # Entry point
+  lib.rs                   # Module re-exports
+  cli/
+    mod.rs                 # CLI subcommands (execute, validate, list, init, inspect, version)
+    commands.rs            # Command implementations
+    init_templates.rs      # Built-in workflow templates
+    display.rs             # Terminal output helpers
+  engine/
+    mod.rs                 # Engine core — runs workflow steps
+    context.rs             # Context store (step outputs, variables)
+    template.rs            # Tera template rendering
+  workflow/
+    schema.rs              # WorkflowDef, StepDef, StepType
+    parser.rs              # YAML → WorkflowDef
+    validator.rs           # Validation rules
+  steps/
+    cmd.rs                 # Shell command executor
+    agent.rs               # Claude Code CLI executor
+    chat.rs                # Direct API chat executor
+    gate.rs                # Conditional gate executor
+    repeat.rs              # Retry loop executor
+    map.rs                 # Map-over-items executor
+    parallel.rs            # Parallel step executor
+    call.rs                # Scope call executor
+    template_step.rs       # Template rendering executor
+  config/
+    manager.rs             # 4-layer config resolution
+    merge.rs               # YAML/JSON merge helpers
+  control_flow.rs          # ControlFlow enum (skip, fail, break, next)
+  error.rs                 # StepError enum
+workflows/                 # Example workflow YAML files
+tests/
+  integration.rs           # Integration test suite
+  fixtures/                # YAML test fixtures and mock scripts
+docs/
+  YAML-SPEC.md             # Complete YAML format specification
+  STEP-TYPES.md            # Per-step-type documentation
+  CONFIG.md                # 4-layer config system
+  DOCKER-SANDBOX.md        # Running steps in Docker
+  EXAMPLES.md              # Example workflow catalog
+```
+
+## Documentation
+
+- [YAML Specification](docs/YAML-SPEC.md)
+- [Step Types](docs/STEP-TYPES.md)
+- [Configuration System](docs/CONFIG.md)
+- [Docker Sandbox](docs/DOCKER-SANDBOX.md)
+- [Example Workflows](docs/EXAMPLES.md)
+
+## API Docs
+
+```bash
+cargo doc --open
 ```
 
 ## License
