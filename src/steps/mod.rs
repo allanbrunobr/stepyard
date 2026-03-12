@@ -11,7 +11,7 @@ pub mod template_step;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::StepConfig;
 use crate::engine::context::Context;
@@ -30,7 +30,7 @@ pub trait StepExecutor: Send + Sync {
 }
 
 /// Result of any executed step
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StepOutput {
     Cmd(CmdOutput),
@@ -84,25 +84,31 @@ impl StepOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CmdOutput {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: i32,
-    #[serde(serialize_with = "serialize_duration")]
+    #[serde(
+        serialize_with = "serialize_duration",
+        deserialize_with = "deserialize_duration"
+    )]
     pub duration: Duration,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentOutput {
     pub response: String,
     pub session_id: Option<String>,
     pub stats: AgentStats,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentStats {
-    #[serde(serialize_with = "serialize_duration")]
+    #[serde(
+        serialize_with = "serialize_duration",
+        deserialize_with = "deserialize_duration"
+    )]
     pub duration: Duration,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -110,7 +116,7 @@ pub struct AgentStats {
     pub turns: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatOutput {
     pub response: String,
     pub model: String,
@@ -118,19 +124,19 @@ pub struct ChatOutput {
     pub output_tokens: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GateOutput {
     pub passed: bool,
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeOutput {
     pub iterations: Vec<IterationOutput>,
     pub final_value: Option<Box<StepOutput>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IterationOutput {
     pub index: usize,
     pub output: StepOutput,
@@ -141,4 +147,12 @@ where
     S: serde::Serializer,
 {
     s.serialize_f64(d.as_secs_f64())
+}
+
+fn deserialize_duration<'de, D>(d: D) -> Result<Duration, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let secs = f64::deserialize(d)?;
+    Ok(Duration::from_secs_f64(secs))
 }
