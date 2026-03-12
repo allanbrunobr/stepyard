@@ -82,7 +82,7 @@
 ## Feature 16: Claude Code Session Management
 - Description: [Epic 2: Complete Engine, Story 2.6] As a developer, I want to reuse Claude Code sessions between agent steps, so that agent context persists and responses are smarter. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 7
-- Status: pending
+- Status: done
 
 ## Feature 17: Rich Terminal Display
 - Description: [Epic 2: Complete Engine, Story 2.7] As a user, I want beautiful and informative terminal output, so that I can follow workflow progress. Source: EPICS-AND-STORIES.md
