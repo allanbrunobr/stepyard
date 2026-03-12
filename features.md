@@ -87,7 +87,7 @@
 ## Feature 17: Rich Terminal Display
 - Description: [Epic 2: Complete Engine, Story 2.7] As a user, I want beautiful and informative terminal output, so that I can follow workflow progress. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 18: Step — template (Tera File Rendering)
 - Description: [Epic 2: Complete Engine, Story 2.8] As a developer, I want to render .md.tera files as steps, so that long prompts can live in separate files. Source: EPICS-AND-STORIES.md
