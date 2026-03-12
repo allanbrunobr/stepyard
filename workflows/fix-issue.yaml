@@ -110,7 +110,14 @@ steps:
 
       Output a structured plan in markdown.
 
-  # 3. Implementation (agentic — Claude Code full)
+  # 3. Plan Validation (deterministic gate)
+  - name: validate_plan
+    type: gate
+    condition: "{{ steps.plan.response | length > 100 }}"
+    on_fail: fail
+    message: "Plan too short or empty — aborting"
+
+  # 4. Implementation (agentic — Claude Code full)
   - name: implement
     type: agent
     prompt: |

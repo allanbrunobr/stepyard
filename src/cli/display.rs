@@ -1,7 +1,20 @@
+// Public API — new items used after worktree merge; suppress dead_code lint until then
+#![allow(dead_code)]
+
 use std::time::Duration;
 
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
+
+/// Controls how the CLI renders output
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum OutputMode {
+    #[default]
+    Normal,
+    Quiet,
+    Verbose,
+    Json,
+}
 
 pub fn step_start(name: &str, step_type: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
@@ -76,4 +89,96 @@ pub fn workflow_failed(step_name: &str, message: &str) {
         step_name,
         message
     );
+}
+
+/// Display a map item position, e.g. "Item 2/5: filename.rs"
+pub fn map_item(current: usize, total: usize, name: &str) {
+    println!(
+        "  {} Item {}/{}: {}",
+        "◆".cyan(),
+        current,
+        total,
+        name.bold()
+    );
+}
+
+/// Display a parallel sub-step with indentation
+pub fn parallel_step(name: &str) {
+    println!("    {} {}", "⟶".blue(), name);
+}
+
+/// Display a rich workflow summary including token usage and cost
+pub fn workflow_summary(
+    steps: usize,
+    duration: Duration,
+    input_tokens: u64,
+    output_tokens: u64,
+    cost_usd: f64,
+) {
+    println!(
+        "\n{} Summary — {} steps in {:.1}s",
+        "✓".green().bold(),
+        steps,
+        duration.as_secs_f64()
+    );
+    println!(
+        "   {} Tokens: {} in / {} out",
+        "·".dimmed(),
+        input_tokens,
+        output_tokens
+    );
+    println!(
+        "   {} Cost:   ${:.4}",
+        "·".dimmed(),
+        cost_usd
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_output_mode_default_is_normal() {
+        let mode = OutputMode::default();
+        assert_eq!(mode, OutputMode::Normal);
+    }
+
+    #[test]
+    fn test_output_mode_variants() {
+        let modes = [
+            OutputMode::Normal,
+            OutputMode::Quiet,
+            OutputMode::Verbose,
+            OutputMode::Json,
+        ];
+        // Ensure Clone and PartialEq work
+        for m in &modes {
+            assert_eq!(m, &m.clone());
+        }
+    }
+
+    #[test]
+    fn test_map_item_does_not_panic() {
+        // Just verify it runs without panicking
+        map_item(1, 5, "some_file.rs");
+        map_item(5, 5, "last_file.rs");
+    }
+
+    #[test]
+    fn test_parallel_step_does_not_panic() {
+        parallel_step("compile");
+        parallel_step("lint");
+    }
+
+    #[test]
+    fn test_workflow_summary_does_not_panic() {
+        workflow_summary(
+            10,
+            Duration::from_secs(42),
+            1234,
+            567,
+            0.0023,
+        );
+    }
 }

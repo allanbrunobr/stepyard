@@ -77,17 +77,17 @@
 ## Feature 15: Config Manager — 4-Layer Merge
 - Description: [Epic 2: Complete Engine, Story 2.5] As a developer, I want to resolve config with 4 priority layers, so that global, per-type, per-pattern and per-step config work like Roast. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 16: Claude Code Session Management
 - Description: [Epic 2: Complete Engine, Story 2.6] As a developer, I want to reuse Claude Code sessions between agent steps, so that agent context persists and responses are smarter. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 7
-- Status: pending
+- Status: done
 
 ## Feature 17: Rich Terminal Display
 - Description: [Epic 2: Complete Engine, Story 2.7] As a user, I want beautiful and informative terminal output, so that I can follow workflow progress. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 18: Step — template (Tera File Rendering)
 - Description: [Epic 2: Complete Engine, Story 2.8] As a developer, I want to render .md.tera files as steps, so that long prompts can live in separate files. Source: EPICS-AND-STORIES.md
