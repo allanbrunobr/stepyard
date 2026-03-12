@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use clap::Args;
 
-use crate::engine::Engine;
+use crate::engine::{Engine, EngineOptions};
+use crate::sandbox::{self, SandboxMode};
 use crate::workflow::parser;
 use crate::workflow::validator;
 
@@ -24,9 +26,21 @@ pub struct ExecuteArgs {
     #[arg(long)]
     pub quiet: bool,
 
-    /// Output results as JSON
+    /// Output results as JSON (suppresses all decorative output)
     #[arg(long)]
     pub json: bool,
+
+    /// Show what steps would run without executing them
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Resume execution from the named step (uses most recent state file)
+    #[arg(long, value_name = "STEP_NAME")]
+    pub resume: Option<String>,
+
+    /// Run entire workflow inside a Docker sandbox
+    #[arg(long)]
+    pub sandbox: bool,
 
     /// Set workflow variable (KEY=VALUE)
     #[arg(long = "var", value_name = "KEY=VALUE")]
@@ -55,6 +69,15 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
 
     let errors = validator::validate(&workflow);
     if !errors.is_empty() {
+        if args.json {
+            let json = serde_json::json!({
+                "error": format!("{} validation error(s)", errors.len()),
+                "details": errors,
+                "type": "ValidationError"
+            });
+            println!("{}", serde_json::to_string_pretty(&json)?);
+            std::process::exit(1);
+        }
         eprintln!("Validation errors:");
         for e in &errors {
             eprintln!("  - {e}");
@@ -71,19 +94,91 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
         }
     }
 
-    let mut engine = Engine::new(workflow, target, vars, args.verbose, args.quiet);
-    let output = engine.run().await?;
+    // Resolve sandbox mode
+    let sandbox_mode = sandbox::resolve_mode(
+        args.sandbox,
+        &workflow.config.global,
+        &workflow.config.agent,
+    );
 
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&output)?);
-    } else if !args.quiet {
-        let text = output.text();
-        if !text.is_empty() {
-            println!("\n{text}");
+    // Validate Docker availability if sandbox mode is active
+    if sandbox_mode != SandboxMode::Disabled {
+        if let Err(e) = sandbox::require_docker().await {
+            if args.json {
+                let json = serde_json::json!({
+                    "error": e.to_string(),
+                    "type": "SandboxUnavailable"
+                });
+                println!("{}", serde_json::to_string_pretty(&json)?);
+                std::process::exit(1);
+            }
+            return Err(e);
         }
     }
 
-    Ok(())
+    let opts = EngineOptions {
+        verbose: args.verbose,
+        quiet: args.quiet,
+        json: args.json,
+        dry_run: args.dry_run,
+        resume_from: args.resume.clone(),
+        sandbox_mode,
+    };
+
+    let mut engine = Engine::with_options(workflow.clone(), target, vars, opts);
+
+    // ── Dry-run mode ──────────────────────────────────────────────────────────
+    if args.dry_run {
+        engine.dry_run();
+        return Ok(());
+    }
+
+    // ── Execute ───────────────────────────────────────────────────────────────
+    let start = Instant::now();
+
+    let run_result = engine.run().await;
+    let elapsed = start.elapsed();
+
+    match run_result {
+        Ok(output) => {
+            if args.json {
+                let json_out = engine.json_output("success", elapsed);
+                println!("{}", serde_json::to_string_pretty(&json_out)?);
+            } else if !args.quiet {
+                let text = output.text();
+                if !text.is_empty() {
+                    println!("\n{text}");
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if args.json {
+                // Determine which step failed from the error message
+                let error_str = e.to_string();
+                let step_name = extract_failed_step(&error_str);
+                let json = serde_json::json!({
+                    "error": error_str,
+                    "step": step_name,
+                    "type": "Fail",
+                    "workflow_name": workflow.name,
+                    "steps_completed": engine.step_records().len(),
+                    "partial_steps": engine.step_records(),
+                });
+                println!("{}", serde_json::to_string_pretty(&json)?);
+                std::process::exit(1);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Extract the step name from an error message like "Step 'foo' failed: ..."
+fn extract_failed_step(msg: &str) -> Option<&str> {
+    let start = msg.find("Step '")?;
+    let rest = &msg[start + 6..];
+    let end = rest.find('\'')?;
+    Some(&rest[..end])
 }
 
 pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
@@ -111,7 +206,6 @@ pub async fn list() -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let mut found = Vec::new();
 
-    // Scan current directory and workflows/ subdirectory
     let dirs_to_scan = [cwd.clone(), cwd.join("workflows")];
     for dir in &dirs_to_scan {
         if let Ok(entries) = std::fs::read_dir(dir) {
@@ -146,4 +240,20 @@ pub async fn list() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_failed_step_parses_correctly() {
+        let msg = "Step 'lint' failed: exit code 1";
+        assert_eq!(extract_failed_step(msg), Some("lint"));
+    }
+
+    #[test]
+    fn extract_failed_step_returns_none_on_no_match() {
+        assert_eq!(extract_failed_step("some other error"), None);
+    }
 }
