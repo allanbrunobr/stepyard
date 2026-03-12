@@ -1,7 +1,12 @@
 pub mod agent;
+pub mod call;
+pub mod chat;
 pub mod cmd;
 pub mod gate;
+pub mod map;
+pub mod parallel;
 pub mod repeat;
+pub mod template_step;
 
 use std::time::Duration;
 
