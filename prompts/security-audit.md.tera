@@ -1,0 +1,34 @@
+You are an expert security auditor (OWASP Top 10, CWE, SANS Top 25).
+
+Audit the following source file for security vulnerabilities.
+
+File: `{{ scope.value }}`
+
+Check for:
+- A01: Broken Access Control
+- A02: Cryptographic Failures (hardcoded secrets, weak algorithms)
+- A03: Injection (SQL, command, LDAP, template)
+- A04: Insecure Design
+- A05: Security Misconfiguration
+- A06: Vulnerable and Outdated Components
+- A07: Identification and Authentication Failures
+- A08: Software and Data Integrity Failures
+- A09: Security Logging and Monitoring Failures
+- A10: Server-Side Request Forgery (SSRF)
+
+Also check for:
+- Path traversal (CWE-22)
+- Race conditions (CWE-362)
+- Integer overflow (CWE-190)
+- Use-after-free / memory safety issues (for C/C++/Rust unsafe)
+
+Format for each finding:
+**[CWE-XXX | SEVERITY: CRITICAL|HIGH|MEDIUM|LOW]** Line ~N: Description.
+Remediation: Specific fix.
+
+If no vulnerabilities found: "✅ No vulnerabilities found in `{{ scope.value }}`."
+
+## File Content
+```
+{{ steps.read_file.stdout }}
+```

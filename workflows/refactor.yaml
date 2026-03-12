@@ -1,0 +1,200 @@
+# ============================================================
+# refactor.yaml — AI-Assisted Refactoring Workflow
+# ============================================================
+#
+# Usage:
+#   minion execute workflows/refactor.yaml --target <DESCRIPTION>
+#   Example: minion execute workflows/refactor.yaml \
+#              --target "extract database logic from UserController into UserRepository"
+#
+# What it does:
+#   1. Reads project rules and existing code structure
+#   2. Creates a detailed refactoring plan with a chat LLM (cheap/fast)
+#   3. Validates the plan is specific enough
+#   4. Implements the refactoring with Claude Code (full agent)
+#   5. Runs lint gate (lint → fix → lint, up to 3 rounds)
+#   6. Runs test gate (test → fix → test, up to 2 rounds)
+#
+# Requirements:
+#   - ANTHROPIC_API_KEY set (for chat planning step)
+#   - npm run lint + npm test (or cargo clippy + cargo test) configured
+# ============================================================
+
+name: refactor
+version: 1
+description: "Plan and execute a refactoring with lint + test validation gates"
+
+config:
+  global:
+    timeout: 300s
+    working_directory: "."
+
+  agent:
+    command: claude
+    flags: ["-p", "--output-format", "stream-json"]
+    permissions: skip
+    model: claude-sonnet-4-20250514
+    system_prompt_append: |
+      You are refactoring existing code. Follow these rules strictly:
+      - Do NOT add new features
+      - Do NOT change behavior — only internal structure
+      - Do NOT modify test expectations unless tests are clearly wrong
+      - Do NOT run lint or tests yourself — the engine will do that
+
+  chat:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    api_key_env: ANTHROPIC_API_KEY
+    temperature: 0.2
+    max_tokens: 4096
+
+  cmd:
+    fail_on_error: false
+    timeout: 60s
+    shell: "/bin/bash"
+
+scopes:
+  # ── Lint fix loop ─────────────────────────────────────
+  lint_fix:
+    steps:
+      - name: lint
+        type: cmd
+        run: "npm run lint 2>&1 || cargo clippy 2>&1"
+
+      - name: check_lint
+        type: gate
+        condition: "{{ steps.lint.exit_code == 0 }}"
+        on_pass: break
+        message: "Lint passed"
+
+      - name: fix_lint
+        type: agent
+        prompt: |
+          Fix ONLY these lint errors introduced by the refactoring.
+          Do not change logic. Do not add new features:
+
+          {{ steps.lint.stdout }}
+
+  # ── Test fix loop ──────────────────────────────────────
+  test_fix:
+    steps:
+      - name: test
+        type: cmd
+        run: "npm test 2>&1 || cargo test 2>&1"
+        config:
+          timeout: 300s
+
+      - name: check_test
+        type: gate
+        condition: "{{ steps.test.exit_code == 0 }}"
+        on_pass: break
+        message: "Tests passed"
+
+      - name: fix_test
+        type: agent
+        prompt: |
+          Fix ONLY these test failures caused by the refactoring.
+          Do NOT change test expectations unless the test is clearly wrong.
+          This is a refactoring — behavior must not change:
+
+          {{ steps.test.stdout }}
+
+steps:
+  # 1. Read project rules & context
+  - name: read_rules
+    type: cmd
+    run: "cat CLAUDE.md 2>/dev/null || cat .cursorrules 2>/dev/null || echo 'No rules file found'"
+    config:
+      fail_on_error: false
+
+  - name: read_structure
+    type: cmd
+    run: |
+      # Show directory structure (excluding common build/vendor dirs)
+      find . -type f \( -name "*.rs" -o -name "*.ts" -o -name "*.js" -o -name "*.py" \) \
+        -not -path "*/node_modules/*" \
+        -not -path "*/target/*" \
+        -not -path "*/.git/*" \
+        | sort | head -40
+
+  # 2. Create refactoring plan (chat LLM — cheap & fast)
+  - name: plan
+    type: chat
+    prompt: |
+      You are a senior software architect planning a refactoring.
+
+      ## Refactoring Goal
+      {{ target }}
+
+      ## Project Rules
+      {{ steps.read_rules.stdout }}
+
+      ## Existing File Structure
+      {{ steps.read_structure.stdout }}
+
+      ## Instructions
+      Create a precise, step-by-step refactoring plan:
+      1. Which files to modify (exact paths)
+      2. Which files to create (exact paths and purpose)
+      3. Which files to delete (if any)
+      4. For each modification: what changes and why
+      5. What the final structure should look like
+      6. How to verify correctness (what tests should still pass)
+
+      Be specific. No vague statements like "reorganize the code".
+      Output: structured Markdown plan.
+
+  # 3. Gate: plan must be substantive
+  - name: validate_plan
+    type: gate
+    condition: "{{ steps.plan.response | length > 200 }}"
+    on_fail: fail
+    message: "Plan too short — aborting. Check your refactoring description."
+
+  # 4. Implement the refactoring (Claude Code agent)
+  - name: implement
+    type: agent
+    prompt: |
+      Implement this refactoring plan EXACTLY as specified.
+
+      ## Refactoring Goal
+      {{ target }}
+
+      ## Plan
+      {{ steps.plan.response }}
+
+      ## Rules
+      {{ steps.read_rules.stdout }}
+
+      CRITICAL:
+      - Do NOT add features not in the plan
+      - Do NOT change behavior — only internal structure
+      - Do NOT run tests or lint
+    config:
+      timeout: 600s
+
+  # 5. Lint gate (up to 3 rounds)
+  - name: lint_gate
+    type: repeat
+    scope: lint_fix
+    max_iterations: 3
+
+  # 6. Test gate (up to 2 rounds)
+  - name: test_gate
+    type: repeat
+    scope: test_fix
+    max_iterations: 2
+
+  # 7. Summary
+  - name: done
+    type: cmd
+    run: |
+      echo "============================================================"
+      echo " Refactoring Complete"
+      echo "============================================================"
+      echo "Goal: {{ target }}"
+      echo ""
+      echo "Plan:"
+      echo "{{ steps.plan.response }}"
+      echo ""
+      echo "✅ Lint passing | ✅ Tests passing"

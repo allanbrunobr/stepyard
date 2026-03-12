@@ -1,0 +1,160 @@
+# ============================================================
+# generate-docs.yaml — AI Documentation Generator Workflow
+# ============================================================
+#
+# Usage:
+#   minion execute workflows/generate-docs.yaml
+#   minion execute workflows/generate-docs.yaml --args '{"path": "src/", "output": "docs/"}'
+#
+# What it does:
+#   1. Finds all source files that need documentation
+#   2. Maps an AI documentation writer over each file in parallel
+#   3. Saves generated docs to the output directory
+#   4. Generates an index.md with links to all docs
+#
+# Requirements:
+#   - ANTHROPIC_API_KEY set (for chat steps)
+# ============================================================
+
+name: generate-docs
+version: 1
+description: "Generate documentation for source files using AI"
+
+config:
+  global:
+    timeout: 600s
+    working_directory: "."
+
+  chat:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    api_key_env: ANTHROPIC_API_KEY
+    temperature: 0.3
+    max_tokens: 4096
+
+  cmd:
+    fail_on_error: false
+    timeout: 60s
+    shell: "/bin/bash"
+
+scopes:
+  # ── Document a single source file ──────────────────────
+  # scope.value = file path
+  document_file:
+    steps:
+      - name: read_source
+        type: cmd
+        run: "cat {{ scope.value }}"
+
+      - name: generate_doc
+        type: chat
+        prompt: |
+          You are a technical writer generating documentation for source code.
+
+          Generate comprehensive Markdown documentation for the following file.
+
+          Include:
+          - **Overview**: What this file/module does (2-3 sentences)
+          - **Exports / Public API**: Each exported function, struct, class, or constant
+            - Signature/type
+            - Description
+            - Parameters (name, type, description)
+            - Return value
+            - Example usage (if applicable)
+          - **Internal Architecture**: How it works internally (brief)
+          - **Dependencies**: What it imports/requires and why
+
+          Format: clean GitHub-flavored Markdown. Use code blocks for signatures.
+          Be accurate — base everything on the actual code, do not invent behavior.
+
+          ## Source File: `{{ scope.value }}`
+          ```
+          {{ steps.read_source.stdout }}
+          ```
+
+      - name: save_doc
+        type: cmd
+        run: |
+          OUTPUT_DIR="{{ args.output | default(val='docs') }}"
+          # Convert file path to doc path: src/engine/core.rs → docs/engine/core.md
+          DOC_PATH="$OUTPUT_DIR/$(echo '{{ scope.value }}' | sed 's|^src/||' | sed 's|\.[^.]*$|.md|')"
+          mkdir -p "$(dirname "$DOC_PATH")"
+          cat > "$DOC_PATH" << 'DOCEOF'
+          {{ steps.generate_doc.response }}
+          DOCEOF
+          echo "$DOC_PATH"
+
+    outputs: "{{ steps.save_doc.stdout }}"
+
+steps:
+  # 1. Find all source files that need documentation
+  - name: find_sources
+    type: cmd
+    run: |
+      SEARCH_PATH="{{ args.path | default(val='src') }}"
+      find "$SEARCH_PATH" \
+        -type f \
+        \( -name "*.rs" -o -name "*.ts" -o -name "*.js" -o -name "*.py" \
+           -o -name "*.go" -o -name "*.rb" -o -name "*.java" \) \
+        -not -path "*/node_modules/*" \
+        -not -path "*/.git/*" \
+        -not -path "*/target/*" \
+        -not -path "*/__pycache__/*" \
+        | sort
+
+  # 2. Gate: ensure we have files to document
+  - name: check_sources
+    type: gate
+    condition: "{{ steps.find_sources.stdout | length > 0 }}"
+    on_fail: fail
+    message: "No source files found to document"
+
+  # 3. Create the output directory
+  - name: create_output_dir
+    type: cmd
+    run: "mkdir -p {{ args.output | default(val='docs') }}"
+    config:
+      fail_on_error: true
+
+  # 4. Generate docs for each file in parallel
+  - name: generated_docs
+    type: map
+    scope: document_file
+    items: "{{ steps.find_sources.stdout | split(pat='\n') | filter(s='') }}"
+    concurrency: 4
+
+  # 5. Generate an index.md linking all generated docs
+  - name: generate_index
+    type: chat
+    prompt: |
+      Generate a Markdown index file (index.md) for a documentation directory.
+
+      The following documentation files were generated:
+      {{ steps.generated_docs.outputs | join(sep='\n') }}
+
+      Create a clean index.md with:
+      - Title: "# API Documentation"
+      - Brief intro sentence
+      - Organized list of links to each doc file, grouped by directory
+      - Each link should be relative
+
+  - name: save_index
+    type: cmd
+    run: |
+      OUTPUT_DIR="{{ args.output | default(val='docs') }}"
+      echo "{{ steps.generate_index.response }}" > "$OUTPUT_DIR/index.md"
+      echo "Index saved to: $OUTPUT_DIR/index.md"
+
+  # 6. Print summary
+  - name: summary
+    type: cmd
+    run: |
+      OUTPUT_DIR="{{ args.output | default(val='docs') }}"
+      FILE_COUNT=$(find "$OUTPUT_DIR" -name "*.md" | wc -l | tr -d ' ')
+      echo "============================================================"
+      echo " Documentation Generated"
+      echo "============================================================"
+      echo "Output directory : $OUTPUT_DIR/"
+      echo "Files generated  : $FILE_COUNT"
+      echo ""
+      find "$OUTPUT_DIR" -name "*.md" | sort

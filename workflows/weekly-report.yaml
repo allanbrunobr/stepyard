@@ -1,0 +1,180 @@
+# ============================================================
+# weekly-report.yaml — Weekly Progress Report Generator
+# ============================================================
+#
+# Usage:
+#   minion execute workflows/weekly-report.yaml
+#   minion execute workflows/weekly-report.yaml --args '{"days": "14", "author": "alice"}'
+#
+# What it does:
+#   1. Collects git log for the past N days
+#   2. Collects merged PRs and closed issues from GitHub
+#   3. Uses AI to summarize commits into human-readable progress
+#   4. Formats a polished weekly report in Markdown
+#   5. Saves to weekly-report-YYYY-MM-DD.md
+#
+# Requirements:
+#   - git repository
+#   - gh CLI authenticated (optional — for PR/issue data)
+#   - ANTHROPIC_API_KEY set (for summarization)
+# ============================================================
+
+name: weekly-report
+version: 1
+description: "Generate a weekly progress report from git history and GitHub activity"
+
+config:
+  global:
+    timeout: 120s
+    working_directory: "."
+
+  chat:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    api_key_env: ANTHROPIC_API_KEY
+    temperature: 0.4
+    max_tokens: 4096
+
+  cmd:
+    fail_on_error: false
+    timeout: 30s
+    shell: "/bin/bash"
+
+steps:
+  # 1. Collect git history for the period
+  - name: git_log
+    type: cmd
+    run: |
+      DAYS="{{ args.days | default(val='7') }}"
+      AUTHOR="{{ args.author | default(val='') }}"
+      SINCE="$(date -d "$DAYS days ago" +%Y-%m-%d 2>/dev/null || date -v-${DAYS}d +%Y-%m-%d)"
+
+      if [ -n "$AUTHOR" ]; then
+        git log --since="$SINCE" --author="$AUTHOR" \
+          --pretty=format:"%h %ad %s%n  Author: %an <%ae>%n  Body: %b" \
+          --date=short 2>&1
+      else
+        git log --since="$SINCE" \
+          --pretty=format:"%h %ad %s%n  Author: %an <%ae>" \
+          --date=short 2>&1
+      fi
+
+  # 2. Collect diff stats (files changed, insertions, deletions)
+  - name: diff_stats
+    type: cmd
+    run: |
+      DAYS="{{ args.days | default(val='7') }}"
+      SINCE="$(date -d "$DAYS days ago" +%Y-%m-%d 2>/dev/null || date -v-${DAYS}d +%Y-%m-%d)"
+      SINCE_SHA="$(git log --since="$SINCE" --format="%H" | tail -1)"
+      if [ -n "$SINCE_SHA" ]; then
+        git diff --stat "$SINCE_SHA"..HEAD 2>&1
+      else
+        echo "No commits in period"
+      fi
+
+  # 3. Collect merged PRs from GitHub (optional)
+  - name: merged_prs
+    type: cmd
+    run: |
+      DAYS="{{ args.days | default(val='7') }}"
+      SINCE="$(date -d "$DAYS days ago" +%Y-%m-%d 2>/dev/null || date -v-${DAYS}d +%Y-%m-%d)"
+      gh pr list --state merged --limit 20 \
+        --json number,title,mergedAt,author,labels \
+        -q ".[] | select(.mergedAt >= \"$SINCE\") | \"#\(.number) \(.title) (@\(.author.login))\"" \
+        2>/dev/null || echo "GitHub CLI not available or not a GitHub repo"
+
+  # 4. Collect closed issues
+  - name: closed_issues
+    type: cmd
+    run: |
+      DAYS="{{ args.days | default(val='7') }}"
+      gh issue list --state closed --limit 20 \
+        --json number,title,closedAt,labels \
+        -q ".[] | \"#\(.number) \(.title) [\(.labels | map(.name) | join(\", \"))]\"" \
+        2>/dev/null || echo "GitHub CLI not available or not a GitHub repo"
+
+  # 5. Get contributors for the period
+  - name: contributors
+    type: cmd
+    run: |
+      DAYS="{{ args.days | default(val='7') }}"
+      SINCE="$(date -d "$DAYS days ago" +%Y-%m-%d 2>/dev/null || date -v-${DAYS}d +%Y-%m-%d)"
+      git log --since="$SINCE" --pretty=format:"%an" | sort | uniq -c | sort -rn
+
+  # 6. Summarize git history with AI
+  - name: summarize
+    type: chat
+    prompt: |
+      You are a technical writer creating a weekly progress report.
+
+      Transform the raw git history and GitHub activity below into a clear,
+      human-readable weekly report suitable for sharing with the team.
+
+      ## Report Structure
+
+      # Weekly Progress Report — Week of {{ args.week | default(val="this week") }}
+
+      ## 🎯 Highlights
+      (3-5 bullet points of the most significant accomplishments)
+
+      ## ✅ Completed This Week
+      ### Features & Improvements
+      (group related commits into coherent feature descriptions)
+
+      ### Bug Fixes
+      (list bug fixes clearly)
+
+      ### Infrastructure & DevOps
+      (CI, dependencies, tooling changes)
+
+      ## 📊 Stats
+      - Commits: N
+      - PRs merged: N
+      - Issues closed: N
+      - Contributors: list names
+
+      ## 🔄 In Progress
+      (infer from commit messages what might still be in progress — prefix with "Likely:")
+
+      ## 📝 Notes
+      (anything notable: breaking changes, deprecations, large refactors)
+
+      ---
+      Keep it concise and positive. Group related work together. Avoid raw commit hashes.
+
+      ## Raw Data
+
+      ### Git Log (last {{ args.days | default(val="7") }} days):
+      {{ steps.git_log.stdout }}
+
+      ### Diff Stats:
+      {{ steps.diff_stats.stdout }}
+
+      ### Merged PRs:
+      {{ steps.merged_prs.stdout }}
+
+      ### Closed Issues:
+      {{ steps.closed_issues.stdout }}
+
+      ### Contributors:
+      {{ steps.contributors.stdout }}
+
+  # 7. Format and save the report
+  - name: save_report
+    type: cmd
+    run: |
+      TODAY="$(date +%Y-%m-%d)"
+      REPORT_FILE="weekly-report-$TODAY.md"
+      echo "{{ steps.summarize.response }}" > "$REPORT_FILE"
+      echo "Report saved to: $REPORT_FILE"
+
+  # 8. Print the report
+  - name: print_report
+    type: cmd
+    run: |
+      TODAY="$(date +%Y-%m-%d)"
+      echo "============================================================"
+      echo " Weekly Report — $TODAY"
+      echo "============================================================"
+      echo ""
+      cat "weekly-report-$TODAY.md"

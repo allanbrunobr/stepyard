@@ -44,6 +44,49 @@ cargo build --release
 
 ## Install
 
+### Via cargo (recommended for Rust users)
+
+```bash
+cargo install minion-engine
+minion --version
+```
+
+### Pre-compiled binaries (no Rust required)
+
+Download the latest binary for your platform from
+[GitHub Releases](https://github.com/brunoocasali/minion-engine/releases/latest):
+
+```bash
+# macOS — Apple Silicon (M1/M2/M3)
+curl -L https://github.com/brunoocasali/minion-engine/releases/latest/download/minion-macos-aarch64 -o minion
+chmod +x minion && sudo mv minion /usr/local/bin/
+
+# macOS — Intel
+curl -L https://github.com/brunoocasali/minion-engine/releases/latest/download/minion-macos-x86_64 -o minion
+chmod +x minion && sudo mv minion /usr/local/bin/
+
+# Linux — x86_64
+curl -L https://github.com/brunoocasali/minion-engine/releases/latest/download/minion-linux-x86_64 -o minion
+chmod +x minion && sudo mv minion /usr/local/bin/
+
+# Linux — aarch64
+curl -L https://github.com/brunoocasali/minion-engine/releases/latest/download/minion-linux-aarch64 -o minion
+chmod +x minion && sudo mv minion /usr/local/bin/
+
+# Windows — x86_64
+# Download minion-windows-x86_64.exe from GitHub Releases and add to PATH
+```
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap brunoocasali/minion-engine https://github.com/brunoocasali/minion-engine
+brew install brunoocasali/minion-engine/minion-engine
+minion --version
+```
+
+### Build from source
+
 ```bash
 cargo install --path .
 ```

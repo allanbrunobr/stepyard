@@ -1,0 +1,232 @@
+# ============================================================
+# flaky-test-fix.yaml — Flaky Test Detector & Fixer Workflow
+# ============================================================
+#
+# Usage:
+#   minion execute workflows/flaky-test-fix.yaml
+#   minion execute workflows/flaky-test-fix.yaml --args '{"runs": "5", "pattern": ".*auth.*"}'
+#
+# What it does:
+#   1. Runs the test suite N times to identify which tests fail inconsistently
+#   2. Collects all failure signatures
+#   3. Uses AI to analyze root cause of each flaky test
+#   4. Implements fixes for each flaky test
+#   5. Verifies the fix by running tests again
+#
+# Requirements:
+#   - npm test or cargo test configured
+#   - ANTHROPIC_API_KEY set (for analysis step)
+# ============================================================
+
+name: flaky-test-fix
+version: 1
+description: "Find flaky tests by running multiple times, analyze root cause, and fix"
+
+config:
+  global:
+    timeout: 900s
+    working_directory: "."
+
+  agent:
+    command: claude
+    flags: ["-p", "--output-format", "stream-json"]
+    permissions: skip
+    model: claude-sonnet-4-20250514
+    system_prompt_append: |
+      You are fixing flaky tests. Rules:
+      - Fix the test or production code to eliminate flakiness
+      - Do NOT simply delete tests or mark them as skipped
+      - Prefer fixing root causes over adding retry logic
+      - Common fixes: remove time dependencies, fix race conditions, use deterministic data
+
+  chat:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    api_key_env: ANTHROPIC_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+
+  cmd:
+    fail_on_error: false
+    timeout: 300s
+    shell: "/bin/bash"
+
+scopes:
+  # ── Single test run ────────────────────────────────────
+  test_run:
+    steps:
+      - name: run
+        type: cmd
+        run: |
+          PATTERN="{{ args.pattern | default(val='') }}"
+          if [ -f "package.json" ]; then
+            if [ -n "$PATTERN" ]; then
+              npm test -- --testNamePattern="$PATTERN" 2>&1
+            else
+              npm test 2>&1
+            fi
+          elif [ -f "Cargo.toml" ]; then
+            if [ -n "$PATTERN" ]; then
+              cargo test "$PATTERN" 2>&1
+            else
+              cargo test 2>&1
+            fi
+          else
+            echo "ERROR: No test runner found (no package.json or Cargo.toml)"
+            exit 1
+          fi
+        config:
+          fail_on_error: false
+          timeout: 300s
+
+    outputs: "{{ steps.run.stdout }}"
+
+steps:
+  # 1. Run tests N times to gather flakiness data
+  - name: test_run_1
+    type: call
+    scope: test_run
+
+  - name: test_run_2
+    type: call
+    scope: test_run
+
+  - name: test_run_3
+    type: call
+    scope: test_run
+
+  - name: test_run_4
+    type: call
+    scope: test_run
+
+  - name: test_run_5
+    type: call
+    scope: test_run
+
+  # 2. Combine all test outputs
+  - name: combined_results
+    type: cmd
+    run: |
+      echo "=== Run 1 ===" && echo "{{ steps.test_run_1.outputs }}"
+      echo "=== Run 2 ===" && echo "{{ steps.test_run_2.outputs }}"
+      echo "=== Run 3 ===" && echo "{{ steps.test_run_3.outputs }}"
+      echo "=== Run 4 ===" && echo "{{ steps.test_run_4.outputs }}"
+      echo "=== Run 5 ===" && echo "{{ steps.test_run_5.outputs }}"
+
+  # 3. Analyze flakiness patterns
+  - name: analyze
+    type: chat
+    prompt: |
+      You are a test reliability expert analyzing 5 consecutive test runs to identify flaky tests.
+
+      A test is flaky if it passes in some runs and fails in others.
+
+      Analyze the following test output from 5 runs and produce:
+
+      ## Flaky Tests Found
+      For each flaky test:
+      - **Test name**: exact test identifier
+      - **Failure rate**: X/5 runs failed
+      - **Failure messages**: what the error says when it fails
+      - **Root cause hypothesis**: why is it flaky? (timing, ordering, shared state, network, randomness, etc.)
+      - **Suggested fix**: concrete code-level fix
+
+      ## Tests that Always Fail
+      (These are broken, not flaky — note them separately)
+
+      ## Stable Tests
+      (These are fine — just note the count)
+
+      ## 5 Test Run Outputs:
+      {{ steps.combined_results.stdout }}
+
+  # 4. Gate: only proceed if flaky tests were identified
+  - name: check_flaky
+    type: gate
+    condition: "{{ steps.analyze.response | length > 100 }}"
+    on_fail: fail
+    message: "Analysis failed or no flaky tests identified"
+
+  # 5. Read source files referenced in the analysis
+  - name: read_test_files
+    type: cmd
+    run: |
+      # Find test files
+      if [ -f "package.json" ]; then
+        find . -path "*/node_modules" -prune -o \
+          \( -name "*.test.ts" -o -name "*.test.js" -o -name "*.spec.ts" \) \
+          -print | sort | head -20
+      elif [ -f "Cargo.toml" ]; then
+        find . -path "*/target" -prune -o -name "*.rs" -print | \
+          xargs grep -l "#\[test\]" 2>/dev/null | sort | head -20
+      fi
+
+  # 6. Fix the flaky tests
+  - name: fix
+    type: agent
+    prompt: |
+      Fix the flaky tests identified in this analysis.
+
+      ## Analysis Results
+      {{ steps.analyze.response }}
+
+      ## Test Files Found
+      {{ steps.read_test_files.stdout }}
+
+      ## Instructions
+      - Read each test file mentioned in the analysis
+      - Implement the suggested fixes (or better ones if you identify them)
+      - Do NOT delete tests or mark them as skipped
+      - Do NOT change what the tests are verifying — only fix flakiness
+      - Common patterns to fix:
+        - Replace `setTimeout`/`sleep` with proper async waiting
+        - Replace random test data with deterministic data
+        - Add proper cleanup in beforeEach/afterEach
+        - Fix shared mutable state between tests
+        - Use proper mocking for time/network dependencies
+    config:
+      timeout: 600s
+
+  # 7. Verify the fix: run tests 3 more times
+  - name: verify_1
+    type: call
+    scope: test_run
+
+  - name: verify_2
+    type: call
+    scope: test_run
+
+  - name: verify_3
+    type: call
+    scope: test_run
+
+  # 8. Report results
+  - name: verify_analysis
+    type: chat
+    prompt: |
+      Compare the before and after test results to verify flaky tests were fixed.
+
+      ## Before (5 runs with flakiness):
+      {{ steps.combined_results.stdout | truncate(length=2000) }}
+
+      ## After fix (3 verification runs):
+      === Run 1 ===
+      {{ steps.verify_1.outputs }}
+      === Run 2 ===
+      {{ steps.verify_2.outputs }}
+      === Run 3 ===
+      {{ steps.verify_3.outputs }}
+
+      Report:
+      1. Which flaky tests are now fixed (passed all 3 verification runs)
+      2. Which flaky tests are still failing (still flaky)
+      3. Any regressions introduced by the fix
+      4. Overall assessment: SUCCESS / PARTIAL / FAILED
+
+  - name: summary
+    type: cmd
+    run: |
+      echo "============================================================"
+      echo " Flaky Test Fix Complete"
+      echo "============================================================"
+      echo "{{ steps.verify_analysis.response }}"

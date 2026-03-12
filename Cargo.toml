@@ -2,8 +2,25 @@
 name = "minion-engine"
 version = "0.1.0"
 edition = "2021"
-description = "AI workflow engine that orchestrates Claude Code CLI"
+description = "AI workflow engine that orchestrates Claude Code CLI — automate code review, refactoring, and PR creation with YAML workflows"
 license = "MIT"
+repository = "https://github.com/brunoocasali/minion-engine"
+homepage = "https://github.com/brunoocasali/minion-engine"
+documentation = "https://github.com/brunoocasali/minion-engine#readme"
+keywords = ["ai", "workflow", "claude", "automation", "cli"]
+categories = ["command-line-utilities", "development-tools", "asynchronous"]
+readme = "README.md"
+authors = ["Bruno Casali"]
+exclude = [
+  "workflows/",
+  "prompts/",
+  "Formula/",
+  ".github/",
+  "PROMPT.md",
+  "EPICS-AND-STORIES.md",
+  "ARCHITECTURE-MINION-ENGINE.md",
+  "territory_map.json",
+]
 
 [[bin]]
 name = "minion"
