@@ -1,0 +1,17 @@
+name: map-serial-test
+version: 1
+description: "Map step running serially over a list of items"
+
+scopes:
+  process_item:
+    steps:
+      - name: process
+        type: cmd
+        run: "echo processed"
+
+steps:
+  - name: map_items
+    type: map
+    scope: process_item
+    items: "a,b,c"
+    parallel: 1

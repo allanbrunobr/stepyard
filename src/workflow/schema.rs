@@ -80,17 +80,29 @@ pub struct StepDef {
     pub outputs: Option<String>,
 }
 
+/// All supported step types in a workflow.
+///
+/// Each variant corresponds to a `type:` value in the YAML step definition.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepType {
+    /// Execute a shell command via `/bin/sh -c`.
     Cmd,
+    /// Invoke the Claude Code CLI and parse streaming JSON output.
     Agent,
+    /// Call the Anthropic (or OpenAI-compatible) API directly.
     Chat,
+    /// Evaluate a Tera boolean expression and branch control flow.
     Gate,
+    /// Run a named scope repeatedly until break or max_iterations.
     Repeat,
+    /// Run a named scope once per item in a comma-separated list.
     Map,
+    /// Run nested steps concurrently.
     Parallel,
+    /// Invoke a named scope once (no looping).
     Call,
+    /// Render a prompt template file and store the result.
     Template,
 }
 
