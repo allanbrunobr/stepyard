@@ -141,3 +141,63 @@ impl StepExecutor for AgentExecutor {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StepConfig;
+    use crate::engine::context::Context;
+    use crate::workflow::schema::StepType;
+    use std::collections::HashMap;
+
+    fn agent_step(prompt: &str) -> StepDef {
+        StepDef {
+            name: "test".to_string(),
+            step_type: StepType::Agent,
+            run: None,
+            prompt: Some(prompt.to_string()),
+            condition: None,
+            on_pass: None,
+            on_fail: None,
+            message: None,
+            scope: None,
+            max_iterations: None,
+            initial_value: None,
+            items: None,
+            parallel: None,
+            steps: None,
+            config: HashMap::new(),
+            outputs: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_mock_claude() {
+        let mock_script = format!("{}/tests/fixtures/mock_claude.sh", env!("CARGO_MANIFEST_DIR"));
+
+        // Make executable (in case git checkout lost exec bit)
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&mock_script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&mock_script, perms).unwrap();
+
+        let step = agent_step("test prompt");
+        let mut values = HashMap::new();
+        values.insert(
+            "command".to_string(),
+            serde_json::Value::String(mock_script.clone()),
+        );
+        let config = StepConfig { values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = AgentExecutor.execute(&step, &config, &ctx).await.unwrap();
+        if let StepOutput::Agent(out) = result {
+            assert_eq!(out.response, "Task completed successfully");
+            assert_eq!(out.session_id.as_deref(), Some("mock-session-123"));
+            assert_eq!(out.stats.input_tokens, 10);
+            assert_eq!(out.stats.output_tokens, 20);
+        } else {
+            panic!("Expected Agent output");
+        }
+    }
+}

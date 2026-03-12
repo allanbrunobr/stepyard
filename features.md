@@ -7,52 +7,52 @@
 ## Feature 1: Project Bootstrap & CLI Skeleton
 - Description: [Epic 1: MVP Foundation, Story 1.1] As a developer, I want to initialize the Rust project with a functional CLI, so that I have the base structure to add features. Source: EPICS-AND-STORIES.md
 - Dependencies: none
-- Status: pending
+- Status: done
 
 ## Feature 2: YAML Workflow Parser
 - Description: [Epic 1: MVP Foundation, Story 1.2] As a developer, I want to parse YAML workflow files into typed Rust structs, so that the engine can read and validate workflow definitions. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 1
-- Status: pending
+- Status: done
 
 ## Feature 3: Workflow Validator
 - Description: [Epic 1: MVP Foundation, Story 1.3] As a developer, I want to validate the workflow before execution, so that configuration errors are detected before runtime. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 2
-- Status: pending
+- Status: done
 
 ## Feature 4: Context Store & Template Engine
 - Description: [Epic 1: MVP Foundation, Story 1.4] As a developer, I want a context system that stores outputs and renders templates, so that steps can reference previous step outputs via {{ steps.name.field }}. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 2
-- Status: pending
+- Status: done
 
 ## Feature 5: Engine Core — Dispatch Loop
 - Description: [Epic 1: MVP Foundation, Story 1.5] As a developer, I want the main engine loop that executes steps sequentially, so that each step is dispatched to the correct executor. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 4
-- Status: pending
+- Status: done
 
 ## Feature 6: Step — cmd (Shell Commands)
 - Description: [Epic 1: MVP Foundation, Story 1.6] As a developer, I want to execute shell commands as workflow steps, so that deterministic steps (lint, test, git) work. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 7: Step — agent (Claude Code CLI Integration)
 - Description: [Epic 1: MVP Foundation, Story 1.7] As a developer, I want to invoke Claude Code CLI as a workflow step, so that agentic steps (implement, fix) work. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 8: Step — gate (Conditional Flow Control)
 - Description: [Epic 1: MVP Foundation, Story 1.8] As a developer, I want to evaluate conditions and control flow, so that the engine can decide whether to continue, stop, or skip steps. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 9: Step — repeat (Bounded Retry Loop)
 - Description: [Epic 1: MVP Foundation, Story 1.9] As a developer, I want to execute a scope repeatedly until a gate breaks or max_iterations is reached, so that lint-fix-lint loops work like Stripe (max 2-3 rounds). Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 10: MVP Integration — fix-issue Workflow
 - Description: [Epic 1: MVP Foundation, Story 1.10] As a user, I want to run `minion execute fix-issue.yaml -- 247` and get a PR, so that the MVP is demonstrable end-to-end. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 9
-- Status: pending
+- Status: done
 
 ## Feature 11: Step — chat (Direct LLM API)
 - Description: [Epic 2: Complete Engine, Story 2.1] As a developer, I want to call LLM APIs directly without invoking Claude Code CLI, so that planning and summarization steps are fast and cheap. Source: EPICS-AND-STORIES.md

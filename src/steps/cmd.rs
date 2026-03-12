@@ -128,4 +128,35 @@ mod tests {
         let result = CmdExecutor.execute(&step, &config, &ctx).await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn cmd_timeout() {
+        let step = empty_step("sleep 10");
+        let mut values = HashMap::new();
+        values.insert(
+            "timeout".to_string(),
+            serde_json::Value::String("100ms".to_string()),
+        );
+        let config = StepConfig { values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = CmdExecutor.execute(&step, &config, &ctx).await;
+        assert!(matches!(result, Err(crate::error::StepError::Timeout(_))));
+    }
+
+    #[tokio::test]
+    async fn cmd_working_directory() {
+        let step = empty_step("pwd");
+        let mut values = HashMap::new();
+        values.insert(
+            "working_directory".to_string(),
+            serde_json::Value::String("/tmp".to_string()),
+        );
+        let config = StepConfig { values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = CmdExecutor.execute(&step, &config, &ctx).await.unwrap();
+        // /tmp resolves to /private/tmp on macOS, so check contains "tmp"
+        assert!(result.text().contains("tmp"));
+    }
 }
