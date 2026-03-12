@@ -160,3 +160,157 @@ impl StepExecutor for RepeatExecutor {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StepConfig;
+    use crate::engine::context::Context;
+    use crate::workflow::parser;
+
+    #[tokio::test]
+    async fn repeat_runs_max_iterations_without_break() {
+        let yaml = r#"
+name: test
+scopes:
+  my_scope:
+    steps:
+      - name: step1
+        type: cmd
+        run: "echo hello"
+steps:
+  - name: repeat_step
+    type: repeat
+    scope: my_scope
+    max_iterations: 3
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let repeat_step = &wf.steps[0];
+        let executor = RepeatExecutor::new(&wf.scopes);
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor
+            .execute(repeat_step, &StepConfig::default(), &ctx)
+            .await
+            .unwrap();
+
+        if let StepOutput::Scope(scope_out) = result {
+            assert_eq!(scope_out.iterations.len(), 3);
+        } else {
+            panic!("Expected Scope output");
+        }
+    }
+
+    #[tokio::test]
+    async fn repeat_breaks_on_first_iteration_when_gate_passes() {
+        let yaml = r#"
+name: test
+scopes:
+  my_scope:
+    steps:
+      - name: step1
+        type: cmd
+        run: "echo hello"
+      - name: check
+        type: gate
+        condition: "true"
+        on_pass: break
+        message: "done"
+steps:
+  - name: repeat_step
+    type: repeat
+    scope: my_scope
+    max_iterations: 5
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let repeat_step = &wf.steps[0];
+        let executor = RepeatExecutor::new(&wf.scopes);
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor
+            .execute(repeat_step, &StepConfig::default(), &ctx)
+            .await
+            .unwrap();
+
+        if let StepOutput::Scope(scope_out) = result {
+            assert_eq!(scope_out.iterations.len(), 1, "Should break after 1 iteration");
+        } else {
+            panic!("Expected Scope output");
+        }
+    }
+
+    #[tokio::test]
+    async fn repeat_scope_index_increments_each_iteration() {
+        let yaml = r#"
+name: test
+scopes:
+  counter:
+    steps:
+      - name: output_index
+        type: cmd
+        run: "echo {{ scope.index }}"
+steps:
+  - name: repeat_step
+    type: repeat
+    scope: counter
+    max_iterations: 3
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let repeat_step = &wf.steps[0];
+        let executor = RepeatExecutor::new(&wf.scopes);
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor
+            .execute(repeat_step, &StepConfig::default(), &ctx)
+            .await
+            .unwrap();
+
+        if let StepOutput::Scope(scope_out) = result {
+            assert_eq!(scope_out.iterations.len(), 3);
+            assert_eq!(scope_out.iterations[0].output.text().trim(), "0");
+            assert_eq!(scope_out.iterations[1].output.text().trim(), "1");
+            assert_eq!(scope_out.iterations[2].output.text().trim(), "2");
+        } else {
+            panic!("Expected Scope output");
+        }
+    }
+
+    #[tokio::test]
+    async fn repeat_scope_value_flows_between_iterations() {
+        // The output of each iteration becomes the scope.value for the next
+        let yaml = r#"
+name: test
+scopes:
+  counter:
+    steps:
+      - name: echo_scope
+        type: cmd
+        run: "echo iter-{{ scope.index }}"
+steps:
+  - name: repeat_step
+    type: repeat
+    scope: counter
+    max_iterations: 3
+    initial_value: "start"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let repeat_step = &wf.steps[0];
+        let executor = RepeatExecutor::new(&wf.scopes);
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor
+            .execute(repeat_step, &StepConfig::default(), &ctx)
+            .await
+            .unwrap();
+
+        if let StepOutput::Scope(scope_out) = result {
+            assert_eq!(scope_out.iterations.len(), 3);
+            // Each iteration echoes its index
+            assert_eq!(scope_out.iterations[0].output.text().trim(), "iter-0");
+            assert_eq!(scope_out.iterations[1].output.text().trim(), "iter-1");
+            assert_eq!(scope_out.iterations[2].output.text().trim(), "iter-2");
+        } else {
+            panic!("Expected Scope output");
+        }
+    }
+}

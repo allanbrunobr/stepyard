@@ -114,6 +114,83 @@ impl Context {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::steps::{CmdOutput, StepOutput};
+    use std::time::Duration;
+
+    fn cmd_output(stdout: &str, exit_code: i32) -> StepOutput {
+        StepOutput::Cmd(CmdOutput {
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+            exit_code,
+            duration: Duration::ZERO,
+        })
+    }
+
+    #[test]
+    fn store_and_retrieve() {
+        let mut ctx = Context::new("123".to_string(), HashMap::new());
+        ctx.store("step1", cmd_output("hello", 0));
+        let out = ctx.get_step("step1").unwrap();
+        assert_eq!(out.text(), "hello");
+        assert_eq!(out.exit_code(), 0);
+    }
+
+    #[test]
+    fn parent_context_inheritance() {
+        let mut parent = Context::new("456".to_string(), HashMap::new());
+        parent.store("parent_step", cmd_output("from parent", 0));
+        let child = Context::child(Arc::new(parent), None, 0);
+        let out = child.get_step("parent_step").unwrap();
+        assert_eq!(out.text(), "from parent");
+    }
+
+    #[test]
+    fn target_variable_resolves() {
+        let ctx = Context::new("42".to_string(), HashMap::new());
+        let result = ctx.render_template("{{ target }}").unwrap();
+        assert_eq!(result, "42");
+    }
+
+    #[test]
+    fn render_template_with_step_stdout() {
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("fetch", cmd_output("some output", 0));
+        let result = ctx.render_template("{{ steps.fetch.stdout }}").unwrap();
+        assert_eq!(result, "some output");
+    }
+
+    #[test]
+    fn render_scope_value() {
+        let parent = Context::new("".to_string(), HashMap::new());
+        let child = Context::child(Arc::new(parent), Some(serde_json::json!("my_value")), 0);
+        let result = child.render_template("{{ scope.value }}").unwrap();
+        assert_eq!(result, "my_value");
+    }
+
+    #[test]
+    fn render_template_with_step_exit_code() {
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("prev", cmd_output("output", 0));
+        let result = ctx.render_template("{{ steps.prev.exit_code }}").unwrap();
+        assert_eq!(result, "0");
+    }
+
+    #[test]
+    fn child_inherits_parent_steps() {
+        let mut parent = Context::new("test".to_string(), HashMap::new());
+        parent.store("a", cmd_output("alpha", 0));
+        let mut child = Context::child(Arc::new(parent), None, 0);
+        child.store("b", cmd_output("beta", 0));
+        // Child can see parent step
+        assert!(child.get_step("a").is_some());
+        // Child can see own step
+        assert!(child.get_step("b").is_some());
+    }
+}
+
 fn collect_steps(ctx: &Context, map: &mut HashMap<String, serde_json::Value>) {
     if let Some(parent) = &ctx.parent {
         collect_steps(parent, map);

@@ -62,6 +62,33 @@ fn evaluate_bool(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::StepConfig;
+    use crate::engine::context::Context;
+    use crate::steps::{CmdOutput, StepOutput};
+    use crate::workflow::schema::StepType;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    fn gate_step(condition: &str) -> StepDef {
+        StepDef {
+            name: "check".to_string(),
+            step_type: StepType::Gate,
+            run: None,
+            prompt: None,
+            condition: Some(condition.to_string()),
+            on_pass: None,
+            on_fail: None,
+            message: None,
+            scope: None,
+            max_iterations: None,
+            initial_value: None,
+            items: None,
+            parallel: None,
+            steps: None,
+            config: HashMap::new(),
+            outputs: None,
+        }
+    }
 
     #[test]
     fn bool_evaluation() {
@@ -73,5 +100,58 @@ mod tests {
         assert!(!evaluate_bool("0"));
         assert!(!evaluate_bool("no"));
         assert!(!evaluate_bool(""));
+    }
+
+    #[tokio::test]
+    async fn gate_condition_references_previous_step_exit_code() {
+        let mut ctx = Context::new(String::new(), HashMap::new());
+        ctx.store(
+            "prev_step",
+            StepOutput::Cmd(CmdOutput {
+                stdout: "output".to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+                duration: Duration::ZERO,
+            }),
+        );
+
+        // Condition references previous step's exit_code via template
+        let step = gate_step("{{ steps.prev_step.exit_code == 0 }}");
+        let result = GateExecutor
+            .execute(&step, &StepConfig::default(), &ctx)
+            .await
+            .unwrap();
+
+        if let StepOutput::Gate(gate) = result {
+            assert!(gate.passed, "Gate should pass when exit_code == 0");
+        } else {
+            panic!("Expected Gate output");
+        }
+    }
+
+    #[tokio::test]
+    async fn gate_condition_fails_when_exit_code_nonzero() {
+        let mut ctx = Context::new(String::new(), HashMap::new());
+        ctx.store(
+            "cmd_step",
+            StepOutput::Cmd(CmdOutput {
+                stdout: String::new(),
+                stderr: "error".to_string(),
+                exit_code: 1,
+                duration: Duration::ZERO,
+            }),
+        );
+
+        let step = gate_step("{{ steps.cmd_step.exit_code == 0 }}");
+        let result = GateExecutor
+            .execute(&step, &StepConfig::default(), &ctx)
+            .await
+            .unwrap();
+
+        if let StepOutput::Gate(gate) = result {
+            assert!(!gate.passed, "Gate should fail when exit_code != 0");
+        } else {
+            panic!("Expected Gate output");
+        }
     }
 }

@@ -73,4 +73,19 @@ description: "missing name and steps"
 "#;
         assert!(parse_str(yaml).is_err());
     }
+
+    #[test]
+    fn parse_fix_issue_yaml() {
+        let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/workflows/fix-issue.yaml"));
+        let wf = parse_file(path).expect("fix-issue.yaml should parse without errors");
+        assert_eq!(wf.name, "fix-github-issue");
+        assert!(wf.scopes.contains_key("lint_fix"), "lint_fix scope missing");
+        assert!(wf.scopes.contains_key("test_fix"), "test_fix scope missing");
+        assert!(!wf.steps.is_empty(), "steps should not be empty");
+        // Verify scopes have expected steps
+        let lint_fix = &wf.scopes["lint_fix"];
+        assert_eq!(lint_fix.steps.len(), 3);
+        let test_fix = &wf.scopes["test_fix"];
+        assert_eq!(test_fix.steps.len(), 3);
+    }
 }

@@ -33,10 +33,11 @@ impl StepConfig {
 
 fn parse_duration(s: &str) -> Option<Duration> {
     let s = s.trim();
-    if let Some(secs) = s.strip_suffix('s') {
-        secs.trim().parse::<u64>().ok().map(Duration::from_secs)
-    } else if let Some(ms) = s.strip_suffix("ms") {
+    // Check "ms" before "s" to avoid "100ms" matching as seconds
+    if let Some(ms) = s.strip_suffix("ms") {
         ms.trim().parse::<u64>().ok().map(Duration::from_millis)
+    } else if let Some(secs) = s.strip_suffix('s') {
+        secs.trim().parse::<u64>().ok().map(Duration::from_secs)
     } else if let Some(mins) = s.strip_suffix('m') {
         mins.trim()
             .parse::<u64>()
