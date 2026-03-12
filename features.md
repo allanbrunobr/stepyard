@@ -97,54 +97,54 @@
 ## Feature 19: Docker Sandbox Integration
 - Description: [Epic 3: Polish & Production, Story 3.1] As a user, I want to run workflows or agent steps in Docker Sandbox, so that I have Stripe devbox-style isolation. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 10
-- Status: pending
+- Status: in_progress
 
 ## Feature 20: Dry-Run Mode
 - Description: [Epic 3: Polish & Production, Story 3.2] As a user, I want to see which steps would be executed without executing anything, so that I can validate and understand the workflow before running. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 10
-- Status: pending
+- Status: in_progress
 
 ## Feature 21: Resume From Step
 - Description: [Epic 3: Polish & Production, Story 3.3] As a user, I want to resume a workflow from a specific step, so that I don't need to re-execute steps that already passed. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 10
-- Status: pending
+- Status: in_progress
 
 ## Feature 22: JSON Output Mode
 - Description: [Epic 3: Polish & Production, Story 3.4] As a user, I want workflow output in JSON format, so that I can integrate with other tools and pipelines. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 10
-- Status: pending
+- Status: in_progress
 
 ## Feature 23: CLI — init & list & inspect Commands
 - Description: [Epic 3: Polish & Production, Story 3.5] As a user, I want auxiliary commands to manage workflows, so that I can create, list and inspect workflows easily. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 10
-- Status: pending
+- Status: in_progress
 
 ## Feature 24: Integration Tests
 - Description: [Epic 3: Polish & Production, Story 3.6] As a developer, I want an integration test suite, so that I have confidence the engine works end-to-end. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 10
-- Status: pending
+- Status: in_progress
 
 ## Feature 25: Documentation
 - Description: [Epic 3: Polish & Production, Story 3.7] As a user and contributor, I want complete documentation, so that I can use and contribute to the engine. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 10
-- Status: pending
+- Status: in_progress
 
 ## Feature 26: cargo install
 - Description: [Epic 4: Distribution, Story 4.1] As a Rust user, I want to install via `cargo install minion-engine`, so that I don't need to clone the repository. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 25
-- Status: pending
+- Status: in_progress
 
 ## Feature 27: Pre-compiled Binaries
 - Description: [Epic 4: Distribution, Story 4.2] As a non-Rust user, I want to download a pre-compiled binary for my OS, so that I don't need to install the Rust toolchain. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 26
-- Status: pending
+- Status: in_progress
 
 ## Feature 28: Homebrew Formula
 - Description: [Epic 4: Distribution, Story 4.3] As a macOS user, I want to install via `brew install minion-engine`, so that I have easy install and updates. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 27
-- Status: pending
+- Status: in_progress
 
 ## Feature 29: Workflow Gallery
 - Description: [Epic 4: Distribution, Story 4.4] As a user, I want a collection of ready-to-use workflows, so that I can start quickly without writing YAML from scratch. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 25
-- Status: pending
+- Status: in_progress
