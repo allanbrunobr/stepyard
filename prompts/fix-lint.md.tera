@@ -1,0 +1,10 @@
+Fix ONLY the lint errors shown below.
+
+Rules:
+- Do NOT change any logic or behavior
+- Do NOT add new features
+- Do NOT reformat code that isn't part of the error
+- Fix the minimum required to make lint pass
+
+## Lint Output
+{{ steps.lint.stdout }}

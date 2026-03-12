@@ -1,0 +1,156 @@
+# ============================================================
+# security-audit.yaml — Security Audit Workflow
+# ============================================================
+#
+# Usage:
+#   minion execute workflows/security-audit.yaml
+#   minion execute workflows/security-audit.yaml --args '{"path": "src/"}'
+#
+# What it does:
+#   1. Finds all source files in the project (or given path)
+#   2. Maps an AI security reviewer over each file in parallel
+#   3. Consolidates findings into a prioritized security report
+#   4. Saves the report to security-audit-report.md
+#
+# Requirements:
+#   - ANTHROPIC_API_KEY set (for chat steps)
+# ============================================================
+
+name: security-audit
+version: 1
+description: "Run a security audit over source files — produces a prioritized findings report"
+
+config:
+  global:
+    timeout: 600s
+    working_directory: "."
+
+  chat:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    api_key_env: ANTHROPIC_API_KEY
+    temperature: 0.1
+    max_tokens: 4096
+
+  cmd:
+    fail_on_error: false
+    timeout: 60s
+    shell: "/bin/bash"
+
+scopes:
+  # ── Audit a single file ─────────────────────────────────
+  # scope.value = file path
+  audit_file:
+    steps:
+      - name: read_file
+        type: cmd
+        run: "cat {{ scope.value }}"
+
+      - name: audit
+        type: chat
+        prompt: |
+          You are an expert security auditor (OWASP Top 10, CWE, SANS).
+          Audit the following source file for security vulnerabilities.
+
+          File: `{{ scope.value }}`
+
+          Check for:
+          - Injection (SQL, command, LDAP, XPath)
+          - Broken authentication & session management
+          - Sensitive data exposure (hardcoded secrets, insecure storage)
+          - Security misconfiguration
+          - Insecure deserialization
+          - Using components with known vulnerabilities
+          - Insufficient logging & monitoring
+          - Path traversal / directory traversal
+          - Race conditions
+          - Integer overflow / underflow
+
+          For each vulnerability found, use exactly this format:
+          **[CWE-XXX | SEVERITY: CRITICAL|HIGH|MEDIUM|LOW]** Line ~N: Description.
+          Remediation: How to fix it.
+
+          If no vulnerabilities found: "✅ No vulnerabilities found."
+
+          ## File Content
+          {{ steps.read_file.stdout }}
+
+    outputs: "{{ steps.audit.response }}"
+
+steps:
+  # 1. Find all source files to audit
+  - name: find_files
+    type: cmd
+    run: |
+      SEARCH_PATH="{{ args.path | default(val='.') }}"
+      find "$SEARCH_PATH" \
+        -type f \
+        \( -name "*.rs" -o -name "*.ts" -o -name "*.js" -o -name "*.py" \
+           -o -name "*.go" -o -name "*.rb" -o -name "*.java" -o -name "*.php" \
+           -o -name "*.c" -o -name "*.cpp" -o -name "*.sh" \) \
+        -not -path "*/node_modules/*" \
+        -not -path "*/.git/*" \
+        -not -path "*/target/*" \
+        -not -path "*/dist/*" \
+        -not -path "*/vendor/*" \
+        | sort | head -50
+
+  # 2. Gate: ensure we have files to audit
+  - name: check_files
+    type: gate
+    condition: "{{ steps.find_files.stdout | length > 0 }}"
+    on_fail: fail
+    message: "No source files found to audit"
+
+  # 3. Audit each file in parallel (max 5 concurrent to respect API limits)
+  - name: file_audits
+    type: map
+    scope: audit_file
+    items: "{{ steps.find_files.stdout | split(pat='\n') | filter(s='') }}"
+    concurrency: 5
+
+  # 4. Consolidate all audit results into a final report
+  - name: final_report
+    type: chat
+    prompt: |
+      You are a CISO reviewing security audit results. Consolidate the following
+      per-file security findings into a single executive report.
+
+      Structure the report as:
+
+      # Security Audit Report
+      **Date:** {{ args.date | default(val="today") }}
+      **Scope:** {{ args.path | default(val="entire codebase") }}
+
+      ## Executive Summary
+      (3-5 sentences: overall security posture, most critical issues)
+
+      ## 🔴 Critical Findings (P0 — fix immediately)
+      ## 🟠 High Findings (P1 — fix this sprint)
+      ## 🟡 Medium Findings (P2 — fix next sprint)
+      ## 🟢 Low Findings (P3 — fix when convenient)
+      ## ✅ Files with No Issues
+
+      ## Recommended Remediation Priority
+      (ordered list of top 5 actions)
+
+      Deduplicate findings. Include file path and line reference for each issue.
+
+      ## Raw Findings Per File:
+      {{ steps.file_audits.outputs | join(sep='\n\n---\n\n') }}
+
+  # 5. Save report to file
+  - name: save_report
+    type: cmd
+    run: |
+      echo "{{ steps.final_report.response }}" > security-audit-report.md
+      echo "Report saved to: security-audit-report.md"
+
+  # 6. Print summary
+  - name: print_report
+    type: cmd
+    run: |
+      echo "============================================================"
+      echo " Security Audit Complete"
+      echo "============================================================"
+      cat security-audit-report.md

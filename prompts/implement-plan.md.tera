@@ -1,0 +1,17 @@
+Implement the following plan exactly as specified.
+
+## Plan
+{{ steps.plan.response }}
+
+## Project Rules
+{% if steps.read_project_rules is defined %}
+{{ steps.read_project_rules.stdout }}
+{% endif %}
+
+## CRITICAL Rules
+- Implement ONLY what the plan specifies
+- Do NOT add features not in the plan
+- Do NOT run tests, lint, or validation commands — the engine handles that
+- Do NOT create files not listed in the plan
+- Write idiomatic code following project conventions
+- If the plan is ambiguous, choose the simpler interpretation
