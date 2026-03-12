@@ -199,12 +199,9 @@ mod tests {
             vec![
                 cmd_step("ok_step", "echo ok"),
                 {
-                    let mut s = cmd_step("fail_step", "exit 1");
-                    // fail_on_error uses serde_yaml::Value
-                    s.config.insert(
-                        "fail_on_error".to_string(),
-                        serde_yaml::Value::Bool(true),
-                    );
+                    // Use an unsupported step type to force dispatch_step to return Err
+                    let mut s = cmd_step("fail_step", "echo fake");
+                    s.step_type = StepType::Template;
                     s
                 },
             ],
