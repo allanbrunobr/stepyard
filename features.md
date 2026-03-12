@@ -57,22 +57,22 @@
 ## Feature 11: Step — chat (Direct LLM API)
 - Description: [Epic 2: Complete Engine, Story 2.1] As a developer, I want to call LLM APIs directly without invoking Claude Code CLI, so that planning and summarization steps are fast and cheap. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 12: Step — map (Collection Processing)
 - Description: [Epic 2: Complete Engine, Story 2.2] As a developer, I want to iterate over a collection executing a scope for each item, so that multi-file analysis works (like security audit). Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 13: Step — parallel (Independent Concurrent Steps)
 - Description: [Epic 2: Complete Engine, Story 2.3] As a developer, I want to run independent steps in parallel, so that non-dependent analyses run simultaneously. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 14: Step — call (Scope Invocation)
 - Description: [Epic 2: Complete Engine, Story 2.4] As a developer, I want to invoke a named scope as a sub-workflow, so that reusable logic can be organized into scopes. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 15: Config Manager — 4-Layer Merge
 - Description: [Epic 2: Complete Engine, Story 2.5] As a developer, I want to resolve config with 4 priority layers, so that global, per-type, per-pattern and per-step config work like Roast. Source: EPICS-AND-STORIES.md
@@ -92,7 +92,7 @@
 ## Feature 18: Step — template (Tera File Rendering)
 - Description: [Epic 2: Complete Engine, Story 2.8] As a developer, I want to render .md.tera files as steps, so that long prompts can live in separate files. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 19: Docker Sandbox Integration
 - Description: [Epic 3: Polish & Production, Story 3.1] As a user, I want to run workflows or agent steps in Docker Sandbox, so that I have Stripe devbox-style isolation. Source: EPICS-AND-STORIES.md
