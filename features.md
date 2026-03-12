@@ -132,19 +132,19 @@
 ## Feature 26: cargo install
 - Description: [Epic 4: Distribution, Story 4.1] As a Rust user, I want to install via `cargo install minion-engine`, so that I don't need to clone the repository. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 25
-- Status: pending
+- Status: done
 
 ## Feature 27: Pre-compiled Binaries
 - Description: [Epic 4: Distribution, Story 4.2] As a non-Rust user, I want to download a pre-compiled binary for my OS, so that I don't need to install the Rust toolchain. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 26
-- Status: pending
+- Status: done
 
 ## Feature 28: Homebrew Formula
 - Description: [Epic 4: Distribution, Story 4.3] As a macOS user, I want to install via `brew install minion-engine`, so that I have easy install and updates. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 27
-- Status: pending
+- Status: done
 
 ## Feature 29: Workflow Gallery
 - Description: [Epic 4: Distribution, Story 4.4] As a user, I want a collection of ready-to-use workflows, so that I can start quickly without writing YAML from scratch. Source: EPICS-AND-STORIES.md
 - Dependencies: Feature 25
-- Status: pending
+- Status: done
