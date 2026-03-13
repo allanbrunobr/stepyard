@@ -1,7 +1,23 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::steps::StepOutput;
+
+/// A single chat message (user or assistant turn)
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// Ordered history of messages for a named chat session
+#[derive(Debug, Clone, Default)]
+pub struct ChatHistory {
+    pub messages: Vec<ChatMessage>,
+}
+
+/// Shared chat session store — Arc so child contexts inherit the same store
+type ChatSessionStore = Arc<Mutex<HashMap<String, ChatHistory>>>;
 
 /// Tree-structured context that stores step outputs
 pub struct Context {
@@ -11,6 +27,8 @@ pub struct Context {
     pub scope_value: Option<serde_json::Value>,
     pub scope_index: usize,
     pub session_id: Option<String>,
+    /// Shared chat session store — inherited by child contexts via Arc clone
+    chat_sessions: ChatSessionStore,
 }
 
 impl Context {
@@ -25,6 +43,7 @@ impl Context {
             scope_value: None,
             scope_index: 0,
             session_id: None,
+            chat_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -68,7 +87,21 @@ impl Context {
             scope_value,
             scope_index: index,
             session_id: parent.session_id.clone(),
+            chat_sessions: Arc::clone(&parent.chat_sessions),
         }
+    }
+
+    /// Return all stored messages for a chat session (empty vec if session doesn't exist)
+    pub fn get_chat_messages(&self, session: &str) -> Vec<ChatMessage> {
+        let guard = self.chat_sessions.lock().expect("chat_sessions lock poisoned");
+        guard.get(session).map(|h| h.messages.clone()).unwrap_or_default()
+    }
+
+    /// Append messages to a chat session, creating the session if it doesn't exist
+    pub fn append_chat_messages(&self, session: &str, messages: Vec<ChatMessage>) {
+        let mut guard = self.chat_sessions.lock().expect("chat_sessions lock poisoned");
+        let history = guard.entry(session.to_string()).or_insert_with(ChatHistory::default);
+        history.messages.extend(messages);
     }
 
     /// Convert to Tera template context

@@ -5,7 +5,7 @@ use reqwest::Client;
 use serde::Deserialize;
 
 use crate::config::StepConfig;
-use crate::engine::context::Context;
+use crate::engine::context::{ChatMessage, Context};
 use crate::error::StepError;
 use crate::workflow::schema::StepDef;
 
@@ -62,21 +62,47 @@ impl StepExecutor for ChatExecutor {
 
         let prompt = ctx.render_template(prompt_template)?;
 
+        // Story 5.1: Build message list from chat history (if session configured)
+        let session_name = config.get_str("session");
+        let mut messages: Vec<serde_json::Value> = if let Some(session) = session_name {
+            ctx.get_chat_messages(session)
+                .into_iter()
+                .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        messages.push(serde_json::json!({"role": "user", "content": prompt}));
+
         let client = Client::builder()
             .timeout(timeout)
             .build()
             .map_err(|e| StepError::Fail(format!("Failed to create HTTP client: {e}")))?;
 
-        match provider {
+        let output = match provider {
             "openai" => {
                 let url = format!("{}/v1/chat/completions", openai_base);
-                call_openai(&client, &api_key, model, &prompt, max_tokens, temperature, &url).await
+                call_openai(&client, &api_key, model, &messages, max_tokens, temperature, &url).await?
             }
             _ => {
                 let url = format!("{}/v1/messages", anthropic_base);
-                call_anthropic(&client, &api_key, model, &prompt, max_tokens, temperature, &url).await
+                call_anthropic(&client, &api_key, model, &messages, max_tokens, temperature, &url).await?
             }
+        };
+
+        // Story 5.1: Store sent message and response in chat history
+        if let Some(session) = session_name {
+            let response_text = output.text().to_string();
+            ctx.append_chat_messages(
+                session,
+                vec![
+                    ChatMessage { role: "user".to_string(), content: prompt },
+                    ChatMessage { role: "assistant".to_string(), content: response_text },
+                ],
+            );
         }
+
+        Ok(output)
     }
 }
 
@@ -84,7 +110,7 @@ async fn call_anthropic(
     client: &Client,
     api_key: &str,
     model: &str,
-    prompt: &str,
+    messages: &[serde_json::Value],
     max_tokens: u64,
     temperature: f64,
     url: &str,
@@ -93,7 +119,7 @@ async fn call_anthropic(
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}]
+        "messages": messages,
     });
 
     let response = client
@@ -155,7 +181,7 @@ async fn call_openai(
     client: &Client,
     api_key: &str,
     model: &str,
-    prompt: &str,
+    messages: &[serde_json::Value],
     max_tokens: u64,
     temperature: f64,
     url: &str,
@@ -164,7 +190,7 @@ async fn call_openai(
         "model": model,
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}]
+        "messages": messages,
     });
 
     let response = client
@@ -357,5 +383,58 @@ mod tests {
         } else {
             panic!("Expected Chat output");
         }
+    }
+
+    #[tokio::test]
+    async fn chat_history_stores_messages_and_resends_on_second_call() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+        let response_body = serde_json::json!({
+            "model": "claude-3-haiku-20240307",
+            "content": [{"type": "text", "text": "Response text"}],
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
+            .expect(2)
+            .mount(&mock_server)
+            .await;
+
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+
+        let step = make_step("First message");
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "anthropic_base_url".to_string(),
+            serde_json::Value::String(mock_server.uri()),
+        );
+        config_values.insert(
+            "session".to_string(),
+            serde_json::Value::String("review".to_string()),
+        );
+        let config = StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        // First call — stores user + assistant messages
+        let _result1 = ChatExecutor.execute(&step, &config, &ctx).await.unwrap();
+
+        // After first call, history should have 2 messages
+        let history = ctx.get_chat_messages("review");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].role, "user");
+        assert_eq!(history[0].content, "First message");
+        assert_eq!(history[1].role, "assistant");
+
+        // Second call — history is sent along with new message
+        let step2 = make_step("Second message");
+        let _result2 = ChatExecutor.execute(&step2, &config, &ctx).await.unwrap();
+
+        // History now has 4 messages
+        let history2 = ctx.get_chat_messages("review");
+        assert_eq!(history2.len(), 4);
     }
 }
