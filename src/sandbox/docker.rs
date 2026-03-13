@@ -251,20 +251,40 @@ impl DockerSandbox {
         Ok(SandboxOutput { stdout, stderr, exit_code })
     }
 
-    /// Copy results from the sandbox back to the host
+    /// Copy results from the sandbox back to the host.
+    ///
+    /// Uses the same exclude list as `copy_workspace` to avoid copying
+    /// large build directories and `.git` internals back. Also suppresses
+    /// macOS tar xattr warnings on the receiving end.
     pub async fn copy_results(&self, dest: &str) -> Result<()> {
         let id = self.container_id.as_ref().context("Container not created")?;
 
-        let output = Command::new("docker")
-            .args(["cp", &format!("{id}:/workspace/."), dest])
+        // Always exclude .git when copying back — it's large and the host
+        // already has the authoritative copy.
+        let mut exclude_patterns: Vec<String> = self
+            .config
+            .effective_exclude()
+            .into_iter()
+            .collect();
+        if !exclude_patterns.iter().any(|p| p == ".git") {
+            exclude_patterns.push(".git".to_string());
+        }
+
+        let mut excludes = String::new();
+        for pattern in &exclude_patterns {
+            excludes.push_str(&format!(" --exclude='{pattern}'"));
+        }
+
+        let pipe_cmd = format!(
+            "docker exec {id} tar -cf -{excludes} -C /workspace . 2>/dev/null \
+             | tar -xf - -C '{dest}' 2>/dev/null; exit 0"
+        );
+
+        Command::new("/bin/sh")
+            .args(["-c", &pipe_cmd])
             .output()
             .await
-            .context("docker cp results failed")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("docker cp results failed: {stderr}");
-        }
+            .context("copy results from container failed")?;
 
         Ok(())
     }
