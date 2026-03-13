@@ -55,7 +55,7 @@ pub struct SandboxConfig {
     /// Tilde (~) is expanded to $HOME on the host.
     pub volumes: Vec<String>,
     /// Glob patterns of files/dirs to exclude when copying workspace into the
-    /// container (e.g. "node_modules", "target", ".git/objects").
+    /// container (e.g. "node_modules", "target").
     pub exclude: Vec<String>,
     /// DNS servers to use inside the container (e.g. "8.8.8.8").
     /// Ensures name resolution works even with restricted networks.
@@ -76,14 +76,35 @@ impl SandboxConfig {
         "GITHUB_TOKEN",
     ];
 
+    /// Well-known directories to exclude when copying workspace into the
+    /// sandbox container. These are typically large build/cache directories
+    /// that would make the copy prohibitively slow and are not needed for
+    /// workflow execution.
+    pub const AUTO_EXCLUDE: &'static [&'static str] = &[
+        "target",
+        "node_modules",
+        "dist",
+        "build",
+        "__pycache__",
+        ".next",
+        ".nuxt",
+        "vendor",
+        ".tox",
+        ".venv",
+        "venv",
+    ];
+
     /// Well-known host directories that are auto-mounted when the
     /// user does NOT specify an explicit `volumes:` list.
     /// Note: ~/.claude needs read-write access because Claude CLI writes session data.
+    /// Note: ~/.gitconfig is NOT mounted because the host gitconfig often
+    /// contains macOS-specific paths (e.g. credential helpers pointing to
+    /// /usr/local/bin/gh) and missing safe.directory entries. The sandbox
+    /// configures its own gitconfig after workspace copy.
     pub const AUTO_VOLUMES: &'static [&'static str] = &[
         "~/.config/gh:/root/.config/gh:ro",
         "~/.claude:/root/.claude:rw",
         "~/.ssh:/root/.ssh:ro",
-        "~/.gitconfig:/root/.gitconfig:ro",
     ];
 
     pub fn image(&self) -> &str {
@@ -116,6 +137,15 @@ impl SandboxConfig {
                 std::path::Path::new(host_path).exists()
             })
             .collect()
+    }
+
+    /// Return the effective exclude list: explicit config overrides auto-exclude.
+    pub fn effective_exclude(&self) -> Vec<String> {
+        if self.exclude.is_empty() {
+            Self::AUTO_EXCLUDE.iter().map(|s| (*s).to_string()).collect()
+        } else {
+            self.exclude.clone()
+        }
     }
 
     /// Helper: parse a YAML string-list from a mapping key.

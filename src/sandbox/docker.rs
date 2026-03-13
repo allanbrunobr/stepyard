@@ -162,7 +162,8 @@ impl DockerSandbox {
     pub async fn copy_workspace(&self, src: &str) -> Result<()> {
         let id = self.container_id.as_ref().context("Container not created")?;
 
-        if self.config.exclude.is_empty() {
+        let effective_exclude = self.config.effective_exclude();
+        if effective_exclude.is_empty() {
             // Fast path: no exclusions, use plain docker cp
             let output = Command::new("docker")
                 .args(["cp", &format!("{src}/."), &format!("{id}:/workspace")])
@@ -178,7 +179,7 @@ impl DockerSandbox {
             // Use shell pipe: tar --exclude | docker exec -i tar
             // This avoids Rust type-conversion issues between tokio/std Stdio.
             let mut excludes = String::new();
-            for pattern in &self.config.exclude {
+            for pattern in &effective_exclude {
                 excludes.push_str(&format!(" --exclude='{pattern}'"));
             }
 
@@ -205,17 +206,28 @@ impl DockerSandbox {
     pub async fn run_command(&self, cmd: &str) -> Result<SandboxOutput> {
         let id = self.container_id.as_ref().context("Container not created")?;
 
+        tracing::debug!(container_id = %id, cmd = %cmd, "Sandbox: executing command");
+
         let output = Command::new("docker")
             .args(["exec", id, "/bin/sh", "-c", cmd])
             .output()
             .await
             .context("docker exec failed")?;
 
-        Ok(SandboxOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-        })
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = output.status.code().unwrap_or(-1);
+
+        tracing::debug!(
+            exit_code,
+            stdout_len = stdout.len(),
+            stderr_len = stderr.len(),
+            stdout_preview = %if stdout.len() > 200 { &stdout[..200] } else { &stdout },
+            stderr_preview = %if stderr.len() > 200 { &stderr[..200] } else { &stderr },
+            "Sandbox: command completed"
+        );
+
+        Ok(SandboxOutput { stdout, stderr, exit_code })
     }
 
     /// Copy results from the sandbox back to the host

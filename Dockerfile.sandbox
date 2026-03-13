@@ -44,8 +44,11 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN npm install -g @anthropic-ai/claude-code
 
 # ── Git defaults (can be overridden via env vars) ────────────
+# safe.directory '*' allows Git to operate on workspace directories
+# mounted from the host (avoids "dubious ownership" errors).
 RUN git config --global user.name "Minion Engine" \
     && git config --global user.email "minion@localhost" \
-    && git config --global init.defaultBranch main
+    && git config --global init.defaultBranch main \
+    && git config --global --add safe.directory '*'
 
 WORKDIR /workspace

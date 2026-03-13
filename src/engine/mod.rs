@@ -232,6 +232,18 @@ impl Engine {
         docker.create().await?;
         docker.copy_workspace(&workspace).await?;
 
+        // Configure Git safe.directory inside the container so that
+        // Git/gh commands work on the copied workspace (avoids
+        // "dubious ownership" errors when host UID != container UID).
+        // Also set user.name/email defaults for any git operations.
+        let _ = docker
+            .run_command(
+                "git config --global --add safe.directory /workspace \
+                 && git config --global user.name 'Minion Engine' \
+                 && git config --global user.email 'minion@localhost'",
+            )
+            .await;
+
         if !self.quiet {
             println!(
                 "  {} Sandbox ready — workspace copied to container",
