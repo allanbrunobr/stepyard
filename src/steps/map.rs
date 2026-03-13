@@ -15,6 +15,175 @@ use super::{
     call::dispatch_scope_step, CmdOutput, IterationOutput, ScopeOutput, StepExecutor, StepOutput,
 };
 
+/// Apply a reduce operation to ScopeOutput iterations (Story 7.2)
+fn apply_reduce(
+    scope: &ScopeOutput,
+    reducer: &str,
+    condition_template: Option<&str>,
+) -> Result<StepOutput, crate::error::StepError> {
+    let iterations = &scope.iterations;
+
+    match reducer {
+        "concat" => {
+            let joined = iterations
+                .iter()
+                .map(|it| it.output.text().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: joined,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        "sum" => {
+            let sum: f64 = iterations
+                .iter()
+                .map(|it| it.output.text().trim().parse::<f64>().unwrap_or(0.0))
+                .sum();
+            // Format without trailing .0 if integer
+            let result = if sum.fract() == 0.0 {
+                format!("{}", sum as i64)
+            } else {
+                format!("{}", sum)
+            };
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: result,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        "count" => {
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: iterations.len().to_string(),
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        "min" => {
+            let min_val = iterations
+                .iter()
+                .filter_map(|it| it.output.text().trim().parse::<f64>().ok())
+                .fold(f64::INFINITY, f64::min);
+            let result = if min_val.fract() == 0.0 {
+                format!("{}", min_val as i64)
+            } else {
+                format!("{}", min_val)
+            };
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: result,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        "max" => {
+            let max_val = iterations
+                .iter()
+                .filter_map(|it| it.output.text().trim().parse::<f64>().ok())
+                .fold(f64::NEG_INFINITY, f64::max);
+            let result = if max_val.fract() == 0.0 {
+                format!("{}", max_val as i64)
+            } else {
+                format!("{}", max_val)
+            };
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: result,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        "filter" => {
+            let tmpl = condition_template.ok_or_else(|| {
+                crate::error::StepError::Fail(
+                    "reduce: 'filter' requires 'reduce_condition' to be set".to_string(),
+                )
+            })?;
+
+            let mut kept = Vec::new();
+            for it in iterations {
+                // Build a mini-context with item.output accessible
+                let mut vars = std::collections::HashMap::new();
+                vars.insert(
+                    "item_output".to_string(),
+                    serde_json::Value::String(it.output.text().to_string()),
+                );
+                // Render condition; treat "true" / non-empty as pass
+                // Replace {{item.output}} with item_output for simple template resolution
+                let simplified_tmpl = tmpl
+                    .replace("{{item.output}}", "{{ item_output }}")
+                    .replace("{{ item.output }}", "{{ item_output }}");
+                let child_ctx =
+                    crate::engine::context::Context::new(String::new(), vars);
+                let rendered = child_ctx
+                    .render_template(&simplified_tmpl)
+                    .unwrap_or_default();
+                let passes = !rendered.trim().is_empty()
+                    && rendered.trim() != "false"
+                    && rendered.trim() != "0";
+                if passes {
+                    kept.push(it.output.text().to_string());
+                }
+            }
+
+            let joined = kept.join("\n");
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: joined,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        other => Err(crate::error::StepError::Fail(format!(
+            "unknown reduce operation '{}'; expected concat, sum, count, filter, min, max",
+            other
+        ))),
+    }
+}
+
+/// Apply a collect transformation to ScopeOutput (Story 7.1)
+fn apply_collect(scope: ScopeOutput, mode: &str) -> Result<StepOutput, crate::error::StepError> {
+    match mode {
+        "text" => {
+            let joined = scope
+                .iterations
+                .iter()
+                .map(|it| it.output.text().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: joined,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        "all" | "json" => {
+            let arr: Vec<serde_json::Value> = scope
+                .iterations
+                .iter()
+                .map(|it| serde_json::Value::String(it.output.text().to_string()))
+                .collect();
+            let json = serde_json::to_string(&arr)
+                .map_err(|e| crate::error::StepError::Fail(format!("collect serialize error: {e}")))?;
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: json,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        other => Err(crate::error::StepError::Fail(format!(
+            "unknown collect mode '{}'; expected all, text, or json",
+            other
+        ))),
+    }
+}
+
 pub struct MapExecutor {
     scopes: HashMap<String, ScopeDef>,
 }
@@ -81,12 +250,28 @@ impl StepExecutor for MapExecutor {
 
         let parallel_count = step.parallel.unwrap_or(0);
 
-        if parallel_count == 0 {
+        let scope_output = if parallel_count == 0 {
             // Serial execution
-            serial_execute(items, &scope, ctx, &self.scopes).await
+            serial_execute(items, &scope, ctx, &self.scopes).await?
         } else {
             // Parallel execution with semaphore
-            parallel_execute(items, &scope, ctx, &self.scopes, parallel_count).await
+            parallel_execute(items, &scope, ctx, &self.scopes, parallel_count).await?
+        };
+
+        // Story 7.2: Apply reduce if configured (takes precedence over collect)
+        let reduce_mode = _config.get_str("reduce").map(|s| s.to_string());
+        if let Some(ref reducer) = reduce_mode {
+            if let StepOutput::Scope(ref s) = scope_output {
+                let condition = _config.get_str("reduce_condition");
+                return apply_reduce(s, reducer, condition);
+            }
+        }
+
+        // Story 7.1: Apply collect transformation if configured
+        let collect_mode = _config.get_str("collect").map(|s| s.to_string());
+        match (scope_output, collect_mode) {
+            (StepOutput::Scope(s), Some(mode)) => apply_collect(s, &mode),
+            (output, _) => Ok(output),
         }
     }
 }
@@ -343,6 +528,194 @@ mod tests {
         } else {
             panic!("Expected Scope output");
         }
+    }
+
+    fn map_step_with_config(
+        name: &str,
+        items: &str,
+        scope: &str,
+        config_values: HashMap<String, serde_yaml::Value>,
+    ) -> StepDef {
+        StepDef {
+            name: name.to_string(),
+            step_type: StepType::Map,
+            run: None,
+            prompt: None,
+            condition: None,
+            on_pass: None,
+            on_fail: None,
+            message: None,
+            scope: Some(scope.to_string()),
+            max_iterations: None,
+            initial_value: None,
+            items: Some(items.to_string()),
+            parallel: None,
+            steps: None,
+            config: config_values,
+            outputs: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn map_collect_text_joins_with_newlines() {
+        let mut scopes = HashMap::new();
+        scopes.insert("echo_scope".to_string(), echo_scope());
+
+        let mut cfg = HashMap::new();
+        cfg.insert(
+            "collect".to_string(),
+            serde_yaml::Value::String("text".to_string()),
+        );
+        let step = map_step_with_config("map_collect_text", "alpha\nbeta\ngamma", "echo_scope", cfg);
+        let executor = MapExecutor::new(&scopes);
+
+        // Build StepConfig with collect=text
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "collect".to_string(),
+            serde_json::Value::String("text".to_string()),
+        );
+        let config = crate::config::StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        // Should be a Cmd output with newline-joined text
+        assert!(matches!(result, StepOutput::Cmd(_)));
+        let text = result.text();
+        assert!(text.contains("alpha"), "Missing alpha in: {}", text);
+        assert!(text.contains("beta"), "Missing beta in: {}", text);
+        assert!(text.contains("gamma"), "Missing gamma in: {}", text);
+    }
+
+    #[tokio::test]
+    async fn map_collect_all_produces_json_array() {
+        let mut scopes = HashMap::new();
+        scopes.insert("echo_scope".to_string(), echo_scope());
+
+        let step = map_step_with_config(
+            "map_collect_all",
+            "x\ny\nz",
+            "echo_scope",
+            HashMap::new(),
+        );
+        let executor = MapExecutor::new(&scopes);
+
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "collect".to_string(),
+            serde_json::Value::String("all".to_string()),
+        );
+        let config = crate::config::StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        assert!(matches!(result, StepOutput::Cmd(_)));
+        let text = result.text();
+        // Should be a valid JSON array
+        let arr: Vec<serde_json::Value> = serde_json::from_str(text).expect("Expected JSON array");
+        assert_eq!(arr.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn map_no_collect_returns_scope_output() {
+        let mut scopes = HashMap::new();
+        scopes.insert("echo_scope".to_string(), echo_scope());
+
+        let step = map_step("map_no_collect", "a\nb", "echo_scope", None);
+        let executor = MapExecutor::new(&scopes);
+        let config = StepConfig::default();
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        // Without collect, should still be a Scope output
+        assert!(matches!(result, StepOutput::Scope(_)));
+    }
+
+    #[tokio::test]
+    async fn map_reduce_concat_joins_outputs() {
+        let mut scopes = HashMap::new();
+        scopes.insert("echo_scope".to_string(), echo_scope());
+
+        let step = map_step("map_reduce_concat", "hello\nworld", "echo_scope", None);
+        let executor = MapExecutor::new(&scopes);
+
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "reduce".to_string(),
+            serde_json::Value::String("concat".to_string()),
+        );
+        let config = crate::config::StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        assert!(matches!(result, StepOutput::Cmd(_)));
+        let text = result.text();
+        assert!(text.contains("hello"), "Missing hello: {}", text);
+        assert!(text.contains("world"), "Missing world: {}", text);
+    }
+
+    #[tokio::test]
+    async fn map_reduce_sum_adds_numbers() {
+        let mut scopes = HashMap::new();
+        // Each scope step echos the item value (which will be a number string)
+        scopes.insert(
+            "echo_scope".to_string(),
+            ScopeDef {
+                steps: vec![cmd_step("echo_val", "echo {{ scope.value }}")],
+                outputs: None,
+            },
+        );
+
+        let step = map_step("map_reduce_sum", "10\n20\n30", "echo_scope", None);
+        let executor = MapExecutor::new(&scopes);
+
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "reduce".to_string(),
+            serde_json::Value::String("sum".to_string()),
+        );
+        let config = crate::config::StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        assert!(matches!(result, StepOutput::Cmd(_)));
+        let text = result.text().trim().to_string();
+        assert_eq!(text, "60", "Expected 60, got: {}", text);
+    }
+
+    #[tokio::test]
+    async fn map_reduce_filter_removes_empty() {
+        let mut scopes = HashMap::new();
+        // Scope that outputs the item value (some will be empty, some not)
+        scopes.insert(
+            "echo_scope".to_string(),
+            ScopeDef {
+                steps: vec![cmd_step("echo_val", "echo {{ scope.value }}")],
+                outputs: None,
+            },
+        );
+
+        let step = map_step("map_reduce_filter", "hello\n\nworld", "echo_scope", None);
+        let executor = MapExecutor::new(&scopes);
+
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "reduce".to_string(),
+            serde_json::Value::String("filter".to_string()),
+        );
+        config_values.insert(
+            "reduce_condition".to_string(),
+            serde_json::Value::String("{{ item.output }}".to_string()),
+        );
+        let config = crate::config::StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        assert!(matches!(result, StepOutput::Cmd(_)));
+        let text = result.text();
+        // Empty lines should be filtered out
+        let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert!(lines.len() <= 3, "Should have at most 3 lines: {:?}", lines);
     }
 
     #[tokio::test]

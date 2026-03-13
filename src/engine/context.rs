@@ -1,7 +1,23 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::steps::{ParsedValue, StepOutput};
+
+/// A single chat message (user or assistant turn)
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// Ordered history of messages for a named chat session
+#[derive(Debug, Clone, Default)]
+pub struct ChatHistory {
+    pub messages: Vec<ChatMessage>,
+}
+
+/// Shared chat session store — Arc so child contexts inherit the same store
+type ChatSessionStore = Arc<Mutex<HashMap<String, ChatHistory>>>;
 
 /// Tree-structured context that stores step outputs
 pub struct Context {
@@ -12,6 +28,8 @@ pub struct Context {
     pub scope_value: Option<serde_json::Value>,
     pub scope_index: usize,
     pub session_id: Option<String>,
+    /// Shared chat session store — inherited by child contexts via Arc clone
+    chat_sessions: ChatSessionStore,
 }
 
 impl Context {
@@ -27,6 +45,7 @@ impl Context {
             scope_value: None,
             scope_index: 0,
             session_id: None,
+            chat_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -83,6 +102,7 @@ impl Context {
             scope_value,
             scope_index: index,
             session_id: parent.session_id.clone(),
+            chat_sessions: Arc::clone(&parent.chat_sessions),
         }
     }
 
@@ -115,6 +135,19 @@ impl Context {
             return check_json_path(var, &parts[1..]);
         }
         false
+    }
+
+    /// Return all stored messages for a chat session (empty vec if session doesn't exist)
+    pub fn get_chat_messages(&self, session: &str) -> Vec<ChatMessage> {
+        let guard = self.chat_sessions.lock().expect("chat_sessions lock poisoned");
+        guard.get(session).map(|h| h.messages.clone()).unwrap_or_default()
+    }
+
+    /// Append messages to a chat session, creating the session if it doesn't exist
+    pub fn append_chat_messages(&self, session: &str, messages: Vec<ChatMessage>) {
+        let mut guard = self.chat_sessions.lock().expect("chat_sessions lock poisoned");
+        let history = guard.entry(session.to_string()).or_insert_with(ChatHistory::default);
+        history.messages.extend(messages);
     }
 
     /// Convert to Tera template context
@@ -242,6 +275,46 @@ mod tests {
         ctx.store("prev", cmd_output("output", 0));
         let result = ctx.render_template("{{ steps.prev.exit_code }}").unwrap();
         assert_eq!(result, "0");
+    }
+
+    #[test]
+    fn agent_session_id_accessible_in_template() {
+        use crate::steps::{AgentOutput, AgentStats, StepOutput};
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store(
+            "scan",
+            StepOutput::Agent(AgentOutput {
+                response: "done".to_string(),
+                session_id: Some("sess-abc".to_string()),
+                stats: AgentStats::default(),
+            }),
+        );
+        let result = ctx.render_template("{{ steps.scan.session_id }}").unwrap();
+        assert_eq!(result, "sess-abc");
+    }
+
+    #[test]
+    fn cmd_step_session_id_is_empty_string() {
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("build", cmd_output("output", 0));
+        let result = ctx.render_template("{{ steps.build.session_id }}").unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn agent_session_id_none_renders_empty_string() {
+        use crate::steps::{AgentOutput, AgentStats, StepOutput};
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store(
+            "scan",
+            StepOutput::Agent(AgentOutput {
+                response: "done".to_string(),
+                session_id: None,
+                stats: AgentStats::default(),
+            }),
+        );
+        let result = ctx.render_template("{{ steps.scan.session_id }}").unwrap();
+        assert_eq!(result, "");
     }
 
     #[test]
@@ -377,8 +450,8 @@ fn step_output_to_value_with_parsed(
 ) -> serde_json::Value {
     let mut val = serde_json::to_value(output).unwrap_or(serde_json::Value::Null);
 
-    // Add "output" key for template access
     if let serde_json::Value::Object(ref mut map) = val {
+        // Add "output" key for template access (typed output parsing)
         let output_val = match parsed {
             Some(ParsedValue::Json(j)) => j.clone(),
             Some(ParsedValue::Lines(lines)) => serde_json::json!(lines),
@@ -388,6 +461,13 @@ fn step_output_to_value_with_parsed(
             None => serde_json::Value::String(output.text().to_string()),
         };
         map.insert("output".to_string(), output_val);
+
+        // Story 2.3: ensure session_id is always a string (empty if not an agent output)
+        let sid = match map.get("session_id") {
+            Some(serde_json::Value::String(s)) => serde_json::Value::String(s.clone()),
+            _ => serde_json::Value::String(String::new()),
+        };
+        map.insert("session_id".to_string(), sid);
     }
 
     val
