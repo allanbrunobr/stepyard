@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::steps::StepOutput;
+use crate::steps::{ParsedValue, StepOutput};
 
 /// Tree-structured context that stores step outputs
 pub struct Context {
     steps: HashMap<String, StepOutput>,
+    parsed_outputs: HashMap<String, ParsedValue>,
     variables: HashMap<String, serde_json::Value>,
     parent: Option<Arc<Context>>,
     pub scope_value: Option<serde_json::Value>,
@@ -20,6 +21,7 @@ impl Context {
 
         Self {
             steps: HashMap::new(),
+            parsed_outputs: HashMap::new(),
             variables,
             parent: None,
             scope_value: None,
@@ -59,10 +61,23 @@ impl Context {
             .or_else(|| self.parent.as_ref().and_then(|p| p.get_session()))
     }
 
+    /// Store a parsed value for a step
+    pub fn store_parsed(&mut self, name: &str, parsed: ParsedValue) {
+        self.parsed_outputs.insert(name.to_string(), parsed);
+    }
+
+    /// Get a parsed value for a step (looks in parent if not found locally)
+    pub fn get_parsed(&self, name: &str) -> Option<&ParsedValue> {
+        self.parsed_outputs
+            .get(name)
+            .or_else(|| self.parent.as_ref().and_then(|p| p.get_parsed(name)))
+    }
+
     /// Create a child context for a scope
     pub fn child(parent: Arc<Context>, scope_value: Option<serde_json::Value>, index: usize) -> Self {
         Self {
             steps: HashMap::new(),
+            parsed_outputs: HashMap::new(),
             variables: HashMap::new(),
             parent: Some(parent.clone()),
             scope_value,
@@ -71,11 +86,34 @@ impl Context {
         }
     }
 
+    /// Check if a dotted path variable exists in this context (used for strict accessor)
+    pub fn var_exists(&self, path: &str) -> bool {
+        let parts: Vec<&str> = path.split('.').collect();
+        if parts.is_empty() {
+            return false;
+        }
+        let root = parts[0];
+        if let Some(step) = self.get_step(root) {
+            if parts.len() == 1 {
+                return true;
+            }
+            let val = step_output_to_value_with_parsed(step, self.get_parsed(root));
+            return check_json_path(&val, &parts[1..]);
+        }
+        if let Some(var) = self.get_var(root) {
+            if parts.len() == 1 {
+                return true;
+            }
+            return check_json_path(var, &parts[1..]);
+        }
+        false
+    }
+
     /// Convert to Tera template context
     pub fn to_tera_context(&self) -> tera::Context {
         let mut ctx = tera::Context::new();
 
-        // Add variables
+        // Add variables (parent first, then override with local)
         if let Some(parent) = &self.parent {
             ctx = parent.to_tera_context();
         }
@@ -83,15 +121,20 @@ impl Context {
             ctx.insert(k, v);
         }
 
-        // Add steps as a map
-        let mut steps_map = HashMap::new();
-        // First add parent steps
+        // Build full steps map (parent + local)
+        let mut steps_map: HashMap<String, serde_json::Value> = HashMap::new();
         if let Some(parent) = &self.parent {
-            collect_steps(parent, &mut steps_map);
+            collect_steps_with_parsed(parent, &mut steps_map);
         }
-        // Then local steps (override parent)
         for (name, output) in &self.steps {
-            steps_map.insert(name.clone(), step_output_to_value(output));
+            let parsed = self.parsed_outputs.get(name);
+            let val = step_output_to_value_with_parsed(output, parsed);
+            steps_map.insert(name.clone(), val);
+        }
+
+        // Insert steps both under "steps" and directly by name for flexible access
+        for (name, val) in &steps_map {
+            ctx.insert(name.as_str(), val);
         }
         ctx.insert("steps", &steps_map);
 
@@ -108,8 +151,41 @@ impl Context {
 
     /// Render a template string with this context
     pub fn render_template(&self, template: &str) -> Result<String, crate::error::StepError> {
+        // Pre-process template: handle ?, !, and from("name") syntax
+        let processed = crate::engine::template::preprocess_template(template, self)?;
+
         let tera_ctx = self.to_tera_context();
-        tera::Tera::one_off(template, &tera_ctx, false)
+
+        // Collect all steps for the from() function
+        let mut all_steps: HashMap<String, serde_json::Value> = HashMap::new();
+        collect_steps_with_parsed(self, &mut all_steps);
+
+        // Build Tera instance with custom from() function
+        let mut tera = tera::Tera::default();
+        tera.add_raw_template("__tmpl__", &processed)
+            .map_err(|e| crate::error::StepError::Template(format!("{e}")))?;
+
+        let steps_for_fn = std::sync::Arc::new(all_steps);
+        tera.register_function("from", {
+            let steps = steps_for_fn.clone();
+            move |args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
+                let name_val = args.get("name").ok_or_else(|| {
+                    tera::Error::msg("from() requires a 'name' argument")
+                })?;
+                let step_name = match name_val {
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => return Err(tera::Error::msg("from() name must be a string")),
+                };
+                steps.get(&step_name).cloned().ok_or_else(|| {
+                    tera::Error::msg(format!(
+                        "Step '{}' not found in any scope",
+                        step_name
+                    ))
+                })
+            }
+        });
+
+        tera.render("__tmpl__", &tera_ctx)
             .map_err(|e| crate::error::StepError::Template(format!("{e}")))
     }
 }
@@ -191,16 +267,50 @@ mod tests {
     }
 }
 
-fn collect_steps(ctx: &Context, map: &mut HashMap<String, serde_json::Value>) {
+fn collect_steps_with_parsed(ctx: &Context, map: &mut HashMap<String, serde_json::Value>) {
     if let Some(parent) = &ctx.parent {
-        collect_steps(parent, map);
+        collect_steps_with_parsed(parent, map);
     }
     for (name, output) in &ctx.steps {
-        map.insert(name.clone(), step_output_to_value(output));
+        let parsed = ctx.parsed_outputs.get(name);
+        map.insert(name.clone(), step_output_to_value_with_parsed(output, parsed));
     }
 }
 
-fn step_output_to_value(output: &StepOutput) -> serde_json::Value {
-    // Serialize to JSON value for template access
-    serde_json::to_value(output).unwrap_or(serde_json::Value::Null)
+fn step_output_to_value_with_parsed(
+    output: &StepOutput,
+    parsed: Option<&ParsedValue>,
+) -> serde_json::Value {
+    let mut val = serde_json::to_value(output).unwrap_or(serde_json::Value::Null);
+
+    // Add "output" key for template access
+    if let serde_json::Value::Object(ref mut map) = val {
+        let output_val = match parsed {
+            Some(ParsedValue::Json(j)) => j.clone(),
+            Some(ParsedValue::Lines(lines)) => serde_json::json!(lines),
+            Some(ParsedValue::Integer(n)) => serde_json::json!(n),
+            Some(ParsedValue::Boolean(b)) => serde_json::json!(b),
+            Some(ParsedValue::Text(t)) => serde_json::Value::String(t.clone()),
+            None => serde_json::Value::String(output.text().to_string()),
+        };
+        map.insert("output".to_string(), output_val);
+    }
+
+    val
+}
+
+fn check_json_path(val: &serde_json::Value, path: &[&str]) -> bool {
+    if path.is_empty() {
+        return true;
+    }
+    match val {
+        serde_json::Value::Object(map) => {
+            if let Some(next) = map.get(path[0]) {
+                check_json_path(next, &path[1..])
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
 }

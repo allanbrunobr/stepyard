@@ -23,7 +23,7 @@ use crate::steps::*;
 use crate::steps::{
     agent::AgentExecutor, cmd::CmdExecutor, gate::GateExecutor, repeat::RepeatExecutor,
 };
-use crate::workflow::schema::{StepDef, StepType, WorkflowDef};
+use crate::workflow::schema::{OutputType, StepDef, StepType, WorkflowDef};
 use context::Context;
 use state::WorkflowState;
 
@@ -456,6 +456,13 @@ impl Engine {
 
         let elapsed = start.elapsed();
 
+        // ── Output Parsing Section ────────────────────────────────────────────
+        // Parse step output according to output_type (if declared)
+        let result = match result {
+            Ok(output) => parse_step_output(output, step_def),
+            err => err,
+        };
+
         match &result {
             Ok(output) => {
                 tracing::info!(
@@ -467,6 +474,10 @@ impl Engine {
                     "Step completed"
                 );
                 self.context.store(&step_def.name, output.clone());
+                // Store parsed value separately if present
+                if let Some(parsed) = extract_parsed_value(output, step_def) {
+                    self.context.store_parsed(&step_def.name, parsed);
+                }
 
                 let (it, ot, cost) = token_stats(output);
                 self.step_records.push(StepRecord {
@@ -682,6 +693,80 @@ fn token_stats(output: &StepOutput) -> (Option<u64>, Option<u64>, Option<f64>) {
         StepOutput::Chat(o) => (Some(o.input_tokens), Some(o.output_tokens), None),
         _ => (None, None, None),
     }
+}
+
+/// Parse the raw step output according to the step's declared output_type.
+/// Returns the output unchanged if no output_type is declared or it is Text.
+fn parse_step_output(output: StepOutput, step_def: &StepDef) -> Result<StepOutput, StepError> {
+    let output_type = match &step_def.output_type {
+        Some(t) => t,
+        None => return Ok(output),
+    };
+
+    if *output_type == OutputType::Text {
+        return Ok(output);
+    }
+
+    let text = output.text().trim().to_string();
+
+    match output_type {
+        OutputType::Integer => {
+            text.parse::<i64>()
+                .map_err(|_| StepError::Fail(format!("Failed to parse '{}' as integer", text)))?;
+        }
+        OutputType::Json => {
+            serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|e| StepError::Fail(format!("Failed to parse output as JSON: {e}")))?;
+        }
+        OutputType::Boolean => {
+            match text.to_lowercase().as_str() {
+                "true" | "1" | "yes" | "false" | "0" | "no" => {}
+                _ => {
+                    return Err(StepError::Fail(format!(
+                        "Failed to parse '{}' as boolean",
+                        text
+                    )));
+                }
+            }
+        }
+        OutputType::Lines | OutputType::Text => {}
+    }
+
+    Ok(output)
+}
+
+/// Extract a ParsedValue from the step output based on output_type.
+/// Returns None if no output_type or it is Text.
+fn extract_parsed_value(output: &StepOutput, step_def: &StepDef) -> Option<ParsedValue> {
+    let output_type = step_def.output_type.as_ref()?;
+
+    let text = output.text().trim().to_string();
+
+    let parsed = match output_type {
+        OutputType::Text => ParsedValue::Text(text),
+        OutputType::Integer => ParsedValue::Integer(text.parse::<i64>().ok()?),
+        OutputType::Json => {
+            let val = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+            ParsedValue::Json(val)
+        }
+        OutputType::Lines => {
+            let lines: Vec<String> = text
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| l.to_string())
+                .collect();
+            ParsedValue::Lines(lines)
+        }
+        OutputType::Boolean => {
+            let b = match text.to_lowercase().as_str() {
+                "true" | "1" | "yes" => true,
+                _ => false,
+            };
+            ParsedValue::Boolean(b)
+        }
+    };
+
+    Some(parsed)
 }
 
 /// Truncate a string to at most `max` chars, appending "…" if cut
