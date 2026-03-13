@@ -15,6 +15,45 @@ use super::{
     call::dispatch_scope_step, CmdOutput, IterationOutput, ScopeOutput, StepExecutor, StepOutput,
 };
 
+/// Apply a collect transformation to ScopeOutput (Story 7.1)
+fn apply_collect(scope: ScopeOutput, mode: &str) -> Result<StepOutput, crate::error::StepError> {
+    match mode {
+        "text" => {
+            let joined = scope
+                .iterations
+                .iter()
+                .map(|it| it.output.text().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: joined,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        "all" | "json" => {
+            let arr: Vec<serde_json::Value> = scope
+                .iterations
+                .iter()
+                .map(|it| serde_json::Value::String(it.output.text().to_string()))
+                .collect();
+            let json = serde_json::to_string(&arr)
+                .map_err(|e| crate::error::StepError::Fail(format!("collect serialize error: {e}")))?;
+            Ok(StepOutput::Cmd(CmdOutput {
+                stdout: json,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }))
+        }
+        other => Err(crate::error::StepError::Fail(format!(
+            "unknown collect mode '{}'; expected all, text, or json",
+            other
+        ))),
+    }
+}
+
 pub struct MapExecutor {
     scopes: HashMap<String, ScopeDef>,
 }
@@ -81,12 +120,19 @@ impl StepExecutor for MapExecutor {
 
         let parallel_count = step.parallel.unwrap_or(0);
 
-        if parallel_count == 0 {
+        let scope_output = if parallel_count == 0 {
             // Serial execution
-            serial_execute(items, &scope, ctx, &self.scopes).await
+            serial_execute(items, &scope, ctx, &self.scopes).await?
         } else {
             // Parallel execution with semaphore
-            parallel_execute(items, &scope, ctx, &self.scopes, parallel_count).await
+            parallel_execute(items, &scope, ctx, &self.scopes, parallel_count).await?
+        };
+
+        // Story 7.1: Apply collect transformation if configured
+        let collect_mode = _config.get_str("collect").map(|s| s.to_string());
+        match (scope_output, collect_mode) {
+            (StepOutput::Scope(s), Some(mode)) => apply_collect(s, &mode),
+            (output, _) => Ok(output),
         }
     }
 }
@@ -341,6 +387,107 @@ mod tests {
         } else {
             panic!("Expected Scope output");
         }
+    }
+
+    fn map_step_with_config(
+        name: &str,
+        items: &str,
+        scope: &str,
+        config_values: HashMap<String, serde_yaml::Value>,
+    ) -> StepDef {
+        StepDef {
+            name: name.to_string(),
+            step_type: StepType::Map,
+            run: None,
+            prompt: None,
+            condition: None,
+            on_pass: None,
+            on_fail: None,
+            message: None,
+            scope: Some(scope.to_string()),
+            max_iterations: None,
+            initial_value: None,
+            items: Some(items.to_string()),
+            parallel: None,
+            steps: None,
+            config: config_values,
+            outputs: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn map_collect_text_joins_with_newlines() {
+        let mut scopes = HashMap::new();
+        scopes.insert("echo_scope".to_string(), echo_scope());
+
+        let mut cfg = HashMap::new();
+        cfg.insert(
+            "collect".to_string(),
+            serde_yaml::Value::String("text".to_string()),
+        );
+        let step = map_step_with_config("map_collect_text", "alpha\nbeta\ngamma", "echo_scope", cfg);
+        let executor = MapExecutor::new(&scopes);
+
+        // Build StepConfig with collect=text
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "collect".to_string(),
+            serde_json::Value::String("text".to_string()),
+        );
+        let config = crate::config::StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        // Should be a Cmd output with newline-joined text
+        assert!(matches!(result, StepOutput::Cmd(_)));
+        let text = result.text();
+        assert!(text.contains("alpha"), "Missing alpha in: {}", text);
+        assert!(text.contains("beta"), "Missing beta in: {}", text);
+        assert!(text.contains("gamma"), "Missing gamma in: {}", text);
+    }
+
+    #[tokio::test]
+    async fn map_collect_all_produces_json_array() {
+        let mut scopes = HashMap::new();
+        scopes.insert("echo_scope".to_string(), echo_scope());
+
+        let step = map_step_with_config(
+            "map_collect_all",
+            "x\ny\nz",
+            "echo_scope",
+            HashMap::new(),
+        );
+        let executor = MapExecutor::new(&scopes);
+
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "collect".to_string(),
+            serde_json::Value::String("all".to_string()),
+        );
+        let config = crate::config::StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        assert!(matches!(result, StepOutput::Cmd(_)));
+        let text = result.text();
+        // Should be a valid JSON array
+        let arr: Vec<serde_json::Value> = serde_json::from_str(text).expect("Expected JSON array");
+        assert_eq!(arr.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn map_no_collect_returns_scope_output() {
+        let mut scopes = HashMap::new();
+        scopes.insert("echo_scope".to_string(), echo_scope());
+
+        let step = map_step("map_no_collect", "a\nb", "echo_scope", None);
+        let executor = MapExecutor::new(&scopes);
+        let config = StepConfig::default();
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        // Without collect, should still be a Scope output
+        assert!(matches!(result, StepOutput::Scope(_)));
     }
 
     #[tokio::test]
