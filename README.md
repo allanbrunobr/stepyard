@@ -33,7 +33,8 @@ Minion Engine executes multi-step workflows that combine shell commands, Claude 
 
 - Rust 1.75+ (`rustup` recommended)
 - `claude` CLI installed and authenticated (for agent steps)
-- `gh` CLI installed (for GitHub workflows)
+- `gh` CLI authenticated (`gh auth login`) — `GH_TOKEN` is **auto-detected**, no need to export it manually
+- `ANTHROPIC_API_KEY` environment variable set (for `chat` and `map` steps)
 - Docker Desktop 4.40+ (sandbox is ON by default — required unless you use `--no-sandbox`)
 
 ## Build
@@ -60,28 +61,32 @@ cd minion-engine
 cargo install --path .
 ```
 
-<!-- TODO: Pre-compiled binaries and Homebrew will be available after CI/CD is set up -->
-
 ## Quick Start
 
 ```bash
-# Create a new workflow from a template
-minion init my-workflow --template fix-issue
+# 1. Install
+cargo install minion-engine
 
-# Run it (sandbox is ON by default — your project stays safe)
-minion execute my-workflow.yaml --verbose -- 247
+# 2. Set your Anthropic API key (once)
+export ANTHROPIC_API_KEY="sk-ant-..."
 
-# Run without sandbox (directly on your machine)
-minion execute my-workflow.yaml --no-sandbox --verbose -- 247
+# 3. Authenticate with GitHub (once) — GH_TOKEN is auto-detected
+gh auth login
 
-# List available workflows
-minion list
+# 4. Run a code review on PR #42 (sandbox is ON by default)
+minion execute workflows/code-review.yaml --sandbox -- 42
+```
 
-# Inspect a workflow (config, scopes, dependency graph)
-minion inspect my-workflow.yaml
+That's it. No manual `GH_TOKEN` export, no shell tricks — credentials are auto-detected.
 
-# Validate without running
-minion validate my-workflow.yaml
+```bash
+# More examples
+minion init my-workflow --template fix-issue     # Create from template
+minion execute my-workflow.yaml --verbose -- 247  # Run with verbose output
+minion execute my-workflow.yaml --no-sandbox -- 1 # Run without Docker sandbox
+minion list                                       # List available workflows
+minion inspect my-workflow.yaml                   # Show dependency graph
+minion validate my-workflow.yaml                  # Validate without running
 ```
 
 ## Usage
@@ -269,7 +274,11 @@ Three sandbox modes:
 | **AgentOnly** | `config.agent.sandbox: true` | Only AI agent steps |
 | **Devbox** | `config.sandbox.mode: devbox` | Persistent dev container |
 
-Credentials (`ANTHROPIC_API_KEY`, `GH_TOKEN`, `~/.config/gh`, `~/.ssh`) are auto-forwarded. See [docs/DOCKER-SANDBOX.md](docs/DOCKER-SANDBOX.md) for full configuration.
+**Credential auto-detection:** `ANTHROPIC_API_KEY` is forwarded from your environment. `GH_TOKEN` is **automatically detected** from `gh auth token` if not explicitly set — no need to export it. Credential directories (`~/.config/gh`, `~/.ssh`) are mounted read-only into the container.
+
+**Pre-flight validation:** Before starting any workflow, `minion` checks that all required tools and credentials are available and gives clear, actionable error messages if anything is missing.
+
+See [docs/DOCKER-SANDBOX.md](docs/DOCKER-SANDBOX.md) for full configuration.
 
 ## Running Tests
 
