@@ -41,6 +41,12 @@ impl AgentExecutor {
             args.extend(["--resume".into(), session_id]);
         }
 
+        // Session fork (Story 2.2) — uses same --resume flag; Claude CLI creates new session
+        if let Some(fork_step) = config.get_str("fork_session") {
+            let session_id = lookup_session_id(ctx, fork_step)?;
+            args.extend(["--resume".into(), session_id]);
+        }
+
         Ok(args)
     }
 
@@ -357,6 +363,53 @@ mod tests {
         let args = AgentExecutor::build_args(&config, &ctx).unwrap();
         let resume_idx = args.iter().position(|a| a == "--resume").expect("--resume not found");
         assert_eq!(args[resume_idx + 1], "sess-123");
+    }
+
+    #[tokio::test]
+    async fn fork_session_missing_step_returns_error() {
+        let step = agent_step("test prompt");
+        let mut values = HashMap::new();
+        values.insert(
+            "fork_session".to_string(),
+            serde_json::Value::String("nonexistent".to_string()),
+        );
+        let config = StepConfig { values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = AgentExecutor.execute(&step, &config, &ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("session not found for step 'nonexistent'"),
+            "Unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn build_args_fork_session_adds_resume_flag() {
+        use crate::steps::{AgentOutput, AgentStats, StepOutput};
+
+        let mut ctx = Context::new(String::new(), HashMap::new());
+        ctx.store(
+            "analyze",
+            StepOutput::Agent(AgentOutput {
+                response: "result".to_string(),
+                session_id: Some("sess-fork-456".to_string()),
+                stats: AgentStats::default(),
+            }),
+        );
+
+        let mut values = HashMap::new();
+        values.insert(
+            "fork_session".to_string(),
+            serde_json::Value::String("analyze".to_string()),
+        );
+        let config = StepConfig { values };
+
+        let args = AgentExecutor::build_args(&config, &ctx).unwrap();
+        let resume_idx = args.iter().position(|a| a == "--resume").expect("--resume not found");
+        assert_eq!(args[resume_idx + 1], "sess-fork-456");
     }
 
     #[tokio::test]
