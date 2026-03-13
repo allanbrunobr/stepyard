@@ -123,6 +123,7 @@ mod tests {
             config: HashMap::new(),
             outputs: None,
             output_type: None,
+            async_exec: None,
         }
     }
 

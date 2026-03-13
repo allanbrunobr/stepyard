@@ -376,6 +376,7 @@ mod tests {
             config: HashMap::new(),
             outputs: None,
             output_type: None,
+            async_exec: None,
         }
     }
 
@@ -400,6 +401,7 @@ mod tests {
             config: HashMap::new(),
             outputs: None,
             output_type: None,
+            async_exec: None,
         };
         // Override the api_key_env to a definitely-unset var
         let mut config_values = HashMap::new();
@@ -439,6 +441,7 @@ mod tests {
             config: HashMap::new(),
             outputs: None,
             output_type: None,
+            async_exec: None,
         };
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());

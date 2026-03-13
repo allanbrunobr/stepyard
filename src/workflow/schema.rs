@@ -93,6 +93,10 @@ pub struct StepDef {
 
     // output parsing
     pub output_type: Option<OutputType>,
+
+    // async execution flag (named async_exec to avoid Rust keyword conflict)
+    #[serde(default)]
+    pub async_exec: Option<bool>,
 }
 
 /// All supported step types in a workflow.
@@ -119,6 +123,8 @@ pub enum StepType {
     Call,
     /// Render a prompt template file and store the result.
     Template,
+    /// Evaluate an inline Rhai script and store the return value.
+    Script,
 }
 
 impl std::fmt::Display for StepType {
@@ -133,6 +139,7 @@ impl std::fmt::Display for StepType {
             StepType::Parallel => write!(f, "parallel"),
             StepType::Call => write!(f, "call"),
             StepType::Template => write!(f, "template"),
+            StepType::Script => write!(f, "script"),
         }
     }
 }

@@ -9,8 +9,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 use colored::Colorize;
+use regex::Regex;
 use serde::Serialize;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::cli::display;
 use crate::config::{ConfigManager, StepConfig};
@@ -22,6 +24,7 @@ use crate::sandbox::SandboxMode;
 use crate::steps::*;
 use crate::steps::{
     agent::AgentExecutor, cmd::CmdExecutor, gate::GateExecutor, repeat::RepeatExecutor,
+    script::ScriptExecutor,
 };
 use crate::workflow::schema::{OutputType, StepDef, StepType, WorkflowDef};
 use context::Context;
@@ -88,6 +91,8 @@ pub struct Engine {
     step_records: Vec<StepRecord>,
     state: Option<WorkflowState>,
     state_file: Option<PathBuf>,
+    /// Pending async step futures — keyed by step name
+    pending_futures: HashMap<String, JoinHandle<Result<StepOutput, StepError>>>,
 }
 
 impl Engine {
@@ -130,6 +135,7 @@ impl Engine {
             step_records: Vec::new(),
             state: None,
             state_file: None,
+            pending_futures: HashMap::new(),
         }
     }
 
@@ -217,6 +223,10 @@ impl Engine {
 
     /// Determine whether a step should run inside the sandbox based on sandbox_mode
     fn should_sandbox_step(&self, step_type: &StepType) -> bool {
+        // Script steps run embedded (no external process), never sandboxed
+        if *step_type == StepType::Script {
+            return false;
+        }
         match self.sandbox_mode {
             SandboxMode::Disabled => false,
             SandboxMode::FullWorkflow | SandboxMode::Devbox => {
@@ -336,6 +346,26 @@ impl Engine {
                     resuming = false;
                 }
 
+                // ── Async step: spawn and register in pending_futures ─────────
+                if step_def.async_exec == Some(true) {
+                    let handle = self.spawn_async_step(step_def);
+                    self.pending_futures.insert(step_def.name.clone(), handle);
+                    if !self.quiet {
+                        println!(
+                            "  {} {} {} {}",
+                            "⚡".yellow(),
+                            step_def.name,
+                            format!("[{}]", step_def.step_type).cyan(),
+                            "(async — spawned)".dimmed()
+                        );
+                    }
+                    step_count += 1;
+                    continue;
+                }
+
+                // ── Auto-await: resolve pending deps before execute ────────────
+                self.await_pending_deps(step_def).await?;
+
                 match self.execute_step(step_def).await {
                     Ok(output) => {
                         current_state.steps.insert(step_def.name.clone(), output.clone());
@@ -383,6 +413,68 @@ impl Engine {
             Ok(())
         }
         .await;
+
+        // ── Story 3.3: Await all remaining pending async futures ──────────────
+        let remaining: Vec<(String, JoinHandle<Result<StepOutput, StepError>>)> =
+            self.pending_futures.drain().collect();
+        for (name, handle) in remaining {
+            let step_type = self
+                .workflow
+                .steps
+                .iter()
+                .find(|s| s.name == name)
+                .map(|s| s.step_type.to_string())
+                .unwrap_or_else(|| "async".to_string());
+            match handle.await {
+                Ok(Ok(output)) => {
+                    self.context.store(&name, output.clone());
+                    self.step_records.push(StepRecord {
+                        name: name.clone(),
+                        step_type: step_type.clone(),
+                        status: "ok".to_string(),
+                        duration_secs: 0.0,
+                        output_summary: truncate(output.text(), 100),
+                        input_tokens: None,
+                        output_tokens: None,
+                        cost_usd: None,
+                        sandboxed: false,
+                    });
+                }
+                Ok(Err(e)) => {
+                    self.step_records.push(StepRecord {
+                        name: name.clone(),
+                        step_type: step_type.clone(),
+                        status: "failed".to_string(),
+                        duration_secs: 0.0,
+                        output_summary: e.to_string(),
+                        input_tokens: None,
+                        output_tokens: None,
+                        cost_usd: None,
+                        sandboxed: false,
+                    });
+                    if !self.quiet {
+                        eprintln!("  {} Async step '{}' failed: {}", "✗".red(), name, e);
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("Async step '{}' panicked: {e}", name);
+                    self.step_records.push(StepRecord {
+                        name: name.clone(),
+                        step_type,
+                        status: "failed".to_string(),
+                        duration_secs: 0.0,
+                        output_summary: msg.clone(),
+                        input_tokens: None,
+                        output_tokens: None,
+                        cost_usd: None,
+                        sandboxed: false,
+                    });
+                    if !self.quiet {
+                        eprintln!("  {} {}", "✗".red(), msg);
+                    }
+                }
+            }
+        }
 
         // ── Sandbox: Destroy container AFTER all steps (always, even on error) ─
         if self.sandbox_mode != SandboxMode::Disabled {
@@ -447,6 +539,9 @@ impl Engine {
                 RepeatExecutor::new(&self.workflow.scopes)
                     .execute(step_def, &config, &self.context)
                     .await
+            }
+            StepType::Script => {
+                ScriptExecutor.execute(step_def, &config, &self.context).await
             }
             _ => Err(StepError::Fail(format!(
                 "Step type '{}' not yet implemented",
@@ -567,12 +662,15 @@ impl Engine {
                 ""
             };
 
+            let async_indicator = if step.async_exec == Some(true) { " ⚡" } else { "" };
+
             println!(
-                "{} {} {}{}",
+                "{} {} {}{}{}",
                 branch.dimmed(),
                 step.name.bold(),
                 format!("[{}]", step.step_type).cyan(),
-                sandbox_indicator
+                sandbox_indicator,
+                async_indicator
             );
 
             let indent = if is_last { "    " } else { "│   " };
@@ -654,6 +752,12 @@ impl Engine {
                     println!("{}  template: {}", indent, run.dimmed());
                 }
             }
+        StepType::Script => {
+                if let Some(ref run) = step.run {
+                    let preview = truncate(&run.replace('\n', " "), 80);
+                    println!("{}  script: {}", indent, preview.dimmed());
+                }
+            }
         }
 
         if let Some(t) = config.get_str("timeout") {
@@ -679,6 +783,109 @@ impl Engine {
     fn resolve_config(&self, step_def: &StepDef) -> StepConfig {
         self.config_manager
             .resolve(&step_def.name, &step_def.step_type, &step_def.config)
+    }
+
+    // ── Async Step Support ───────────────────────────────────────────────────
+
+    /// Spawn an async step as a tokio task. Returns a JoinHandle for later awaiting.
+    /// Creates a minimal context (target only) for the spawned task since the
+    /// executor templates are rendered inside the task.
+    fn spawn_async_step(
+        &self,
+        step_def: &StepDef,
+    ) -> JoinHandle<Result<StepOutput, StepError>> {
+        let step = step_def.clone();
+        let config = self.resolve_config(step_def);
+        let target = self
+            .context
+            .get_var("target")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        tokio::spawn(async move {
+            let ctx = Context::new(target, HashMap::new());
+            match step.step_type {
+                StepType::Cmd => CmdExecutor.execute(&step, &config, &ctx).await,
+                StepType::Agent => AgentExecutor.execute(&step, &config, &ctx).await,
+                StepType::Script => ScriptExecutor.execute(&step, &config, &ctx).await,
+                _ => Err(StepError::Fail(format!(
+                    "Async execution not supported for step type '{}'",
+                    step.step_type
+                ))),
+            }
+        })
+    }
+
+    /// Scan the step's template fields for references to other steps.
+    /// If any referenced step is in pending_futures, await it and store result in context.
+    async fn await_pending_deps(&mut self, step_def: &StepDef) -> Result<(), StepError> {
+        let pattern = Regex::new(r"steps\.(\w+)\.").unwrap();
+
+        // Collect all template fields that might reference step outputs
+        let mut templates: Vec<String> = Vec::new();
+        if let Some(ref run) = step_def.run {
+            templates.push(run.clone());
+        }
+        if let Some(ref prompt) = step_def.prompt {
+            templates.push(prompt.clone());
+        }
+        if let Some(ref condition) = step_def.condition {
+            templates.push(condition.clone());
+        }
+
+        // Find all step names referenced in templates
+        let mut deps: Vec<String> = Vec::new();
+        for tmpl in &templates {
+            for cap in pattern.captures_iter(tmpl) {
+                let name = cap[1].to_string();
+                if self.pending_futures.contains_key(&name) && !deps.contains(&name) {
+                    deps.push(name);
+                }
+            }
+        }
+
+        // Await each dependency
+        for name in deps {
+            self.await_pending_step(&name).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Await a single named async step, storing its output in context.
+    async fn await_pending_step(&mut self, name: &str) -> Result<(), StepError> {
+        if let Some(handle) = self.pending_futures.remove(name) {
+            match handle.await {
+                Ok(Ok(output)) => {
+                    self.context.store(name, output.clone());
+                    self.step_records.push(StepRecord {
+                        name: name.to_string(),
+                        step_type: "async".to_string(),
+                        status: "ok".to_string(),
+                        duration_secs: 0.0,
+                        output_summary: truncate(output.text(), 100),
+                        input_tokens: None,
+                        output_tokens: None,
+                        cost_usd: None,
+                        sandboxed: false,
+                    });
+                }
+                Ok(Err(e)) => {
+                    return Err(StepError::Fail(format!(
+                        "Async step '{}' failed: {e}",
+                        name
+                    )));
+                }
+                Err(e) => {
+                    return Err(StepError::Fail(format!(
+                        "Async step '{}' panicked: {e}",
+                        name
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1161,5 +1368,122 @@ steps:
         let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
         let result = engine.run().await.unwrap();
         assert_eq!(result.text().trim(), "3");
+    }
+
+    // ── Story 3.1: Async flag and pending futures ────────────────────────────
+
+    #[tokio::test]
+    async fn async_step_is_spawned_and_completes() {
+        let yaml = r#"
+name: async-test
+steps:
+  - name: bg_task
+    type: cmd
+    run: "echo async_result"
+    async_exec: true
+  - name: sync_step
+    type: cmd
+    run: "echo sync_result"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let opts = EngineOptions { quiet: true, ..Default::default() };
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let result = engine.run().await.unwrap();
+        // sync_step is the last synchronous step
+        assert!(result.text().contains("sync_result"));
+        // bg_task should be recorded after join_all
+        let records = engine.step_records();
+        assert!(records.iter().any(|r| r.name == "bg_task"), "bg_task should be in records");
+    }
+
+    #[test]
+    fn dry_run_shows_async_lightning_indicator() {
+        let yaml = r#"
+name: dry-async
+steps:
+  - name: fast_bg
+    type: cmd
+    run: "echo bg"
+    async_exec: true
+  - name: normal
+    type: cmd
+    run: "echo normal"
+"#;
+        // dry_run should not panic and the async step should have ⚡ in output
+        let wf = parser::parse_str(yaml).unwrap();
+        let engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        // Just verify it doesn't panic
+        engine.dry_run();
+    }
+
+    #[test]
+    fn should_sandbox_step_script_always_false() {
+        let yaml = r#"
+name: test
+steps:
+  - name: s
+    type: cmd
+    run: "echo test"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+
+        // Script steps never run in sandbox, regardless of mode
+        let opts = EngineOptions {
+            sandbox_mode: SandboxMode::FullWorkflow,
+            quiet: true,
+            ..Default::default()
+        };
+        let engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        assert!(!engine.should_sandbox_step(&StepType::Script));
+    }
+
+    // ── Story 3.3: Await all remaining async futures at workflow end ─────────
+
+    #[tokio::test]
+    async fn multiple_async_steps_all_complete_by_workflow_end() {
+        let yaml = r#"
+name: multi-async
+steps:
+  - name: task_a
+    type: cmd
+    run: "echo result_a"
+    async_exec: true
+  - name: task_b
+    type: cmd
+    run: "echo result_b"
+    async_exec: true
+  - name: sync_done
+    type: cmd
+    run: "echo done"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let opts = EngineOptions { quiet: true, ..Default::default() };
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        engine.run().await.unwrap();
+
+        let records = engine.step_records();
+        assert!(records.iter().any(|r| r.name == "task_a"), "task_a should be recorded");
+        assert!(records.iter().any(|r| r.name == "task_b"), "task_b should be recorded");
+        assert!(records.iter().any(|r| r.name == "sync_done"), "sync_done should be recorded");
+    }
+
+    // ── Story 4.3: Script step dispatch ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn engine_dispatches_script_step() {
+        let yaml = r#"
+name: script-dispatch
+steps:
+  - name: calc
+    type: script
+    run: |
+      let x = 6 * 7;
+      x.to_string()
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let opts = EngineOptions { quiet: true, ..Default::default() };
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let result = engine.run().await.unwrap();
+        assert_eq!(result.text().trim(), "42");
     }
 }

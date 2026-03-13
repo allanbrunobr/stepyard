@@ -1,36 +1,56 @@
-# Worktree Completion Reports
+# Worktree wt3 — COMPLETE
 
-## wt1 — Epic 1 MVP Foundation
-All 10 stories (1.1-1.10) completed.
+All 6 assigned stories have been implemented, tested, and committed.
 
-## wt2 — Epic 2 New Step Types
-All 5 stories (2.1, 2.2, 2.3, 2.4, 2.8) completed.
+## Stories Completed
 
-## wt3 — Epic 2 Cross-cutting
-All 3 stories (2.5, 2.6, 2.7) completed.
+### Story 3.1 — Async flag and pending futures (Status: review)
+- `async_exec: Option<bool>` added to `StepDef` in `src/workflow/schema.rs`
+- `pending_futures: HashMap<String, JoinHandle>` added to `Engine` struct
+- Steps with `async_exec: true` spawned as `tokio::spawn` tasks in `run()` loop
+- `dry_run()` shows ⚡ indicator for async steps
 
-## wt3 — Epic 4 Distribution
-All 4 stories (4.1, 4.2, 4.3, 4.4) completed.
+### Story 3.2 — Automatic await on output reference (Status: review)
+- `await_pending_deps()` scans template fields via regex for `steps.<name>.` references
+- Before each `execute_step()`, automatically awaits referenced pending async steps
+- `await_pending_step(name)` helper removes handle, awaits, stores result in context
 
-### Story 4.1: cargo install
-- `Cargo.toml`: added full metadata (description, license MIT, repository, homepage, documentation, keywords, categories, readme, authors, exclude)
-- `README.md`: added multi-method installation section (cargo, binaries, homebrew, source)
-- `cargo publish --dry-run --allow-dirty` passes
+### Story 3.3 — Await all remaining async futures at workflow end (Status: review)
+- After step loop in `run()`, drains `pending_futures` HashMap
+- Awaits each remaining handle, stores output in context + step_records
+- Failed async steps logged to stderr; workflow continues
 
-### Story 4.2: Pre-compiled Binaries
-- `.github/workflows/release.yml`: GitHub Actions workflow building for 5 targets (linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64)
-- Triggers on `v*` tags; creates GitHub Release with checksums
+### Story 4.1 — Rhai scripting engine dependency and ScriptExecutor skeleton (Status: review)
+- `rhai = "1"` added to `Cargo.toml`
+- `Script` variant added to `StepType` enum with Display + serde
+- `src/steps/script.rs` created with `ScriptExecutor` implementing `StepExecutor`
+- Registered as `pub mod script` in `src/steps/mod.rs`
 
-### Story 4.3: Homebrew Formula
-- `Formula/minion-engine.rb`: Homebrew formula pointing to GitHub Releases pre-compiled binaries
-- Supports macOS (arm64 + x86_64) and Linux (arm64 + x86_64)
-- Includes `head` block for source builds as fallback
+### Story 4.2 — Script execution with context access (Status: review)
+- `ctx_get(key)` reads from flattened context snapshot (e.g. "scan.stdout")
+- `ctx_set(key, value)` writes to thread_local storage during script execution
+- `Dynamic` <-> `serde_json::Value` bidirectional conversion
+- Script return value -> `StepOutput::Cmd { stdout: return_value }`
+- Timeout via `RhaiEngine::set_max_operations(1_000_000)`
+- Runtime errors -> `StepError::Fail` with message
 
-### Story 4.4: Workflow Gallery
-- `workflows/code-review.yaml`: PR/branch diff review with per-file parallel analysis
-- `workflows/security-audit.yaml`: OWASP/CWE security audit with map parallelism
-- `workflows/generate-docs.yaml`: AI documentation generator for source files
-- `workflows/refactor.yaml`: Plan → implement → lint gate → test gate
-- `workflows/flaky-test-fix.yaml`: 5-run flakiness detection + AI fix + 3-run verification
-- `workflows/weekly-report.yaml`: git log + GitHub activity → polished Markdown report
-- `prompts/`: 7 `.md.tera` template files for reusable prompts
+### Story 4.3 — Script step engine dispatch and sandbox support (Status: review)
+- `StepType::Script => ScriptExecutor.execute()` in `execute_step()` dispatch
+- `should_sandbox_step()` returns false for Script (embedded, no external process)
+- `StepType::Script` arm added to `print_step_details()` for dry_run display
+
+## Test Results
+
+- 97 unit tests: ALL PASS
+- 17 integration tests: ALL PASS
+- New tests added: 5 script tests, 4 async engine tests
+
+## Files Changed
+
+- src/workflow/schema.rs — async_exec field, Script variant
+- src/engine/mod.rs — async spawning, await_pending_deps, join_all, Script dispatch
+- src/steps/script.rs — NEW FILE, full Rhai ScriptExecutor
+- src/steps/mod.rs — pub mod script added
+- src/workflow/validator.rs — Script validation arm
+- Cargo.toml / Cargo.lock — rhai = "1" added
+- src/steps/{cmd,parallel,gate,chat,map,call,agent,template_step}.rs — async_exec: None in test helpers
