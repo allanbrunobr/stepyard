@@ -86,6 +86,14 @@ impl Context {
         }
     }
 
+    /// Get the Tera-ready value for a step by name (used by from() preprocessing).
+    /// Returns None if the step doesn't exist in this context or any parent.
+    pub fn get_from_value(&self, name: &str) -> Option<serde_json::Value> {
+        let step = self.get_step(name)?;
+        let parsed = self.get_parsed(name);
+        Some(step_output_to_value_with_parsed(step, parsed))
+    }
+
     /// Check if a dotted path variable exists in this context (used for strict accessor)
     pub fn var_exists(&self, path: &str) -> bool {
         let parts: Vec<&str> = path.split('.').collect();
@@ -151,39 +159,21 @@ impl Context {
 
     /// Render a template string with this context
     pub fn render_template(&self, template: &str) -> Result<String, crate::error::StepError> {
-        // Pre-process template: handle ?, !, and from("name") syntax
-        let processed = crate::engine::template::preprocess_template(template, self)?;
+        // Pre-process template: handle ?, !, and from("name") → __from_name__ substitution
+        let pre = crate::engine::template::preprocess_template(template, self)?;
 
-        let tera_ctx = self.to_tera_context();
+        // Build base Tera context (steps, vars, scope)
+        let mut tera_ctx = self.to_tera_context();
 
-        // Collect all steps for the from() function
-        let mut all_steps: HashMap<String, serde_json::Value> = HashMap::new();
-        collect_steps_with_parsed(self, &mut all_steps);
+        // Inject from() lookup variables into the Tera context
+        for (k, v) in &pre.injected {
+            tera_ctx.insert(k.as_str(), v);
+        }
 
-        // Build Tera instance with custom from() function
+        // Build Tera instance and render
         let mut tera = tera::Tera::default();
-        tera.add_raw_template("__tmpl__", &processed)
+        tera.add_raw_template("__tmpl__", &pre.template)
             .map_err(|e| crate::error::StepError::Template(format!("{e}")))?;
-
-        let steps_for_fn = std::sync::Arc::new(all_steps);
-        tera.register_function("from", {
-            let steps = steps_for_fn.clone();
-            move |args: &HashMap<String, tera::Value>| -> tera::Result<tera::Value> {
-                let name_val = args.get("name").ok_or_else(|| {
-                    tera::Error::msg("from() requires a 'name' argument")
-                })?;
-                let step_name = match name_val {
-                    serde_json::Value::String(s) => s.clone(),
-                    _ => return Err(tera::Error::msg("from() name must be a string")),
-                };
-                steps.get(&step_name).cloned().ok_or_else(|| {
-                    tera::Error::msg(format!(
-                        "Step '{}' not found in any scope",
-                        step_name
-                    ))
-                })
-            }
-        });
 
         tera.render("__tmpl__", &tera_ctx)
             .map_err(|e| crate::error::StepError::Template(format!("{e}")))
@@ -307,6 +297,67 @@ mod tests {
         // Steps are also accessible directly by name (not just via steps.)
         let result = ctx.render_template("{{ greet.output }}").unwrap();
         assert_eq!(result, "hi");
+    }
+
+    #[test]
+    fn from_accesses_step_by_name() {
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("global-config", cmd_output("prod", 0));
+        // from("name") syntax allows accessing any step by name
+        let result = ctx
+            .render_template(r#"{{ from("global-config").output }}"#)
+            .unwrap();
+        assert_eq!(result, "prod");
+    }
+
+    #[test]
+    fn from_fails_for_nonexistent_step() {
+        let ctx = Context::new("".to_string(), HashMap::new());
+        let err = ctx
+            .render_template(r#"{{ from("nonexistent").output }}"#)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "expected 'not found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn from_with_json_dot_access() {
+        use crate::steps::ParsedValue;
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("scan", cmd_output(r#"{"issues": [1, 2]}"#, 0));
+        ctx.store_parsed(
+            "scan",
+            ParsedValue::Json(serde_json::json!({"issues": [1, 2]})),
+        );
+        // from() with JSON output allows deep dot-path access
+        let result = ctx
+            .render_template(r#"{{ from("scan").output.issues | length }}"#)
+            .unwrap();
+        assert_eq!(result, "2");
+    }
+
+    #[test]
+    fn from_traverses_parent_scope() {
+        let mut parent = Context::new("".to_string(), HashMap::new());
+        parent.store("root-step", cmd_output("root-value", 0));
+        let child = Context::child(Arc::new(parent), None, 0);
+        // from() inside child scope can access parent scope steps
+        let result = child
+            .render_template(r#"{{ from("root-step").output }}"#)
+            .unwrap();
+        assert_eq!(result, "root-value");
+    }
+
+    #[test]
+    fn from_safe_accessor_returns_empty_when_step_missing() {
+        let ctx = Context::new("".to_string(), HashMap::new());
+        // from("nonexistent").output? should return "" not fail
+        let result = ctx
+            .render_template(r#"{{ from("nonexistent").output? }}"#)
+            .unwrap();
+        assert_eq!(result, "");
     }
 }
 
