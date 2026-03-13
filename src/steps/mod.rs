@@ -6,6 +6,7 @@ pub mod gate;
 pub mod map;
 pub mod parallel;
 pub mod repeat;
+pub mod script;
 pub mod template_step;
 
 use std::sync::Arc;
