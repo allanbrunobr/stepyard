@@ -125,6 +125,11 @@ fn validate_step(
             }
         }
         StepType::Template => {}
+        StepType::Script => {
+            if step.run.as_ref().is_none_or(|r| r.trim().is_empty()) {
+                errors.push(format!("Step '{}': script step requires 'run' field", step.name));
+            }
+        }
     }
 }
 
