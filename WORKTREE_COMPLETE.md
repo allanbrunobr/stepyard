@@ -26,6 +26,38 @@ All 4 stories (4.1, 4.2, 4.3, 4.4) completed.
 - Supports macOS (arm64 + x86_64) and Linux (arm64 + x86_64)
 - Includes `head` block for source builds as fallback
 
+## wt4 — Epic 6 (Plugin System) & Epic 9 (Event Bus)
+All 6 stories (6.1, 6.2, 6.3, 9.1, 9.2, 9.3) completed.
+All 109 tests passing (92 unit + 17 integration).
+
+### Story 6.1: Plugin Trait Interface and Registry
+- `src/plugins/mod.rs`: `PluginStep` async trait + `PluginConfigSchema` struct
+- `src/plugins/registry.rs`: `PluginRegistry` with `register`, `get`, `len`, `is_empty`
+
+### Story 6.2: Dynamic Plugin Loading
+- `src/plugins/loader.rs`: `PluginLoader::load_plugin(path)` using `libloading`
+- `Cargo.toml`: added `libloading = "0.8"`
+- `src/workflow/schema.rs`: `PluginDef` struct + `plugins: Vec<PluginDef>` on `WorkflowConfig`
+- `src/engine/mod.rs`: `plugin_registry` field; plugin loading in `with_options`; step dispatch checks registry for unknown step types
+- `src/main.rs`: added `mod plugins;` and `mod events;`
+
+### Story 6.3: Plugin Configuration and Validation
+- `src/workflow/validator.rs`: added `validate_plugin_configs(steps, registry)` — checks required fields from each plugin's `config_schema()` against step configs
+
+### Story 9.1: Event Types and EventBus
+- `src/events/types.rs`: `Event` enum with 7 variants: `StepStarted`, `StepCompleted`, `StepFailed`, `WorkflowStarted`, `WorkflowCompleted`, `SandboxCreated`, `SandboxDestroyed`
+- `src/events/mod.rs`: `EventSubscriber` trait + `EventBus` using `tokio::sync::broadcast`
+- `Cargo.toml`: added `serde` feature to `chrono`
+- `src/lib.rs`: added `pub mod events;` and `pub mod plugins;`
+
+### Story 9.2: Event Emission in Engine Execution Loop
+- `src/engine/mod.rs`: added `event_bus: EventBus` field; `run()` emits `WorkflowStarted`/`WorkflowCompleted`; `execute_step()` emits `StepStarted`/`StepCompleted`/`StepFailed`
+
+### Story 9.3: Webhook and File Subscriber
+- `src/events/subscribers.rs`: `WebhookSubscriber` (fire-and-forget HTTP POST via tokio::spawn + reqwest) + `FileSubscriber` (append JSONL)
+- `src/workflow/schema.rs`: `EventsConfig` struct + `events: Option<EventsConfig>` on `WorkflowConfig`
+- `src/engine/mod.rs`: subscribers wired in `with_options` from `workflow.config.events`
+
 ### Story 4.4: Workflow Gallery
 - `workflows/code-review.yaml`: PR/branch diff review with per-file parallel analysis
 - `workflows/security-audit.yaml`: OWASP/CWE security audit with map parallelism
