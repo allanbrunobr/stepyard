@@ -1042,6 +1042,55 @@ steps:
     }
 
     #[tokio::test]
+    async fn safe_accessor_returns_empty_for_missing_step() {
+        let yaml = r#"
+name: test-safe-accessor
+steps:
+  - name: use_missing
+    type: cmd
+    run: "echo '{{ missing.output? }}'"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let result = engine.run().await.unwrap();
+        // safe accessor returns empty string when step doesn't exist
+        assert_eq!(result.text().trim(), "");
+    }
+
+    #[tokio::test]
+    async fn safe_accessor_returns_value_when_present() {
+        let yaml = r#"
+name: test-safe-accessor-present
+steps:
+  - name: produce
+    type: cmd
+    run: "echo hello"
+  - name: consume
+    type: cmd
+    run: "echo '{{ produce.output? }}'"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let result = engine.run().await.unwrap();
+        assert!(result.text().contains("hello"));
+    }
+
+    #[tokio::test]
+    async fn strict_accessor_fails_when_step_missing() {
+        let yaml = r#"
+name: test-strict-accessor-fail
+steps:
+  - name: use_missing
+    type: cmd
+    run: "echo '{{ nonexistent.output! }}'"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let err = engine.run().await.unwrap_err();
+        assert!(err.to_string().contains("strict access"), "{err}");
+    }
+
+    #[tokio::test]
     async fn output_type_integer_parses_number() {
         let yaml = r#"
 name: test-parse
