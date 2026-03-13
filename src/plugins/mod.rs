@@ -1,3 +1,4 @@
+pub mod loader;
 pub mod registry;
 
 use std::collections::HashMap;

@@ -32,6 +32,18 @@ pub struct WorkflowConfig {
     pub gate: HashMap<String, serde_yaml::Value>,
     #[serde(default)]
     pub patterns: HashMap<String, HashMap<String, serde_yaml::Value>>,
+    /// Dynamic plugin definitions to load at workflow startup
+    #[serde(default)]
+    pub plugins: Vec<PluginDef>,
+}
+
+/// Definition of a dynamic plugin to load from a shared library
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PluginDef {
+    /// Name used to reference this plugin as a step type in the workflow YAML
+    pub name: String,
+    /// Path to the shared library file (.so / .dylib)
+    pub path: String,
 }
 
 /// Named scope (sub-workflow)

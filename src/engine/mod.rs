@@ -16,6 +16,7 @@ use crate::cli::display;
 use crate::config::{ConfigManager, StepConfig};
 use crate::control_flow::ControlFlow;
 use crate::error::StepError;
+use crate::plugins::registry::PluginRegistry;
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::docker::DockerSandbox;
 use crate::sandbox::SandboxMode;
@@ -23,6 +24,7 @@ use crate::steps::*;
 use crate::steps::{
     agent::AgentExecutor, cmd::CmdExecutor, gate::GateExecutor, repeat::RepeatExecutor,
 };
+use crate::plugins::loader::PluginLoader;
 use crate::workflow::schema::{StepDef, StepType, WorkflowDef};
 use context::Context;
 use state::WorkflowState;
@@ -88,6 +90,8 @@ pub struct Engine {
     step_records: Vec<StepRecord>,
     state: Option<WorkflowState>,
     state_file: Option<PathBuf>,
+    /// Plugin registry for dynamically-loaded step types
+    plugin_registry: Arc<Mutex<PluginRegistry>>,
 }
 
 impl Engine {
@@ -116,6 +120,26 @@ impl Engine {
         let config_manager = ConfigManager::new(workflow.config.clone());
         // JSON mode implies quiet (no decorative output)
         let quiet = options.quiet || options.json;
+
+        // ── Load plugins from workflow config ─────────────────────────────────
+        let mut registry = PluginRegistry::new();
+        for plugin_cfg in &workflow.config.plugins {
+            match PluginLoader::load_plugin(&plugin_cfg.path) {
+                Ok(plugin) => {
+                    tracing::info!(name = %plugin_cfg.name, path = %plugin_cfg.path, "Loaded plugin");
+                    registry.register(plugin);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        name = %plugin_cfg.name,
+                        path = %plugin_cfg.path,
+                        error = %e,
+                        "Failed to load plugin"
+                    );
+                }
+            }
+        }
+
         Self {
             workflow,
             context,
@@ -130,6 +154,7 @@ impl Engine {
             step_records: Vec::new(),
             state: None,
             state_file: None,
+            plugin_registry: Arc::new(Mutex::new(registry)),
         }
     }
 
@@ -448,10 +473,20 @@ impl Engine {
                     .execute(step_def, &config, &self.context)
                     .await
             }
-            _ => Err(StepError::Fail(format!(
-                "Step type '{}' not yet implemented",
-                step_def.step_type
-            ))),
+            _ => {
+                // ── Plugin dispatch ──────────────────────────────────────────
+                // Check if a loaded plugin handles this step type name
+                let type_name = step_def.step_type.to_string();
+                let registry = self.plugin_registry.lock().await;
+                if let Some(plugin) = registry.get(&type_name) {
+                    plugin.execute(step_def, &config, &self.context).await
+                } else {
+                    Err(StepError::Fail(format!(
+                        "Step type '{}' not yet implemented",
+                        step_def.step_type
+                    )))
+                }
+            }
         };
 
         let elapsed = start.elapsed();
