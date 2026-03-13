@@ -654,6 +654,16 @@
   <a href="#cenario-flaky">Flaky Test Fix</a>
   <a href="#cenario-docs">Gerar Documentacao</a>
 
+  <div class="nav-group-title">Recursos Avancados</div>
+  <a href="#typed-outputs">Typed Outputs</a>
+  <a href="#session-continuity">Session Continuity</a>
+  <a href="#async-steps">Async Steps</a>
+  <a href="#script-step">Rhai Scripts</a>
+  <a href="#chat-sessions">Chat Sessions</a>
+  <a href="#template-power">Template Step &amp; Accessors</a>
+  <a href="#collect-reduce">collect/reduce</a>
+  <a href="#plugins-events">Plugins &amp; Events</a>
+
   <div class="nav-group-title">Pratico</div>
   <a href="#setup">Setup no seu projeto</a>
   <a href="#comparacao">Com vs Sem Sandbox</a>
@@ -680,7 +690,11 @@
         <span class="badge purple">Claude Code AI</span>
         <span class="badge green">Self-Healing</span>
         <span class="badge orange">YAML Declarativo</span>
-        <span class="badge yellow">Open Source</span>
+        <span class="badge yellow">10 Step Types</span>
+        <span class="badge">Async Steps</span>
+        <span class="badge">Rhai Scripts</span>
+        <span class="badge">Plugin System</span>
+        <span class="badge">Event Bus</span>
       </div>
     </div>
   </header>
@@ -797,18 +811,46 @@
   <span class="key">global:</span>
     <span class="key">sandbox:</span>
       <span class="key">enabled:</span> <span class="val">true</span>
-      <span class="key">image:</span> <span class="str">"node:20"</span>                           <span class="cmt"># imagem Docker base</span>
+      <span class="key">image:</span> <span class="str">"minion-sandbox:latest"</span>              <span class="cmt"># imagem com git,gh,node,cargo,claude</span>
+
+      <span class="cmt"># Credenciais: env vars do host forwardados ao container</span>
+      <span class="cmt"># Se omitido, auto-forward: ANTHROPIC_API_KEY, OPENAI_API_KEY, GH_TOKEN, GITHUB_TOKEN</span>
+      <span class="key">env:</span>
+        - <span class="str">ANTHROPIC_API_KEY</span>
+        - <span class="str">GH_TOKEN</span>
+        - <span class="str">NPM_TOKEN</span>
+
+      <span class="cmt"># Volumes montados read-only (credenciais do host)</span>
+      <span class="cmt"># Se omitido, auto-monta: ~/.config/gh, ~/.claude, ~/.ssh, ~/.gitconfig</span>
+      <span class="key">volumes:</span>
+        - <span class="str">"~/.config/gh:/root/.config/gh:ro"</span>
+        - <span class="str">"~/.claude:/root/.claude:ro"</span>
+        - <span class="str">"~/.ssh:/root/.ssh:ro"</span>
+        - <span class="str">"~/.gitconfig:/root/.gitconfig:ro"</span>
+
+      <span class="cmt"># Excluir do workspace copy (economiza tempo)</span>
+      <span class="key">exclude:</span>
+        - <span class="str">node_modules</span>
+        - <span class="str">target</span>
+        - <span class="str">.git/objects</span>
+
+      <span class="key">dns:</span> <span class="val">["8.8.8.8"]</span>                            <span class="cmt"># DNS confiavel</span>
+
       <span class="key">network:</span>
-        <span class="key">allow:</span> <span class="val">["api.anthropic.com", "registry.npmjs.org"]</span>  <span class="cmt"># whitelist</span>
+        <span class="key">allow:</span> <span class="val">["api.anthropic.com", "api.github.com"]</span>  <span class="cmt"># whitelist</span>
         <span class="key">deny:</span>  <span class="val">["0.0.0.0/0"]</span>                       <span class="cmt"># bloqueia tudo mais</span>
       <span class="key">resources:</span>
-        <span class="key">cpus:</span> <span class="val">2.0</span>                                <span class="cmt"># limite de CPU</span>
-        <span class="key">memory:</span> <span class="str">"4g"</span>                              <span class="cmt"># limite de memoria</span></pre>
+        <span class="key">cpus:</span> <span class="val">2.0</span>
+        <span class="key">memory:</span> <span class="str">"4g"</span></pre>
 
       <div class="tip docker">
-        <div class="tip-title">&#x1F433; Network allow/deny</div>
-        <p>O minion so pode acessar URLs na whitelist. Isso impede que o agent faca requests inesperados, instale pacotes maliciosos de registries nao-autorizados, ou exfiltre dados. Seguranca por default.</p>
+        <div class="tip-title">&#x1F433; Zero-Config Smart Defaults</div>
+        <p>Se voce nao especificar <code>env:</code> ou <code>volumes:</code>, o engine faz tudo automaticamente: forwarda <code>ANTHROPIC_API_KEY</code>, <code>GH_TOKEN</code>, monta <code>~/.config/gh</code>, <code>~/.claude</code>, <code>~/.ssh</code> e <code>~/.gitconfig</code> read-only. O <code>gh</code>, <code>claude</code>, <code>git push</code> e API calls funcionam out-of-the-box.</p>
       </div>
+
+      <h3>Build da Imagem de Referencia</h3>
+      <pre><span class="cmt"># Inclui: git, gh, jq, curl, node, npm, cargo, clippy, python3, claude CLI</span>
+<span class="cmd">docker build</span> -f Dockerfile.sandbox -t minion-sandbox:latest .</pre>
     </section>
 
     <!-- ═══════════════ 04 INSTALACAO ═══════════════ -->
@@ -828,7 +870,7 @@
           <h4 style="color:var(--green)">Binary (sem Rust)</h4>
           <p>Download direto do GitHub Releases.</p>
           <pre style="margin:12px 0 0"><span class="cmd">curl</span> <span class="flag">-L</span> <span class="str">https://github.com/
-brunoocasali/minion-engine/
+allanbrunobr/minion-engine/
 releases/latest/download/
 minion-macos-aarch64</span> \
   <span class="flag">-o</span> minion
@@ -837,7 +879,7 @@ minion-macos-aarch64</span> \
         <div class="card">
           <h4 style="color:var(--orange)">Homebrew</h4>
           <p>Para macOS e Linux.</p>
-          <pre style="margin:12px 0 0"><span class="cmd">brew tap</span> brunoocasali/minion
+          <pre style="margin:12px 0 0"><span class="cmd">brew tap</span> allanbrunobr/minion
 <span class="cmd">brew install</span> minion-engine
 <span class="cmd">minion</span> <span class="flag">--version</span></pre>
         </div>
@@ -1240,9 +1282,461 @@ minion-macos-aarch64</span> \
       </div>
     </section>
 
-    <!-- ═══════════════ 11 SETUP ═══════════════ -->
+    <!-- ═══════════════════════════════════════════════════
+         RECURSOS AVANCADOS — Features do Roast Sprint
+         ═══════════════════════════════════════════════════ -->
+
+    <!-- ═══════════════ 11 TYPED OUTPUTS ═══════════════ -->
+    <section id="typed-outputs">
+      <div class="section-label">11 &mdash; Recursos Avancados</div>
+      <h2>Typed Output Parsing</h2>
+      <p>Em vez de tratar tudo como string, declare <code>output_type</code> em qualquer step e o engine parseia automaticamente o resultado.</p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <span class="terminal-title">workflow.yaml &mdash; output_type em acao</span>
+        </div>
+        <div class="terminal-body"><span class="dim">steps:</span>
+  - name: get_metrics
+    type: cmd
+    run: "curl -s https://api.example.com/metrics"
+    <span class="cyan">output_type: json</span>    <span class="dim"># json | integer | lines | boolean | text</span>
+
+  - name: count_files
+    type: cmd
+    run: "find src -name '*.rs' | wc -l"
+    <span class="cyan">output_type: integer</span>
+
+  - name: check_coverage
+    type: cmd
+    run: "cargo tarpaulin --print-summary | grep 'coverage'"
+    <span class="cyan">output_type: lines</span>
+
+  - name: report
+    type: agent
+    prompt: |
+      <span class="dim"># Acesse campos tipados diretamente:</span>
+      Metricas: <span class="green">{{ get_metrics.output.cpu_usage }}</span>
+      Total de arquivos: <span class="green">{{ count_files.output }}</span>  <span class="dim"># ja e i64, nao string</span>
+      Linhas de coverage: <span class="green">{{ check_coverage.output[0] }}</span></div>
+      </div>
+
+      <div class="info-card" style="border-color:var(--cyan);">
+        <strong style="color:var(--cyan)">5 tipos suportados:</strong>
+        <code>json</code> &rarr; serde_json::Value com acesso por dot notation &bull;
+        <code>integer</code> &rarr; i64 &bull;
+        <code>lines</code> &rarr; Vec&lt;String&gt; com acesso por indice &bull;
+        <code>boolean</code> &rarr; true/false &bull;
+        <code>text</code> &rarr; String (default)
+      </div>
+    </section>
+
+    <!-- ═══════════════ 12 SESSION CONTINUITY ═══════════════ -->
+    <section id="session-continuity">
+      <div class="section-label">12 &mdash; Recursos Avancados</div>
+      <h2>Session Continuity &mdash; Resume &amp; Fork</h2>
+      <p>O Claude Code mantém sessões. Com <code>resume</code> e <code>fork_session</code>, agentes continuam de onde pararam ou bifurcam investigações paralelas.</p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <span class="terminal-title">session-workflow.yaml &mdash; resume + fork</span>
+        </div>
+        <div class="terminal-body"><span class="dim">steps:</span>
+  - name: planner
+    type: agent
+    prompt: "Analise o projeto e crie um plano de refactoring"
+
+  - name: implementer
+    type: agent
+    prompt: "Execute o plano"
+    config:
+      <span class="cyan">resume: planner</span>   <span class="dim"># continua a sessao do planner</span>
+
+  <span class="dim"># Fork: 2 agentes exploram abordagens diferentes</span>
+  - name: approach_a
+    type: agent
+    prompt: "Implemente usando Strategy pattern"
+    config:
+      <span class="purple">fork_session: planner</span>  <span class="dim"># mesma base, branch A</span>
+
+  - name: approach_b
+    type: agent
+    prompt: "Implemente usando State machine"
+    config:
+      <span class="purple">fork_session: planner</span>  <span class="dim"># mesma base, branch B</span>
+
+  <span class="dim"># Acesse session_id em templates:</span>
+  - name: compare
+    type: agent
+    prompt: |
+      Compare as sessoes:
+      A: <span class="green">{{ approach_a.session_id }}</span>
+      B: <span class="green">{{ approach_b.session_id }}</span></div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ 13 ASYNC STEPS ═══════════════ -->
+    <section id="async-steps">
+      <div class="section-label">13 &mdash; Recursos Avancados</div>
+      <h2>Async Steps &mdash; Background Execution</h2>
+      <p>Qualquer step pode rodar em background com <code>async_exec: true</code>. O engine faz await automaticamente quando voce referencia o output.</p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <span class="terminal-title">async-workflow.yaml &mdash; 3 tarefas em paralelo</span>
+        </div>
+        <div class="terminal-body"><span class="dim">steps:</span>
+  <span class="dim"># Dispara 3 steps simultaneamente:</span>
+  - name: lint
+    type: cmd
+    run: "cargo clippy 2>&1"
+    <span class="orange">async_exec: true</span>
+
+  - name: test
+    type: cmd
+    run: "cargo test 2>&1"
+    <span class="orange">async_exec: true</span>
+
+  - name: audit
+    type: cmd
+    run: "cargo audit 2>&1"
+    <span class="orange">async_exec: true</span>
+
+  <span class="dim"># Quando voce referencia o output, o engine faz await automatico:</span>
+  - name: report
+    type: agent
+    prompt: |
+      Resultados (auto-awaited):
+      Lint: <span class="green">{{ lint.output }}</span>     <span class="dim"># &larr; await lint aqui</span>
+      Test: <span class="green">{{ test.output }}</span>     <span class="dim"># &larr; await test aqui</span>
+      Audit: <span class="green">{{ audit.output }}</span>   <span class="dim"># &larr; await audit aqui</span>
+
+  <span class="dim"># No final do workflow, qualquer step async pendente</span>
+  <span class="dim"># e await'd automaticamente (nada se perde).</span></div>
+      </div>
+
+      <div class="info-card" style="border-color:var(--orange);">
+        <strong style="color:var(--orange)">Como funciona:</strong>
+        1. <code>async_exec: true</code> &rarr; <code>tokio::spawn</code> imediato &bull;
+        2. Output referenciado em template &rarr; auto-await transparente &bull;
+        3. Final do workflow &rarr; await-all de tudo que ficou pendente
+      </div>
+    </section>
+
+    <!-- ═══════════════ 14 SCRIPT STEP ═══════════════ -->
+    <section id="script-step">
+      <div class="section-label">14 &mdash; Recursos Avancados</div>
+      <h2>Script Step &mdash; Rhai Inline</h2>
+      <p>Transformacoes de dados sem spawnar processos externos. O step <code>script</code> usa <a href="https://rhai.rs" style="color:var(--accent)">Rhai</a>, uma linguagem de scripting nativa em Rust com sandbox de 1M operacoes.</p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <span class="terminal-title">script-workflow.yaml &mdash; transformacao inline</span>
+        </div>
+        <div class="terminal-body"><span class="dim">steps:</span>
+  - name: get_data
+    type: cmd
+    run: 'echo "alice,bob,charlie"'
+
+  - name: transform
+    <span class="purple">type: script</span>
+    run: |
+      <span class="dim">// Leia do contexto</span>
+      let raw = <span class="cyan">ctx_get</span>("get_data");
+      let names = raw.split(",");
+      let result = [];
+      for name in names {
+        result.push(name.to_upper());
+      }
+      <span class="dim">// Escreva de volta no contexto</span>
+      <span class="cyan">ctx_set</span>("uppercase_names", result);
+      <span class="dim">// O ultimo valor e o output do step</span>
+      result.len()
+
+  - name: use_result
+    type: agent
+    prompt: |
+      Transformou <span class="green">{{ transform.output }}</span> nomes.
+      <span class="dim"># ctx_set tambem injeta no contexto global</span></div>
+      </div>
+
+      <div class="info-card" style="border-color:var(--purple);">
+        <strong style="color:var(--purple)">API Rhai disponivel:</strong>
+        <code>ctx_get(key)</code> &rarr; le qualquer valor do contexto &bull;
+        <code>ctx_set(key, value)</code> &rarr; escreve no contexto &bull;
+        Limit de 1M operacoes &bull; Sem acesso a filesystem/rede (sandboxed por design)
+      </div>
+    </section>
+
+    <!-- ═══════════════ 15 CHAT SESSIONS ═══════════════ -->
+    <section id="chat-sessions">
+      <div class="section-label">15 &mdash; Recursos Avancados</div>
+      <h2>Chat Sessions &amp; Truncation</h2>
+      <p>Steps <code>chat</code> agora mantêm historico de conversa entre chamadas. Configure estrategias de truncation para nao estourar a context window.</p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <span class="terminal-title">chat-session.yaml &mdash; multi-turn com truncation</span>
+        </div>
+        <div class="terminal-body"><span class="dim">scopes:</span>
+  interview:
+    steps:
+      - name: ask
+        type: chat
+        prompt: "{{ scope_value }}"
+        config:
+          model: claude-sonnet-4-20250514
+          <span class="green">session: "main_chat"</span>          <span class="dim"># nome da sessao</span>
+          <span class="green">truncation_strategy: last</span>    <span class="dim"># manter ultimas N msgs</span>
+          <span class="green">truncation_count: 20</span>         <span class="dim"># N = 20</span>
+
+<span class="dim">steps:</span>
+  - name: q1
+    type: call
+    scope: interview
+    initial_value: "O que e o projeto?"
+
+  - name: q2
+    type: call
+    scope: interview
+    initial_value: "Quais sao os riscos?"
+    <span class="dim"># q2 tem acesso automatico ao historico de q1</span>
+
+  - name: q3
+    type: call
+    scope: interview
+    initial_value: "Resuma tudo."
+    <span class="dim"># q3 tem q1 + q2 no historico (truncado a 20 msgs)</span></div>
+      </div>
+
+      <div class="info-card" style="border-color:var(--green);">
+        <strong style="color:var(--green)">5 estrategias de truncation:</strong>
+        <code>none</code> &rarr; manter tudo &bull;
+        <code>last(N)</code> &rarr; ultimas N mensagens &bull;
+        <code>first(N)</code> &rarr; primeiras N &bull;
+        <code>first_last(F,L)</code> &rarr; primeiras F + ultimas L &bull;
+        <code>sliding_window(T)</code> &rarr; caber em T tokens
+      </div>
+    </section>
+
+    <!-- ═══════════════ 16 TEMPLATE POWER ═══════════════ -->
+    <section id="template-power">
+      <div class="section-label">16 &mdash; Recursos Avancados</div>
+      <h2>Templates: Step Type + Accessors (?, !, from)</h2>
+      <p>O <code>template</code> e um dos 10 step types do engine. Entenda <strong>por que ele existe</strong> e como os accessors <code>?</code>, <code>!</code>, <code>from()</code> funcionam.</p>
+
+      <h3>Por que <code>type: template</code> existe?</h3>
+      <div class="tip ok">
+        <div class="tip-title">O problema que template resolve</div>
+        <p>Quando um prompt de AI fica grande (50+ linhas com instrucoes, contexto de multiplos steps, condicionais), colocar tudo inline no YAML vira um pesadelo de manutencao. E quando voce quer <strong>reutilizar o mesmo prompt</strong> em workflows diferentes, tem que copiar e colar.</p>
+      </div>
+
+      <p>O step <code>template</code> resolve isso: ele renderiza um arquivo <code>.md.tera</code> externo com <strong>zero custo de API</strong> &mdash; roda 100% localmente. O resultado pode ser usado como input para um step <code>agent</code> ou <code>chat</code> posterior.</p>
+
+      <div class="grid-2">
+        <div class="card" style="border-color:var(--red);">
+          <h4 style="color:var(--red)">&#x274C; Sem template (prompt inline)</h4>
+          <pre style="font-size:11px;margin:8px 0 0;">- name: implement
+  type: agent
+  prompt: |
+    Implemente o plano abaixo.
+    ## Plano
+    {{ steps.plan.response }}
+    ## Regras do Projeto
+    {% if steps.rules is defined %}
+    {{ steps.rules.stdout }}
+    {% endif %}
+    ## Instrucoes
+    - Nao rode testes
+    - Nao crie arquivos extras
+    - Siga convencoes do projeto
+    ... <span class="dim">(50+ linhas de YAML)</span></pre>
+        </div>
+        <div class="card" style="border-color:var(--green);">
+          <h4 style="color:var(--green)">&#x2705; Com template (arquivo separado)</h4>
+          <pre style="font-size:11px;margin:8px 0 0;">- name: build_prompt
+  type: template  <span class="dim"># zero custo</span>
+  <span class="dim"># renderiza prompts/build_prompt.md.tera</span>
+
+- name: implement
+  type: agent
+  prompt: "{{ steps.build_prompt.response }}"</pre>
+          <p style="margin-top:8px;font-size:12px;color:var(--muted);">O arquivo <code>prompts/build_prompt.md.tera</code> contem as 50+ linhas com logica Tera, reutilizavel por qualquer workflow.</p>
+        </div>
+      </div>
+
+      <div class="info-card" style="border-color:var(--cyan);margin-top:16px;">
+        <strong style="color:var(--cyan)">Quando usar <code>type: template</code>?</strong><br>
+        &bull; Prompts complexos com 20+ linhas de instrucoes e condicionais Tera<br>
+        &bull; Mesmo prompt reutilizado em multiplos workflows (DRY)<br>
+        &bull; Gerar texto localmente (relatorios, configs, changelogs) sem chamar AI<br>
+        &bull; Compor um mega-prompt a partir de outputs de varios steps anteriores
+      </div>
+
+      <h3>Accessors: 3 modos de acesso a dados</h3>
+      <p>Dentro de qualquer template (inline ou arquivo <code>.md.tera</code>), voce tem tres modos de acessar variaveis:</p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <span class="terminal-title">template-patterns.yaml &mdash; 3 accessors + from()</span>
+        </div>
+        <div class="terminal-body"><span class="dim">steps:</span>
+  - name: maybe_skip
+    type: gate
+    condition: "{{ should_analyze }}"
+
+  - name: analyze
+    type: agent
+    prompt: "Analise os dados"
+
+  - name: report
+    type: agent
+    prompt: |
+      <span class="dim"># Normal: falha se nao existir</span>
+      Nome do projeto: <span class="green">{{ project_name }}</span>
+
+      <span class="dim"># Safe (?): retorna "" se step foi skipped</span>
+      Analise: <span class="cyan">{{ analyze.output<strong>?</strong> }}</span>
+
+      <span class="dim"># Strict (!): ERRO explicito se nao existir</span>
+      Config obrigatoria: <span class="red">{{ database_url<strong>!</strong> }}</span>
+
+      <span class="dim"># from(): acesse outputs de QUALQUER scope</span>
+      Dado de outro scope: <span class="purple">{{ from("global_setup").output }}</span>
+      Campo aninhado: <span class="purple">{{ from("api_call").output.data.id }}</span></div>
+      </div>
+
+      <div class="grid-3" style="margin-top:20px;">
+        <div class="card" style="border-color:var(--green);">
+          <h4 style="color:var(--green)">{{ x }} &mdash; Normal</h4>
+          <p>Erro se <code>x</code> nao existe. Use para dados obrigatorios.</p>
+        </div>
+        <div class="card" style="border-color:var(--cyan);">
+          <h4 style="color:var(--cyan)">{{ x? }} &mdash; Safe</h4>
+          <p>Retorna <code>""</code> se missing. Use para steps condicionais (gate skip).</p>
+        </div>
+        <div class="card" style="border-color:var(--red);">
+          <h4 style="color:var(--red)">{{ x! }} &mdash; Strict</h4>
+          <p>Erro imediato com mensagem clara. Use para fail-fast em configs.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ 17 COLLECT/REDUCE ═══════════════ -->
+    <section id="collect-reduce">
+      <div class="section-label">17 &mdash; Recursos Avancados</div>
+      <h2>Map collect/reduce</h2>
+      <p>Steps <code>map</code> agora coletam e reduzem resultados automaticamente. Sem precisar de um step extra para agregar.</p>
+
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <span class="terminal-title">collect-reduce.yaml &mdash; analise de modulos</span>
+        </div>
+        <div class="terminal-body"><span class="dim">scopes:</span>
+  analyze_module:
+    steps:
+      - name: review
+        type: agent
+        prompt: "Analise {{ scope_value }} e de nota 0-100"
+        output_type: integer
+
+<span class="dim">steps:</span>
+  - name: review_all
+    type: map
+    items: "auth,payments,users,notifications"
+    scope: analyze_module
+    parallel: 4
+    config:
+      <span class="cyan">collect: json</span>          <span class="dim"># text | all | json</span>
+      <span class="orange">reduce: sum</span>           <span class="dim"># concat | sum | count | min | max | filter</span>
+
+  <span class="dim"># Resultado: soma das notas de todos os modulos</span>
+  - name: verdict
+    type: agent
+    prompt: |
+      Score total: <span class="green">{{ review_all.output }}</span>  <span class="dim"># e.g. 340 (soma)</span></div>
+      </div>
+
+      <div class="info-card" style="border-color:var(--cyan);">
+        <strong style="color:var(--cyan)">Operacoes disponiveis:</strong><br>
+        <strong>collect:</strong> <code>text</code> (concatena stdout) &bull; <code>json</code> (array JSON) &bull; <code>all</code> (struct completa)<br>
+        <strong>reduce:</strong> <code>concat</code> &bull; <code>sum</code> &bull; <code>count</code> &bull; <code>min</code> &bull; <code>max</code> &bull; <code>filter</code> (com reduce_condition)
+      </div>
+    </section>
+
+    <!-- ═══════════════ 18 PLUGINS + EVENTS ═══════════════ -->
+    <section id="plugins-events">
+      <div class="section-label">18 &mdash; Recursos Avancados</div>
+      <h2>Plugin System &amp; Event Bus</h2>
+      <p>Estenda o engine com step types customizados via plugins <code>.dylib/.so</code>. Observe tudo com o event bus e webhooks.</p>
+
+      <div class="grid-2">
+        <div class="card" style="border-color:var(--purple);">
+          <h4 style="color:var(--purple)">Plugin System</h4>
+          <div class="terminal" style="margin:12px 0 0;">
+            <div class="terminal-body" style="font-size:12px;"><span class="dim">config:</span>
+  <span class="purple">plugins:</span>
+    - name: kubernetes
+      path: ./plugins/k8s.dylib
+    - name: terraform
+      path: ./plugins/tf.so
+
+<span class="dim">steps:</span>
+  - name: deploy
+    <span class="purple">type: kubernetes</span>  <span class="dim"># tipo customizado!</span>
+    config:
+      namespace: production
+      image: myapp:latest</div>
+          </div>
+          <p style="margin-top:10px;font-size:13px;color:var(--text-dim)">
+            Implemente o trait <code>PluginStep</code> em Rust, compile como <code>.dylib</code>, e o engine carrega automaticamente via <code>libloading</code>.
+          </p>
+        </div>
+
+        <div class="card" style="border-color:var(--orange);">
+          <h4 style="color:var(--orange)">Event Bus</h4>
+          <div class="terminal" style="margin:12px 0 0;">
+            <div class="terminal-body" style="font-size:12px;"><span class="dim">config:</span>
+  <span class="orange">events:</span>
+    webhook: https://slack.com/api/hook
+    file: ./logs/events.jsonl
+
+<span class="dim"># Eventos emitidos automaticamente:</span>
+<span class="dim"># StepStarted, StepCompleted, StepFailed</span>
+<span class="dim"># WorkflowStarted, WorkflowCompleted</span>
+<span class="dim"># SandboxCreated, SandboxDestroyed</span></div>
+          </div>
+          <p style="margin-top:10px;font-size:13px;color:var(--text-dim)">
+            Cada evento tem <code>step_name</code>, <code>duration_ms</code>, <code>timestamp</code>. Subscribers: webhook (HTTP POST) ou file (JSONL append).
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ 19 SETUP ═══════════════ -->
     <section id="setup">
-      <div class="section-label">11 &mdash; Guia Pratico</div>
+      <div class="section-label">19 &mdash; Guia Pratico</div>
       <h2>Setup no Seu Projeto</h2>
       <p>Como adicionar Minion Engine a qualquer projeto existente em 5 passos.</p>
 
@@ -1301,9 +1795,9 @@ minion-macos-aarch64</span> \
       </div>
     </section>
 
-    <!-- ═══════════════ 12 COMPARACAO ═══════════════ -->
+    <!-- ═══════════════ 20 COMPARACAO ═══════════════ -->
     <section id="comparacao">
-      <div class="section-label">12 &mdash; Comparacao</div>
+      <div class="section-label">20 &mdash; Comparacao</div>
       <h2>&#x1F433; Com e Sem Sandbox</h2>
       <p>Por que voce deveria sempre usar <code>--sandbox</code>.</p>
 
@@ -1355,9 +1849,9 @@ minion-macos-aarch64</span> \
       </div>
     </section>
 
-    <!-- ═══════════════ 13 CLI REFERENCE ═══════════════ -->
+    <!-- ═══════════════ 21 CLI REFERENCE ═══════════════ -->
     <section id="cli">
-      <div class="section-label">13 &mdash; CLI Reference</div>
+      <div class="section-label">21 &mdash; CLI Reference</div>
       <h2>Todos os Comandos</h2>
       <p>Referencia rapida do <code>minion</code> CLI.</p>
 
@@ -1424,15 +1918,15 @@ minion-macos-aarch64</span> \
       </div>
     </section>
 
-    <!-- ═══════════════ 14 ARQUITETURA ═══════════════ -->
+    <!-- ═══════════════ 22 ARQUITETURA ═══════════════ -->
     <section id="arquitetura">
-      <div class="section-label">14 &mdash; Arquitetura</div>
+      <div class="section-label">22 &mdash; Arquitetura</div>
       <h2>Diagrama de Arquitetura</h2>
       <p>Fluxo completo: do YAML ao resultado, passando pelo Docker sandbox.</p>
 
       <div class="diagram-container">
         <div class="diagram-title">Fluxo de Execucao com Docker Sandbox</div>
-        <svg width="820" height="520" viewBox="0 0 820 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <svg width="820" height="590" viewBox="0 0 820 590" fill="none" xmlns="http://www.w3.org/2000/svg">
           <!-- Input box -->
           <rect x="20" y="30" width="140" height="60" rx="8" fill="#161b22" stroke="#39d353" stroke-width="2"/>
           <text x="90" y="55" text-anchor="middle" fill="#39d353" font-size="11" font-weight="700">workflow.yaml</text>
@@ -1465,56 +1959,76 @@ minion-macos-aarch64</span> \
           <path d="M550 100 L550 140" stroke="#30363d" stroke-width="2" marker-end="url(#arrowhead2)"/>
 
           <!-- Docker Sandbox Container (large box) -->
-          <rect x="40" y="145" width="740" height="220" rx="12" fill="rgba(88,166,255,0.04)" stroke="#58a6ff" stroke-width="2" stroke-dasharray="8 4"/>
+          <rect x="40" y="145" width="740" height="290" rx="12" fill="rgba(88,166,255,0.04)" stroke="#58a6ff" stroke-width="2" stroke-dasharray="8 4"/>
           <text x="410" y="170" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="800">Docker Container</text>
           <text x="410" y="186" text-anchor="middle" fill="#8b949e" font-size="10">/workspace &mdash; copia isolada do seu projeto</text>
 
-          <!-- Step Executor Row inside Docker -->
-          <rect x="65" y="205" width="95" height="45" rx="6" fill="#0d1117" stroke="#39d353" stroke-width="1.5"/>
-          <text x="112" y="232" text-anchor="middle" fill="#39d353" font-size="11" font-weight="700">cmd</text>
+          <!-- Step Executor Row 1 inside Docker (5 steps) -->
+          <rect x="65" y="200" width="125" height="38" rx="6" fill="#0d1117" stroke="#39d353" stroke-width="1.5"/>
+          <text x="127" y="224" text-anchor="middle" fill="#39d353" font-size="11" font-weight="700">cmd</text>
 
-          <rect x="175" y="205" width="95" height="45" rx="6" fill="#0d1117" stroke="#bc8cff" stroke-width="1.5"/>
-          <text x="222" y="232" text-anchor="middle" fill="#bc8cff" font-size="11" font-weight="700">agent</text>
+          <rect x="205" y="200" width="125" height="38" rx="6" fill="#0d1117" stroke="#bc8cff" stroke-width="1.5"/>
+          <text x="267" y="224" text-anchor="middle" fill="#bc8cff" font-size="11" font-weight="700">agent</text>
 
-          <rect x="285" y="205" width="95" height="45" rx="6" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
-          <text x="332" y="232" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="700">chat</text>
+          <rect x="345" y="200" width="125" height="38" rx="6" fill="#0d1117" stroke="#58a6ff" stroke-width="1.5"/>
+          <text x="407" y="224" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="700">chat</text>
 
-          <rect x="395" y="205" width="95" height="45" rx="6" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
-          <text x="442" y="232" text-anchor="middle" fill="#d29922" font-size="11" font-weight="700">gate</text>
+          <rect x="485" y="200" width="125" height="38" rx="6" fill="#0d1117" stroke="#d29922" stroke-width="1.5"/>
+          <text x="547" y="224" text-anchor="middle" fill="#d29922" font-size="11" font-weight="700">gate</text>
 
-          <rect x="505" y="205" width="95" height="45" rx="6" fill="#0d1117" stroke="#f0883e" stroke-width="1.5"/>
-          <text x="552" y="232" text-anchor="middle" fill="#f0883e" font-size="11" font-weight="700">repeat</text>
+          <rect x="625" y="200" width="125" height="38" rx="6" fill="#0d1117" stroke="#f0883e" stroke-width="1.5"/>
+          <text x="687" y="224" text-anchor="middle" fill="#f0883e" font-size="11" font-weight="700">repeat</text>
 
-          <rect x="615" y="205" width="95" height="45" rx="6" fill="#0d1117" stroke="#f778ba" stroke-width="1.5"/>
-          <text x="662" y="232" text-anchor="middle" fill="#f778ba" font-size="11" font-weight="700">map</text>
+          <!-- Step Executor Row 2 inside Docker (5 steps) -->
+          <rect x="65" y="248" width="125" height="38" rx="6" fill="#0d1117" stroke="#f778ba" stroke-width="1.5"/>
+          <text x="127" y="272" text-anchor="middle" fill="#f778ba" font-size="11" font-weight="700">map</text>
 
-          <!-- Connection lines from engine to steps -->
-          <path d="M550 140 L112 205" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
-          <path d="M550 140 L222 205" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
-          <path d="M550 140 L332 205" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
-          <path d="M550 140 L442 205" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
-          <path d="M550 140 L552 205" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
-          <path d="M550 140 L662 205" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
+          <rect x="205" y="248" width="125" height="38" rx="6" fill="#0d1117" stroke="#79c0ff" stroke-width="1.5"/>
+          <text x="267" y="272" text-anchor="middle" fill="#79c0ff" font-size="11" font-weight="700">parallel</text>
 
-          <!-- Context Store inside Docker -->
-          <rect x="200" y="285" width="420" height="50" rx="8" fill="#161b22" stroke="#39d353" stroke-width="2"/>
-          <text x="410" y="308" text-anchor="middle" fill="#39d353" font-size="12" font-weight="700">Context Store</text>
-          <text x="410" y="323" text-anchor="middle" fill="#8b949e" font-size="10">outputs de cada step + variaveis + Tera templates</text>
+          <rect x="345" y="248" width="125" height="38" rx="6" fill="#0d1117" stroke="#7ee787" stroke-width="1.5"/>
+          <text x="407" y="272" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="700">call</text>
 
-          <!-- Arrow down to Context Store -->
-          <path d="M410 250 L410 285" stroke="#30363d" stroke-width="2" marker-end="url(#arrowhead2)"/>
+          <rect x="485" y="248" width="125" height="38" rx="6" fill="#0d1117" stroke="#ffa657" stroke-width="1.5"/>
+          <text x="547" y="272" text-anchor="middle" fill="#ffa657" font-size="11" font-weight="700">template</text>
+
+          <rect x="625" y="248" width="125" height="38" rx="6" fill="#0d1117" stroke="#ff7b72" stroke-width="1.5"/>
+          <text x="687" y="272" text-anchor="middle" fill="#ff7b72" font-size="11" font-weight="700">script (Rhai)</text>
+
+          <!-- Connection lines from engine to step rows -->
+          <path d="M550 140 L127 200" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
+          <path d="M550 140 L267 200" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
+          <path d="M550 140 L407 200" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
+          <path d="M550 140 L547 200" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
+          <path d="M550 140 L687 200" stroke="#30363d" stroke-width="1" stroke-dasharray="4"/>
+
+          <!-- Context Store + EventBus + Plugin Registry row inside Docker -->
+          <rect x="65" y="310" width="280" height="50" rx="8" fill="#161b22" stroke="#39d353" stroke-width="2"/>
+          <text x="205" y="333" text-anchor="middle" fill="#39d353" font-size="12" font-weight="700">Context Store</text>
+          <text x="205" y="348" text-anchor="middle" fill="#8b949e" font-size="9">outputs + variaveis + templates (?, !, from())</text>
+
+          <rect x="360" y="310" width="190" height="50" rx="8" fill="#161b22" stroke="#ffa657" stroke-width="2"/>
+          <text x="455" y="333" text-anchor="middle" fill="#ffa657" font-size="12" font-weight="700">EventBus</text>
+          <text x="455" y="348" text-anchor="middle" fill="#8b949e" font-size="9">webhook + file subscribers</text>
+
+          <rect x="565" y="310" width="190" height="50" rx="8" fill="#161b22" stroke="#ff7b72" stroke-width="2"/>
+          <text x="660" y="333" text-anchor="middle" fill="#ff7b72" font-size="12" font-weight="700">Plugin Registry</text>
+          <text x="660" y="348" text-anchor="middle" fill="#8b949e" font-size="9">.dylib/.so dynamic loading</text>
+
+          <!-- Arrow down to infra row -->
+          <path d="M410 286 L410 310" stroke="#30363d" stroke-width="2" marker-end="url(#arrowhead2)"/>
 
           <!-- Arrow down from Docker to results -->
-          <path d="M410 365 L410 400" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrowhead-blue)"/>
+          <path d="M410 435 L410 470" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrowhead-blue)"/>
 
           <!-- Results row -->
-          <rect x="160" y="405" width="200" height="55" rx="8" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
-          <text x="260" y="430" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="700">Copy Results Back</text>
-          <text x="260" y="447" text-anchor="middle" fill="#8b949e" font-size="10">arquivos modificados, reports</text>
+          <rect x="160" y="475" width="200" height="55" rx="8" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+          <text x="260" y="500" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="700">Copy Results Back</text>
+          <text x="260" y="517" text-anchor="middle" fill="#8b949e" font-size="10">arquivos modificados, reports</text>
 
-          <rect x="460" y="405" width="200" height="55" rx="8" fill="#161b22" stroke="#f85149" stroke-width="2"/>
-          <text x="560" y="430" text-anchor="middle" fill="#f85149" font-size="12" font-weight="700">Destroy Container</text>
-          <text x="560" y="447" text-anchor="middle" fill="#8b949e" font-size="10">zero rastros, zero impacto</text>
+          <rect x="460" y="475" width="200" height="55" rx="8" fill="#161b22" stroke="#f85149" stroke-width="2"/>
+          <text x="560" y="500" text-anchor="middle" fill="#f85149" font-size="12" font-weight="700">Destroy Container</text>
+          <text x="560" y="517" text-anchor="middle" fill="#8b949e" font-size="10">zero rastros, zero impacto</text>
 
           <!-- Config resolution -->
           <rect x="650" y="20" width="155" height="80" rx="8" fill="#161b22" stroke="#d29922" stroke-width="1.5" stroke-dasharray="4"/>
@@ -1526,10 +2040,9 @@ minion-macos-aarch64</span> \
           <!-- Arrow from config to engine -->
           <path d="M650 60 L620 60" stroke="#d29922" stroke-width="1" stroke-dasharray="3"/>
 
-          <!-- Network rules box -->
-          <rect x="640" y="285" width="125" height="50" rx="8" fill="#161b22" stroke="#f85149" stroke-width="1.5"/>
-          <text x="702" y="308" text-anchor="middle" fill="#f85149" font-size="10" font-weight="700">Network Rules</text>
-          <text x="702" y="323" text-anchor="middle" fill="#8b949e" font-size="9">allow / deny list</text>
+          <!-- Network rules box (inside Docker, bottom-right) -->
+          <rect x="65" y="375" width="690" height="40" rx="6" fill="#0d1117" stroke="#f85149" stroke-width="1"/>
+          <text x="410" y="400" text-anchor="middle" fill="#f85149" font-size="10" font-weight="700">Network Rules (allow/deny list) &bull; CPU/Memory Limits &bull; Async Futures Pool</text>
 
           <!-- arrowhead markers -->
           <defs>
@@ -1544,9 +2057,9 @@ minion-macos-aarch64</span> \
       </div>
     </section>
 
-    <!-- ═══════════════ 15 FAQ ═══════════════ -->
+    <!-- ═══════════════ 23 FAQ ═══════════════ -->
     <section id="faq">
-      <div class="section-label">15 &mdash; FAQ</div>
+      <div class="section-label">23 &mdash; FAQ</div>
       <h2>Perguntas Frequentes</h2>
 
       <div class="faq-item">

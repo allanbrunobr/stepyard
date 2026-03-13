@@ -1,0 +1,51 @@
+# ──────────────────────────────────────────────────────────────
+# Minion Engine — Reference Sandbox Image
+#
+# Build:  docker build -f Dockerfile.sandbox -t minion-sandbox:latest .
+# Usage:  minion execute workflow.yaml --sandbox
+#
+# This image contains every tool needed by the standard workflow
+# scenarios (code-review, fix-issue, refactor, weekly-report,
+# security-audit, flaky-test-fix).
+# ──────────────────────────────────────────────────────────────
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/root
+
+# ── System packages ──────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates gnupg git jq \
+    build-essential python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── GitHub CLI (gh) ──────────────────────────────────────────
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Node.js 20 LTS ──────────────────────────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Rust toolchain (stable) ─────────────────────────────────
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --default-toolchain stable --profile minimal \
+    && . /root/.cargo/env \
+    && rustup component add clippy rustfmt
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# ── Claude CLI ───────────────────────────────────────────────
+RUN npm install -g @anthropic-ai/claude-code
+
+# ── Git defaults (can be overridden via env vars) ────────────
+RUN git config --global user.name "Minion Engine" \
+    && git config --global user.email "minion@localhost" \
+    && git config --global init.defaultBranch main
+
+WORKDIR /workspace

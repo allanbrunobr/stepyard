@@ -4,14 +4,14 @@
 # Homebrew formula for minion-engine.
 #
 # To use this tap:
-#   brew tap brunoocasali/minion-engine https://github.com/brunoocasali/minion-engine
-#   brew install brunoocasali/minion-engine/minion-engine
+#   brew tap allanbrunobr/minion-engine https://github.com/allanbrunobr/minion-engine
+#   brew install allanbrunobr/minion-engine/minion-engine
 #
 # Or install directly from the tap shorthand once published:
 #   brew install minion-engine
 class MinionEngine < Formula
   desc "AI workflow engine that orchestrates Claude Code CLI"
-  homepage "https://github.com/brunoocasali/minion-engine"
+  homepage "https://github.com/allanbrunobr/minion-engine"
   version "0.1.0"
   license "MIT"
 
@@ -19,20 +19,20 @@ class MinionEngine < Formula
   # These are updated automatically by the release workflow after each tag.
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/brunoocasali/minion-engine/releases/download/v#{version}/minion-macos-aarch64"
+      url "https://github.com/allanbrunobr/minion-engine/releases/download/v#{version}/minion-macos-aarch64"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # updated on release
     else
-      url "https://github.com/brunoocasali/minion-engine/releases/download/v#{version}/minion-macos-x86_64"
+      url "https://github.com/allanbrunobr/minion-engine/releases/download/v#{version}/minion-macos-x86_64"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # updated on release
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/brunoocasali/minion-engine/releases/download/v#{version}/minion-linux-aarch64"
+      url "https://github.com/allanbrunobr/minion-engine/releases/download/v#{version}/minion-linux-aarch64"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # updated on release
     else
-      url "https://github.com/brunoocasali/minion-engine/releases/download/v#{version}/minion-linux-x86_64"
+      url "https://github.com/allanbrunobr/minion-engine/releases/download/v#{version}/minion-linux-x86_64"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # updated on release
     end
   end
@@ -46,7 +46,7 @@ class MinionEngine < Formula
   # Optional: build from source as a fallback for unsupported platforms.
   # Homebrew will use this when no bottle is available.
   head do
-    url "https://github.com/brunoocasali/minion-engine.git", branch: "main"
+    url "https://github.com/allanbrunobr/minion-engine.git", branch: "main"
     depends_on "rust" => :build
 
     def install

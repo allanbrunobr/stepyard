@@ -54,23 +54,23 @@ minion --version
 ### Pre-compiled binaries (no Rust required)
 
 Download the latest binary for your platform from
-[GitHub Releases](https://github.com/brunoocasali/minion-engine/releases/latest):
+[GitHub Releases](https://github.com/allanbrunobr/minion-engine/releases/latest):
 
 ```bash
 # macOS — Apple Silicon (M1/M2/M3)
-curl -L https://github.com/brunoocasali/minion-engine/releases/latest/download/minion-macos-aarch64 -o minion
+curl -L https://github.com/allanbrunobr/minion-engine/releases/latest/download/minion-macos-aarch64 -o minion
 chmod +x minion && sudo mv minion /usr/local/bin/
 
 # macOS — Intel
-curl -L https://github.com/brunoocasali/minion-engine/releases/latest/download/minion-macos-x86_64 -o minion
+curl -L https://github.com/allanbrunobr/minion-engine/releases/latest/download/minion-macos-x86_64 -o minion
 chmod +x minion && sudo mv minion /usr/local/bin/
 
 # Linux — x86_64
-curl -L https://github.com/brunoocasali/minion-engine/releases/latest/download/minion-linux-x86_64 -o minion
+curl -L https://github.com/allanbrunobr/minion-engine/releases/latest/download/minion-linux-x86_64 -o minion
 chmod +x minion && sudo mv minion /usr/local/bin/
 
 # Linux — aarch64
-curl -L https://github.com/brunoocasali/minion-engine/releases/latest/download/minion-linux-aarch64 -o minion
+curl -L https://github.com/allanbrunobr/minion-engine/releases/latest/download/minion-linux-aarch64 -o minion
 chmod +x minion && sudo mv minion /usr/local/bin/
 
 # Windows — x86_64
@@ -80,8 +80,8 @@ chmod +x minion && sudo mv minion /usr/local/bin/
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew tap brunoocasali/minion-engine https://github.com/brunoocasali/minion-engine
-brew install brunoocasali/minion-engine/minion-engine
+brew tap allanbrunobr/minion-engine https://github.com/allanbrunobr/minion-engine
+brew install allanbrunobr/minion-engine/minion-engine
 minion --version
 ```
 

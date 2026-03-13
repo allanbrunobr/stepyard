@@ -41,20 +41,96 @@ pub enum SandboxMode {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SandboxConfig {
     pub enabled: bool,
-    /// Docker image to use (default: "ubuntu:22.04")
+    /// Docker image to use (default: "minion-sandbox:latest")
     pub image: Option<String>,
     /// Host path to mount as workspace inside container
     pub workspace: Option<String>,
     pub network: NetworkConfig,
     pub resources: ResourceConfig,
+    /// Host environment variables to forward into the container.
+    /// Each entry is a variable name (e.g. "GH_TOKEN"); the value is read
+    /// from the host environment at container-creation time.
+    pub env: Vec<String>,
+    /// Extra read-only volume mounts (host_path:container_path or host_path:container_path:mode).
+    /// Tilde (~) is expanded to $HOME on the host.
+    pub volumes: Vec<String>,
+    /// Glob patterns of files/dirs to exclude when copying workspace into the
+    /// container (e.g. "node_modules", "target", ".git/objects").
+    pub exclude: Vec<String>,
+    /// DNS servers to use inside the container (e.g. "8.8.8.8").
+    /// Ensures name resolution works even with restricted networks.
+    pub dns: Vec<String>,
 }
 
 impl SandboxConfig {
     /// Default image used when none is specified
-    pub const DEFAULT_IMAGE: &'static str = "ubuntu:22.04";
+    pub const DEFAULT_IMAGE: &'static str = "minion-sandbox:latest";
+
+    /// Well-known env vars that are auto-forwarded when the user does NOT
+    /// specify an explicit `env:` list. This covers the most common
+    /// credentials needed by workflows.
+    pub const AUTO_ENV: &'static [&'static str] = &[
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+    ];
+
+    /// Well-known host directories that are auto-mounted read-only when the
+    /// user does NOT specify an explicit `volumes:` list.
+    pub const AUTO_VOLUMES: &'static [&'static str] = &[
+        "~/.config/gh:/root/.config/gh:ro",
+        "~/.claude:/root/.claude:ro",
+        "~/.ssh:/root/.ssh:ro",
+        "~/.gitconfig:/root/.gitconfig:ro",
+    ];
 
     pub fn image(&self) -> &str {
         self.image.as_deref().unwrap_or(Self::DEFAULT_IMAGE)
+    }
+
+    /// Return the effective env-var list: explicit config overrides auto-env.
+    pub fn effective_env(&self) -> Vec<String> {
+        if self.env.is_empty() {
+            Self::AUTO_ENV.iter().map(|s| (*s).to_string()).collect()
+        } else {
+            self.env.clone()
+        }
+    }
+
+    /// Return the effective volume list: explicit config overrides auto-volumes.
+    /// Tilde (~) is expanded to $HOME on the host.
+    pub fn effective_volumes(&self) -> Vec<String> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let raw = if self.volumes.is_empty() {
+            Self::AUTO_VOLUMES.iter().map(|s| (*s).to_string()).collect::<Vec<_>>()
+        } else {
+            self.volumes.clone()
+        };
+        raw.into_iter()
+            .map(|v| v.replace('~', &home))
+            .filter(|v| {
+                // Only mount if the host path actually exists
+                let host_path = v.split(':').next().unwrap_or("");
+                std::path::Path::new(host_path).exists()
+            })
+            .collect()
+    }
+
+    /// Helper: parse a YAML string-list from a mapping key.
+    fn parse_string_list(
+        mapping: &serde_yaml::Mapping,
+        key: &str,
+    ) -> Vec<String> {
+        mapping
+            .get(serde_yaml::Value::String(key.into()))
+            .and_then(|v| v.as_sequence())
+            .map(|seq| {
+                seq.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Parse SandboxConfig from a global config map (Devbox mode)
@@ -81,25 +157,7 @@ impl SandboxConfig {
 
         let (allow, deny) = match sandbox.get(serde_yaml::Value::String("network".into())) {
             Some(serde_yaml::Value::Mapping(net)) => {
-                let allow = net
-                    .get(serde_yaml::Value::String("allow".into()))
-                    .and_then(|v| v.as_sequence())
-                    .map(|seq| {
-                        seq.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let deny = net
-                    .get(serde_yaml::Value::String("deny".into()))
-                    .and_then(|v| v.as_sequence())
-                    .map(|seq| {
-                        seq.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                (allow, deny)
+                (Self::parse_string_list(net, "allow"), Self::parse_string_list(net, "deny"))
             }
             _ => (vec![], vec![]),
         };
@@ -118,12 +176,21 @@ impl SandboxConfig {
             _ => (None, None),
         };
 
+        let env = Self::parse_string_list(sandbox, "env");
+        let volumes = Self::parse_string_list(sandbox, "volumes");
+        let exclude = Self::parse_string_list(sandbox, "exclude");
+        let dns = Self::parse_string_list(sandbox, "dns");
+
         Self {
             enabled,
             image,
             workspace,
             network: NetworkConfig { allow, deny },
             resources: ResourceConfig { cpus, memory },
+            env,
+            volumes,
+            exclude,
+            dns,
         }
     }
 }
@@ -135,7 +202,7 @@ mod tests {
     #[test]
     fn default_image() {
         let cfg = SandboxConfig::default();
-        assert_eq!(cfg.image(), "ubuntu:22.04");
+        assert_eq!(cfg.image(), "minion-sandbox:latest");
     }
 
     #[test]
@@ -148,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn from_global_config_parses_fields() {
+    fn from_global_config_parses_all_fields() {
         let yaml = r#"
 sandbox:
   enabled: true
@@ -162,6 +229,20 @@ sandbox:
   resources:
     cpus: 2.0
     memory: "4g"
+  env:
+    - ANTHROPIC_API_KEY
+    - GH_TOKEN
+    - CUSTOM_SECRET
+  volumes:
+    - "~/.config/gh:/root/.config/gh:ro"
+    - "~/.claude:/root/.claude:ro"
+  exclude:
+    - node_modules
+    - target
+    - .git/objects
+  dns:
+    - "8.8.8.8"
+    - "1.1.1.1"
 "#;
         let map: HashMap<String, serde_yaml::Value> = serde_yaml::from_str(yaml).unwrap();
         let cfg = SandboxConfig::from_global_config(&map);
@@ -173,6 +254,10 @@ sandbox:
         assert_eq!(cfg.network.deny, ["0.0.0.0/0"]);
         assert_eq!(cfg.resources.cpus, Some(2.0));
         assert_eq!(cfg.resources.memory.as_deref(), Some("4g"));
+        assert_eq!(cfg.env, ["ANTHROPIC_API_KEY", "GH_TOKEN", "CUSTOM_SECRET"]);
+        assert_eq!(cfg.volumes.len(), 2);
+        assert_eq!(cfg.exclude, ["node_modules", "target", ".git/objects"]);
+        assert_eq!(cfg.dns, ["8.8.8.8", "1.1.1.1"]);
     }
 
     #[test]
@@ -181,5 +266,36 @@ sandbox:
         let cfg = SandboxConfig::from_global_config(&map);
         assert!(!cfg.enabled);
         assert!(cfg.image.is_none());
+    }
+
+    #[test]
+    fn effective_env_uses_auto_when_empty() {
+        let cfg = SandboxConfig::default();
+        let env = cfg.effective_env();
+        assert!(env.contains(&"ANTHROPIC_API_KEY".to_string()));
+        assert!(env.contains(&"GH_TOKEN".to_string()));
+    }
+
+    #[test]
+    fn effective_env_uses_explicit_when_set() {
+        let cfg = SandboxConfig {
+            env: vec!["MY_CUSTOM_KEY".to_string()],
+            ..Default::default()
+        };
+        let env = cfg.effective_env();
+        assert_eq!(env, vec!["MY_CUSTOM_KEY"]);
+        assert!(!env.contains(&"ANTHROPIC_API_KEY".to_string()));
+    }
+
+    #[test]
+    fn effective_volumes_filters_nonexistent_paths() {
+        let cfg = SandboxConfig {
+            volumes: vec![
+                "/nonexistent/path/abc123:/container/path:ro".to_string(),
+            ],
+            ..Default::default()
+        };
+        let vols = cfg.effective_volumes();
+        assert!(vols.is_empty(), "should filter out non-existent host paths");
     }
 }

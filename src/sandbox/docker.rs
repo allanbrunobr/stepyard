@@ -84,7 +84,25 @@ impl DockerSandbox {
             "/workspace".to_string(),
         ];
 
-        // Resource limits
+        // ── Environment variables ───────────────────────────────────
+        // Forward host env vars into the container so that CLI tools
+        // (gh, claude, git) and API clients can authenticate.
+        for key in self.config.effective_env() {
+            if let Ok(val) = std::env::var(&key) {
+                args.extend(["-e".to_string(), format!("{key}={val}")]);
+            }
+        }
+        // Always set HOME so credential files are found at the expected path
+        args.extend(["-e".to_string(), "HOME=/root".to_string()]);
+
+        // ── Extra volume mounts ─────────────────────────────────────
+        // Mount credential directories (e.g. ~/.config/gh, ~/.claude, ~/.ssh)
+        // read-only so that tools inside the container can authenticate.
+        for vol in self.config.effective_volumes() {
+            args.extend(["-v".to_string(), vol]);
+        }
+
+        // ── Resource limits ─────────────────────────────────────────
         if let Some(cpus) = self.config.resources.cpus {
             args.extend(["--cpus".to_string(), cpus.to_string()]);
         }
@@ -92,11 +110,13 @@ impl DockerSandbox {
             args.extend(["--memory".to_string(), mem.clone()]);
         }
 
-        // Network configuration: use default bridge network
-        // Deny-list entries are handled via iptables inside the container (future)
-        // Allow-list: if non-empty, restrict to those hosts only
+        // ── DNS servers ─────────────────────────────────────────────
+        for dns in &self.config.dns {
+            args.extend(["--dns".to_string(), dns.clone()]);
+        }
+
+        // ── Network configuration ───────────────────────────────────
         if !self.config.network.deny.is_empty() || !self.config.network.allow.is_empty() {
-            // Use isolated network for restricted mode
             args.extend(["--network".to_string(), "bridge".to_string()]);
         }
 
@@ -134,19 +154,48 @@ impl DockerSandbox {
         Ok(())
     }
 
-    /// Copy a host directory into the running sandbox container
+    /// Copy a host directory into the running sandbox container.
+    ///
+    /// When the config has `exclude` patterns, we use `tar --exclude` piped
+    /// into `docker cp` to skip large directories like node_modules/ and
+    /// target/ that would otherwise make the copy prohibitively slow.
     pub async fn copy_workspace(&self, src: &str) -> Result<()> {
         let id = self.container_id.as_ref().context("Container not created")?;
 
-        let output = Command::new("docker")
-            .args(["cp", &format!("{src}/."), &format!("{id}:/workspace")])
-            .output()
-            .await
-            .context("docker cp failed")?;
+        if self.config.exclude.is_empty() {
+            // Fast path: no exclusions, use plain docker cp
+            let output = Command::new("docker")
+                .args(["cp", &format!("{src}/."), &format!("{id}:/workspace")])
+                .output()
+                .await
+                .context("docker cp failed")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("docker cp workspace failed: {stderr}");
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                bail!("docker cp workspace failed: {stderr}");
+            }
+        } else {
+            // Use shell pipe: tar --exclude | docker exec -i tar
+            // This avoids Rust type-conversion issues between tokio/std Stdio.
+            let mut excludes = String::new();
+            for pattern in &self.config.exclude {
+                excludes.push_str(&format!(" --exclude='{pattern}'"));
+            }
+
+            let pipe_cmd = format!(
+                "tar -cf -{excludes} -C '{src}' . | docker exec -i {id} tar -xf - -C /workspace"
+            );
+
+            let output = Command::new("/bin/sh")
+                .args(["-c", &pipe_cmd])
+                .output()
+                .await
+                .context("tar | docker exec pipe failed")?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                bail!("docker cp workspace (filtered) failed: {stderr}");
+            }
         }
 
         Ok(())
@@ -234,6 +283,10 @@ mod tests {
                 cpus: Some(1.0),
                 memory: Some("512m".to_string()),
             },
+            env: vec![],
+            volumes: vec![],
+            exclude: vec![],
+            dns: vec![],
         }
     }
 
@@ -257,7 +310,7 @@ mod tests {
     async fn run_command_returns_stdout() {
         // We can't run real Docker in tests, so we just verify that the DockerSandbox
         // structure is correct and the error path works.
-        let mut sb = DockerSandbox::new(make_config(), "/tmp/workspace");
+        let sb = DockerSandbox::new(make_config(), "/tmp/workspace");
         // Without a container_id, run_command should return an error
         let result = sb.run_command("echo hello").await;
         assert!(result.is_err());
@@ -275,6 +328,6 @@ mod tests {
     fn config_image_fallback() {
         let cfg = SandboxConfig::default();
         let sb = DockerSandbox::new(cfg, "/tmp");
-        assert_eq!(sb.config.image(), "ubuntu:22.04");
+        assert_eq!(sb.config.image(), "minion-sandbox:latest");
     }
 }
