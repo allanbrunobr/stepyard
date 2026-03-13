@@ -17,7 +17,7 @@ pub struct AgentExecutor;
 
 impl AgentExecutor {
     /// Build the claude CLI args from step config
-    fn build_args(config: &StepConfig) -> Vec<String> {
+    pub(crate) fn build_args(config: &StepConfig, ctx: &Context) -> Result<Vec<String>, StepError> {
         let mut args: Vec<String> = vec![
             "-p".into(),
             "--verbose".into(),
@@ -35,7 +35,13 @@ impl AgentExecutor {
             args.push("--dangerously-skip-permissions".into());
         }
 
-        args
+        // Session resume (Story 2.1)
+        if let Some(resume_step) = config.get_str("resume") {
+            let session_id = lookup_session_id(ctx, resume_step)?;
+            args.extend(["--resume".into(), session_id]);
+        }
+
+        Ok(args)
     }
 
     /// Parse stream-json output from Claude CLI
@@ -200,6 +206,18 @@ impl AgentExecutor {
     }
 }
 
+fn lookup_session_id(ctx: &Context, step_name: &str) -> Result<String, StepError> {
+    ctx.get_step(step_name)
+        .and_then(|out| {
+            if let StepOutput::Agent(a) = out {
+                a.session_id.clone()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| StepError::Fail(format!("session not found for step '{}'", step_name)))
+}
+
 #[async_trait]
 impl StepExecutor for AgentExecutor {
     async fn execute(
@@ -231,7 +249,7 @@ impl SandboxAwareExecutor for AgentExecutor {
         let timeout = config
             .get_duration("timeout")
             .unwrap_or(Duration::from_secs(600));
-        let args = Self::build_args(config);
+        let args = Self::build_args(config, ctx)?;
 
         if sandbox.is_some() {
             self.execute_in_sandbox(&prompt, command, &args, timeout, sandbox).await
@@ -298,6 +316,47 @@ mod tests {
         } else {
             panic!("Expected Agent output");
         }
+    }
+
+    #[tokio::test]
+    async fn resume_missing_step_returns_error() {
+        let step = agent_step("test prompt");
+        let mut values = HashMap::new();
+        values.insert("resume".to_string(), serde_json::Value::String("nonexistent".to_string()));
+        let config = StepConfig { values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = AgentExecutor.execute(&step, &config, &ctx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("session not found for step 'nonexistent'"),
+            "Unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn build_args_resume_adds_flag() {
+        use crate::steps::{AgentOutput, AgentStats, StepOutput};
+
+        let mut ctx = Context::new(String::new(), HashMap::new());
+        ctx.store(
+            "analyze",
+            StepOutput::Agent(AgentOutput {
+                response: "result".to_string(),
+                session_id: Some("sess-123".to_string()),
+                stats: AgentStats::default(),
+            }),
+        );
+
+        let mut values = HashMap::new();
+        values.insert("resume".to_string(), serde_json::Value::String("analyze".to_string()));
+        let config = StepConfig { values };
+
+        let args = AgentExecutor::build_args(&config, &ctx).unwrap();
+        let resume_idx = args.iter().position(|a| a == "--resume").expect("--resume not found");
+        assert_eq!(args[resume_idx + 1], "sess-123");
     }
 
     #[tokio::test]
