@@ -1,150 +1,161 @@
 # Features
 
 <!-- Generated from BMAD artifacts by /hive:from-bmad -->
-<!-- Source: EPICS-AND-STORIES.md -->
+<!-- Source: _bmad-output/planning-artifacts/epics.md -->
 <!-- Date: 2026-03-12 -->
 
-## Feature 1: Project Bootstrap & CLI Skeleton
-- Description: [Epic 1: MVP Foundation, Story 1.1] As a developer, I want to initialize the Rust project with a functional CLI, so that I have the base structure to add features. Source: EPICS-AND-STORIES.md
+## Feature 1: Define OutputType enum and extend StepDef schema
+- Description: [Epic 1: Typed Output Parsing, Story 1.1] As a workflow author, I want to declare an output type on any step definition, so that the engine knows how to parse the step's raw output into structured data. Source: _bmad-output/planning-artifacts/epics.md
 - Dependencies: none
-- Status: done
+- Files: src/workflow/schema.rs, src/steps/mod.rs
+- Status: pending
 
-## Feature 2: YAML Workflow Parser
-- Description: [Epic 1: MVP Foundation, Story 1.2] As a developer, I want to parse YAML workflow files into typed Rust structs, so that the engine can read and validate workflow definitions. Source: EPICS-AND-STORIES.md
+## Feature 2: Implement output parsing logic in the engine
+- Description: [Epic 1: Typed Output Parsing, Story 1.2] As a workflow engine, I want to automatically parse step outputs based on their declared output_type, so that downstream steps receive correctly typed data. Source: _bmad-output/planning-artifacts/epics.md
 - Dependencies: Feature 1
-- Status: done
+- Files: src/engine/mod.rs, src/engine/context.rs
+- Status: pending
 
-## Feature 3: Workflow Validator
-- Description: [Epic 1: MVP Foundation, Story 1.3] As a developer, I want to validate the workflow before execution, so that configuration errors are detected before runtime. Source: EPICS-AND-STORIES.md
+## Feature 3: Add output type support to template rendering
+- Description: [Epic 1: Typed Output Parsing, Story 1.3] As a workflow author, I want to access parsed output fields in templates using dot notation, so that I can reference specific values from JSON outputs. Source: _bmad-output/planning-artifacts/epics.md
 - Dependencies: Feature 2
-- Status: done
+- Files: src/engine/context.rs, src/engine/template.rs
+- Status: pending
 
-## Feature 4: Context Store & Template Engine
-- Description: [Epic 1: MVP Foundation, Story 1.4] As a developer, I want a context system that stores outputs and renders templates, so that steps can reference previous step outputs via {{ steps.name.field }}. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 2
-- Status: done
+## Feature 4: Add session resume support to agent executor
+- Description: [Epic 2: Agent Session Continuity, Story 2.1] As a workflow author, I want an agent step to resume a previous Claude session, so that the Claude agent retains full context from earlier steps without re-reading everything. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 3
+- Files: src/steps/agent.rs, src/workflow/schema.rs
+- Status: pending
 
-## Feature 5: Engine Core — Dispatch Loop
-- Description: [Epic 1: MVP Foundation, Story 1.5] As a developer, I want the main engine loop that executes steps sequentially, so that each step is dispatched to the correct executor. Source: EPICS-AND-STORIES.md
+## Feature 5: Add session fork support to agent executor
+- Description: [Epic 2: Agent Session Continuity, Story 2.2] As a workflow author, I want to fork an existing Claude session into parallel investigation paths, so that multiple agents can explore different approaches with the same baseline context. Source: _bmad-output/planning-artifacts/epics.md
 - Dependencies: Feature 4
-- Status: done
+- Files: src/steps/agent.rs, src/workflow/schema.rs
+- Status: pending
 
-## Feature 6: Step — cmd (Shell Commands)
-- Description: [Epic 1: MVP Foundation, Story 1.6] As a developer, I want to execute shell commands as workflow steps, so that deterministic steps (lint, test, git) work. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
+## Feature 6: Expose session_id in context for template access
+- Description: [Epic 2: Agent Session Continuity, Story 2.3] As a workflow author, I want to access a step's session_id in templates, so that I can dynamically reference sessions in subsequent steps. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 4
+- Files: src/engine/context.rs
+- Status: pending
 
-## Feature 7: Step — agent (Claude Code CLI Integration)
-- Description: [Epic 1: MVP Foundation, Story 1.7] As a developer, I want to invoke Claude Code CLI as a workflow step, so that agentic steps (implement, fix) work. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
+## Feature 7: Add async flag to StepDef and track pending futures
+- Description: [Epic 3: Per-Step Async Execution, Story 3.1] As a workflow author, I want to mark any step as async: true, so that it starts executing in the background without blocking subsequent steps. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: none
+- Files: src/workflow/schema.rs, src/engine/mod.rs
+- Status: pending
 
-## Feature 8: Step — gate (Conditional Flow Control)
-- Description: [Epic 1: MVP Foundation, Story 1.8] As a developer, I want to evaluate conditions and control flow, so that the engine can decide whether to continue, stop, or skip steps. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
-
-## Feature 9: Step — repeat (Bounded Retry Loop)
-- Description: [Epic 1: MVP Foundation, Story 1.9] As a developer, I want to execute a scope repeatedly until a gate breaks or max_iterations is reached, so that lint-fix-lint loops work like Stripe (max 2-3 rounds). Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
-
-## Feature 10: MVP Integration — fix-issue Workflow
-- Description: [Epic 1: MVP Foundation, Story 1.10] As a user, I want to run `minion execute fix-issue.yaml -- 247` and get a PR, so that the MVP is demonstrable end-to-end. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 9
-- Status: done
-
-## Feature 11: Step — chat (Direct LLM API)
-- Description: [Epic 2: Complete Engine, Story 2.1] As a developer, I want to call LLM APIs directly without invoking Claude Code CLI, so that planning and summarization steps are fast and cheap. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
-
-## Feature 12: Step — map (Collection Processing)
-- Description: [Epic 2: Complete Engine, Story 2.2] As a developer, I want to iterate over a collection executing a scope for each item, so that multi-file analysis works (like security audit). Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
-
-## Feature 13: Step — parallel (Independent Concurrent Steps)
-- Description: [Epic 2: Complete Engine, Story 2.3] As a developer, I want to run independent steps in parallel, so that non-dependent analyses run simultaneously. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
-
-## Feature 14: Step — call (Scope Invocation)
-- Description: [Epic 2: Complete Engine, Story 2.4] As a developer, I want to invoke a named scope as a sub-workflow, so that reusable logic can be organized into scopes. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
-
-## Feature 15: Config Manager — 4-Layer Merge
-- Description: [Epic 2: Complete Engine, Story 2.5] As a developer, I want to resolve config with 4 priority layers, so that global, per-type, per-pattern and per-step config work like Roast. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
-
-## Feature 16: Claude Code Session Management
-- Description: [Epic 2: Complete Engine, Story 2.6] As a developer, I want to reuse Claude Code sessions between agent steps, so that agent context persists and responses are smarter. Source: EPICS-AND-STORIES.md
+## Feature 8: Implement automatic await on output reference
+- Description: [Epic 3: Per-Step Async Execution, Story 3.2] As a workflow engine, I want to automatically await an async step when its output is needed, so that data dependencies are resolved transparently without manual synchronization. Source: _bmad-output/planning-artifacts/epics.md
 - Dependencies: Feature 7
-- Status: done
+- Files: src/engine/mod.rs, src/engine/context.rs
+- Status: pending
 
-## Feature 17: Rich Terminal Display
-- Description: [Epic 2: Complete Engine, Story 2.7] As a user, I want beautiful and informative terminal output, so that I can follow workflow progress. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
+## Feature 9: Await all remaining async steps at workflow end
+- Description: [Epic 3: Per-Step Async Execution, Story 3.3] As a workflow engine, I want to await all pending async steps before the workflow completes, so that no background work is silently lost. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 7
+- Files: src/engine/mod.rs
+- Status: pending
 
-## Feature 18: Step — template (Tera File Rendering)
-- Description: [Epic 2: Complete Engine, Story 2.8] As a developer, I want to render .md.tera files as steps, so that long prompts can live in separate files. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 5
-- Status: done
+## Feature 10: Add Rhai scripting engine dependency and ScriptExecutor skeleton
+- Description: [Epic 4: Embedded Script Step, Story 4.1] As a developer, I want the Rhai scripting engine integrated into the project, so that we have a sandboxed, Rust-native scripting runtime available for inline code evaluation. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: none
+- Files: Cargo.toml, src/workflow/schema.rs, src/steps/script.rs, src/steps/mod.rs
+- Status: pending
 
-## Feature 19: Docker Sandbox Integration
-- Description: [Epic 3: Polish & Production, Story 3.1] As a user, I want to run workflows or agent steps in Docker Sandbox, so that I have Stripe devbox-style isolation. Source: EPICS-AND-STORIES.md
+## Feature 11: Implement script execution with context access
+- Description: [Epic 4: Embedded Script Step, Story 4.2] As a workflow author, I want to write inline Rhai scripts that can read and write to the workflow context, so that I can perform data transformations without spawning external processes. Source: _bmad-output/planning-artifacts/epics.md
 - Dependencies: Feature 10
-- Status: done
+- Files: src/steps/script.rs, src/engine/mod.rs
+- Status: pending
 
-## Feature 20: Dry-Run Mode
-- Description: [Epic 3: Polish & Production, Story 3.2] As a user, I want to see which steps would be executed without executing anything, so that I can validate and understand the workflow before running. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 10
-- Status: done
+## Feature 12: Add script step to engine dispatch and sandbox support
+- Description: [Epic 4: Embedded Script Step, Story 4.3] As a workflow engine, I want script steps to be dispatched correctly and work in both host and sandbox modes, so that scripts integrate seamlessly with the existing execution pipeline. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 11
+- Files: src/engine/mod.rs
+- Status: pending
 
-## Feature 21: Resume From Step
-- Description: [Epic 3: Polish & Production, Story 3.3] As a user, I want to resume a workflow from a specific step, so that I don't need to re-execute steps that already passed. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 10
-- Status: done
+## Feature 13: Add ChatHistory struct with message storage
+- Description: [Epic 5: Chat Session Management, Story 5.1] As a workflow engine, I want to maintain a conversation history per chat session, so that multi-turn chat workflows can build on previous messages. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: none
+- Files: src/steps/chat.rs, src/engine/context.rs
+- Status: pending
 
-## Feature 22: JSON Output Mode
-- Description: [Epic 3: Polish & Production, Story 3.4] As a user, I want workflow output in JSON format, so that I can integrate with other tools and pipelines. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 10
-- Status: done
+## Feature 14: Implement truncation strategies
+- Description: [Epic 5: Chat Session Management, Story 5.2] As a workflow author, I want to configure truncation strategies for chat history, so that long conversations don't exceed the model's context window. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 13
+- Files: src/steps/chat.rs
+- Status: pending
 
-## Feature 23: CLI — init & list & inspect Commands
-- Description: [Epic 3: Polish & Production, Story 3.5] As a user, I want auxiliary commands to manage workflows, so that I can create, list and inspect workflows easily. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 10
-- Status: done
+## Feature 15: Define plugin trait interface and registry
+- Description: [Epic 6: Plugin System, Story 6.1] As a plugin developer, I want a clear trait interface to implement custom step types, so that I can create plugins that integrate with the engine's execution pipeline. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: none
+- Files: src/plugins/mod.rs, src/plugins/registry.rs
+- Status: pending
 
-## Feature 24: Integration Tests
-- Description: [Epic 3: Polish & Production, Story 3.6] As a developer, I want an integration test suite, so that I have confidence the engine works end-to-end. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 10
-- Status: done
+## Feature 16: Implement dynamic plugin loading from shared libraries
+- Description: [Epic 6: Plugin System, Story 6.2] As a workflow author, I want to load plugins from .dylib/.so files specified in the workflow config, so that custom step types are available without recompiling the engine. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 15
+- Files: Cargo.toml, src/plugins/loader.rs, src/engine/mod.rs
+- Status: pending
 
-## Feature 25: Documentation
-- Description: [Epic 3: Polish & Production, Story 3.7] As a user and contributor, I want complete documentation, so that I can use and contribute to the engine. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 10
-- Status: done
+## Feature 17: Add plugin configuration and validation
+- Description: [Epic 6: Plugin System, Story 6.3] As a workflow author, I want plugins to declare their configuration schema, so that the engine can validate plugin step configs before execution. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 15
+- Files: src/plugins/mod.rs, src/workflow/validator.rs
+- Status: pending
 
-## Feature 26: cargo install
-- Description: [Epic 4: Distribution, Story 4.1] As a Rust user, I want to install via `cargo install minion-engine`, so that I don't need to clone the repository. Source: EPICS-AND-STORIES.md
+## Feature 18: Add collect operation to map step
+- Description: [Epic 7: Map Collect/Reduce Helpers, Story 7.1] As a workflow author, I want map results to be automatically collected into a single output, so that I don't need a separate step to aggregate iteration results. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: none
+- Files: src/steps/map.rs, src/workflow/schema.rs
+- Status: pending
+
+## Feature 19: Add reduce operation to map step
+- Description: [Epic 7: Map Collect/Reduce Helpers, Story 7.2] As a workflow author, I want to apply a reduce operation on collected map results, so that iteration outputs are consolidated into a single meaningful value. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 18
+- Files: src/steps/map.rs, src/workflow/schema.rs
+- Status: pending
+
+## Feature 20: Implement safe accessor (?) for template expressions
+- Description: [Epic 8: Three-Accessor Pattern, Story 8.1] As a workflow author, I want to use {{step.output?}} to safely access potentially missing data, so that my workflow doesn't fail when a conditional step was skipped. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: none
+- Files: src/engine/context.rs, src/engine/template.rs
+- Status: pending
+
+## Feature 21: Implement strict accessor (!) for template expressions
+- Description: [Epic 8: Three-Accessor Pattern, Story 8.2] As a workflow author, I want to use {{step.output!}} to explicitly require data to exist, so that I catch configuration errors early with clear error messages. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 20
+- Files: src/engine/context.rs, src/engine/template.rs
+- Status: pending
+
+## Feature 22: Define event types and create EventBus
+- Description: [Epic 9: Event & Instrumentation System, Story 9.1] As a developer, I want a structured event system with defined event types, so that the engine can emit lifecycle events for each step execution. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: none
+- Files: src/events/mod.rs, src/events/types.rs
+- Status: pending
+
+## Feature 23: Integrate event emission into engine execution loop
+- Description: [Epic 9: Event & Instrumentation System, Story 9.2] As a workflow engine, I want to emit events at key points in the execution lifecycle, so that subscribers receive real-time updates about workflow progress. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 22
+- Files: src/engine/mod.rs, src/events/mod.rs
+- Status: pending
+
+## Feature 24: Add configurable webhook and file subscriber
+- Description: [Epic 9: Event & Instrumentation System, Story 9.3] As a workflow author, I want to configure event subscribers in the workflow YAML, so that events are sent to external systems like webhooks or log files. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: Feature 22
+- Files: src/events/subscribers.rs, src/workflow/schema.rs
+- Status: pending
+
+## Feature 25: Implement from() template function
+- Description: [Epic 10: Cross-Scope Output Access, Story 10.1] As a workflow author, I want to use from(step_name).output in templates, so that I can access outputs from steps outside my current scope. Source: _bmad-output/planning-artifacts/epics.md
+- Dependencies: none
+- Files: src/engine/context.rs, src/engine/template.rs
+- Status: pending
+
+## Feature 26: Add from() support for deep field access
+- Description: [Epic 10: Cross-Scope Output Access, Story 10.2] As a workflow author, I want to combine from() with dot notation for deep field access, so that I can reference specific fields from cross-scope outputs. Source: _bmad-output/planning-artifacts/epics.md
 - Dependencies: Feature 25
-- Status: done
-
-## Feature 27: Pre-compiled Binaries
-- Description: [Epic 4: Distribution, Story 4.2] As a non-Rust user, I want to download a pre-compiled binary for my OS, so that I don't need to install the Rust toolchain. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 26
-- Status: done
-
-## Feature 28: Homebrew Formula
-- Description: [Epic 4: Distribution, Story 4.3] As a macOS user, I want to install via `brew install minion-engine`, so that I have easy install and updates. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 27
-- Status: done
-
-## Feature 29: Workflow Gallery
-- Description: [Epic 4: Distribution, Story 4.4] As a user, I want a collection of ready-to-use workflows, so that I can start quickly without writing YAML from scratch. Source: EPICS-AND-STORIES.md
-- Dependencies: Feature 25
-- Status: done
+- Files: src/engine/context.rs, src/engine/template.rs
+- Status: pending
