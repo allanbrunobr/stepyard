@@ -35,6 +35,8 @@ pub struct WorkflowConfig {
     /// Dynamic plugin definitions to load at workflow startup
     #[serde(default)]
     pub plugins: Vec<PluginDef>,
+    /// Event subscriber configuration
+    pub events: Option<EventsConfig>,
 }
 
 /// Definition of a dynamic plugin to load from a shared library
@@ -44,6 +46,15 @@ pub struct PluginDef {
     pub name: String,
     /// Path to the shared library file (.so / .dylib)
     pub path: String,
+}
+
+/// Configuration for event subscribers
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EventsConfig {
+    /// HTTP endpoint to POST events to (fire-and-forget)
+    pub webhook: Option<String>,
+    /// File path to append events as JSONL
+    pub file: Option<String>,
 }
 
 /// Named scope (sub-workflow)

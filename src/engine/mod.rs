@@ -16,6 +16,7 @@ use crate::cli::display;
 use crate::config::{ConfigManager, StepConfig};
 use crate::control_flow::ControlFlow;
 use crate::error::StepError;
+use crate::events::subscribers::{FileSubscriber, WebhookSubscriber};
 use crate::events::types::Event;
 use crate::events::EventBus;
 use crate::plugins::registry::PluginRegistry;
@@ -144,6 +145,19 @@ impl Engine {
             }
         }
 
+        // ── Wire up event subscribers from workflow config ─────────────────────
+        let mut event_bus = EventBus::new();
+        if let Some(ref events_cfg) = workflow.config.events {
+            if let Some(ref webhook_url) = events_cfg.webhook {
+                event_bus.add_subscriber(Box::new(WebhookSubscriber::new(webhook_url.clone())));
+                tracing::info!(url = %webhook_url, "Registered webhook event subscriber");
+            }
+            if let Some(ref file_path) = events_cfg.file {
+                event_bus.add_subscriber(Box::new(FileSubscriber::new(file_path.clone())));
+                tracing::info!(path = %file_path, "Registered file event subscriber");
+            }
+        }
+
         Self {
             workflow,
             context,
@@ -159,7 +173,7 @@ impl Engine {
             state: None,
             state_file: None,
             plugin_registry: Arc::new(Mutex::new(registry)),
-            event_bus: EventBus::new(),
+            event_bus,
         }
     }
 
