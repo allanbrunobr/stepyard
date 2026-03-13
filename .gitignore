@@ -1,1 +1,5 @@
 /target
+
+# macOS AppleDouble metadata files (created by tar on macOS)
+._*
+.DS_Store

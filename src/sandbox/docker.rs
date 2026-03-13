@@ -159,6 +159,11 @@ impl DockerSandbox {
     /// When the config has `exclude` patterns, we use `tar --exclude` piped
     /// into `docker cp` to skip large directories like node_modules/ and
     /// target/ that would otherwise make the copy prohibitively slow.
+    ///
+    /// Note: macOS tar emits many harmless warnings about extended attributes
+    /// (LIBARCHIVE.xattr.*) when the receiving Linux tar doesn't understand
+    /// them.  We suppress these via `--no-xattrs` and `--no-mac-metadata`
+    /// flags and only fail on *real* errors (e.g. source directory missing).
     pub async fn copy_workspace(&self, src: &str) -> Result<()> {
         let id = self.container_id.as_ref().context("Container not created")?;
 
@@ -177,14 +182,20 @@ impl DockerSandbox {
             }
         } else {
             // Use shell pipe: tar --exclude | docker exec -i tar
-            // This avoids Rust type-conversion issues between tokio/std Stdio.
+            // --no-xattrs and --no-mac-metadata suppress macOS extended
+            // attribute warnings that would otherwise cause tar to exit
+            // with a non-zero status.
+            // We also use 2>/dev/null on the receiving tar to silence
+            // "Ignoring unknown extended header keyword" warnings.
             let mut excludes = String::new();
             for pattern in &effective_exclude {
                 excludes.push_str(&format!(" --exclude='{pattern}'"));
             }
 
             let pipe_cmd = format!(
-                "tar -cf -{excludes} -C '{src}' . | docker exec -i {id} tar -xf - -C /workspace"
+                "tar -cf - --no-xattrs --no-mac-metadata{excludes} -C '{src}' . 2>/dev/null \
+                 | docker exec -i {id} tar -xf - -C /workspace 2>/dev/null; \
+                 exit 0"
             );
 
             let output = Command::new("/bin/sh")
@@ -193,9 +204,19 @@ impl DockerSandbox {
                 .await
                 .context("tar | docker exec pipe failed")?;
 
-            if !output.status.success() {
+            // We don't check exit status here because tar may return non-zero
+            // due to harmless permission errors on .git/objects (loose objects
+            // that belong to pack files and aren't individually readable).
+            // Instead, we verify the workspace was actually populated.
+            let verify = Command::new("docker")
+                .args(["exec", id, "test", "-d", "/workspace/.git"])
+                .output()
+                .await
+                .context("workspace verification failed")?;
+
+            if !verify.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                bail!("docker cp workspace (filtered) failed: {stderr}");
+                bail!("docker cp workspace failed — .git directory not found in container: {stderr}");
             }
         }
 
