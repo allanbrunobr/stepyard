@@ -18,6 +18,10 @@ use crate::cli::display;
 use crate::config::{ConfigManager, StepConfig};
 use crate::control_flow::ControlFlow;
 use crate::error::StepError;
+use crate::events::subscribers::{FileSubscriber, WebhookSubscriber};
+use crate::events::types::Event;
+use crate::events::EventBus;
+use crate::plugins::registry::PluginRegistry;
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::docker::DockerSandbox;
 use crate::sandbox::SandboxMode;
@@ -26,6 +30,7 @@ use crate::steps::{
     agent::AgentExecutor, cmd::CmdExecutor, gate::GateExecutor, repeat::RepeatExecutor,
     script::ScriptExecutor,
 };
+use crate::plugins::loader::PluginLoader;
 use crate::workflow::schema::{OutputType, StepDef, StepType, WorkflowDef};
 use context::Context;
 use state::WorkflowState;
@@ -93,6 +98,10 @@ pub struct Engine {
     state_file: Option<PathBuf>,
     /// Pending async step futures — keyed by step name
     pending_futures: HashMap<String, JoinHandle<Result<StepOutput, StepError>>>,
+    /// Plugin registry for dynamically-loaded step types
+    plugin_registry: Arc<Mutex<PluginRegistry>>,
+    /// Event bus for lifecycle events
+    pub event_bus: EventBus,
 }
 
 impl Engine {
@@ -121,6 +130,39 @@ impl Engine {
         let config_manager = ConfigManager::new(workflow.config.clone());
         // JSON mode implies quiet (no decorative output)
         let quiet = options.quiet || options.json;
+
+        // ── Load plugins from workflow config ─────────────────────────────────
+        let mut registry = PluginRegistry::new();
+        for plugin_cfg in &workflow.config.plugins {
+            match PluginLoader::load_plugin(&plugin_cfg.path) {
+                Ok(plugin) => {
+                    tracing::info!(name = %plugin_cfg.name, path = %plugin_cfg.path, "Loaded plugin");
+                    registry.register(plugin);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        name = %plugin_cfg.name,
+                        path = %plugin_cfg.path,
+                        error = %e,
+                        "Failed to load plugin"
+                    );
+                }
+            }
+        }
+
+        // ── Wire up event subscribers from workflow config ─────────────────────
+        let mut event_bus = EventBus::new();
+        if let Some(ref events_cfg) = workflow.config.events {
+            if let Some(ref webhook_url) = events_cfg.webhook {
+                event_bus.add_subscriber(Box::new(WebhookSubscriber::new(webhook_url.clone())));
+                tracing::info!(url = %webhook_url, "Registered webhook event subscriber");
+            }
+            if let Some(ref file_path) = events_cfg.file {
+                event_bus.add_subscriber(Box::new(FileSubscriber::new(file_path.clone())));
+                tracing::info!(path = %file_path, "Registered file event subscriber");
+            }
+        }
+
         Self {
             workflow,
             context,
@@ -136,6 +178,8 @@ impl Engine {
             state: None,
             state_file: None,
             pending_futures: HashMap::new(),
+            plugin_registry: Arc::new(Mutex::new(registry)),
+            event_bus,
         }
     }
 
@@ -301,6 +345,13 @@ impl Engine {
         if self.sandbox_mode != SandboxMode::Disabled {
             self.sandbox_up().await?;
         }
+
+        // ── Event: WorkflowStarted ────────────────────────────────────────────
+        self.event_bus
+            .emit(Event::WorkflowStarted {
+                timestamp: chrono::Utc::now(),
+            })
+            .await;
 
         let start = Instant::now();
         let steps = self.workflow.steps.clone();
@@ -485,6 +536,14 @@ impl Engine {
             }
         }
 
+        // ── Event: WorkflowCompleted ──────────────────────────────────────────
+        self.event_bus
+            .emit(Event::WorkflowCompleted {
+                duration_ms: start.elapsed().as_millis() as u64,
+                timestamp: chrono::Utc::now(),
+            })
+            .await;
+
         // Propagate any error from the step loop
         run_result?;
 
@@ -512,6 +571,15 @@ impl Engine {
         };
 
         let start = Instant::now();
+
+        // ── Event: StepStarted ────────────────────────────────────────────────
+        self.event_bus
+            .emit(Event::StepStarted {
+                step_name: step_def.name.clone(),
+                step_type: step_def.step_type.to_string(),
+                timestamp: chrono::Utc::now(),
+            })
+            .await;
 
         tracing::debug!(
             step = %step_def.name,
@@ -543,13 +611,24 @@ impl Engine {
             StepType::Script => {
                 ScriptExecutor.execute(step_def, &config, &self.context).await
             }
-            _ => Err(StepError::Fail(format!(
-                "Step type '{}' not yet implemented",
-                step_def.step_type
-            ))),
+            _ => {
+                // ── Plugin dispatch ──────────────────────────────────────────
+                // Check if a loaded plugin handles this step type name
+                let type_name = step_def.step_type.to_string();
+                let registry = self.plugin_registry.lock().await;
+                if let Some(plugin) = registry.get(&type_name) {
+                    plugin.execute(step_def, &config, &self.context).await
+                } else {
+                    Err(StepError::Fail(format!(
+                        "Step type '{}' not yet implemented",
+                        step_def.step_type
+                    )))
+                }
+            }
         };
 
         let elapsed = start.elapsed();
+        let duration_ms = elapsed.as_millis() as u64;
 
         // ── Output Parsing Section ────────────────────────────────────────────
         // Parse step output according to output_type (if declared)
@@ -634,6 +713,32 @@ impl Engine {
                     display::step_fail(pb, &step_def.name, &e.to_string());
                 }
             }
+        }
+
+        // ── Event: StepCompleted / StepFailed ─────────────────────────────────
+        match &result {
+            Ok(_) => {
+                self.event_bus
+                    .emit(Event::StepCompleted {
+                        step_name: step_def.name.clone(),
+                        step_type: step_def.step_type.to_string(),
+                        duration_ms,
+                        timestamp: chrono::Utc::now(),
+                    })
+                    .await;
+            }
+            Err(e) if !matches!(e, StepError::ControlFlow(_)) => {
+                self.event_bus
+                    .emit(Event::StepFailed {
+                        step_name: step_def.name.clone(),
+                        step_type: step_def.step_type.to_string(),
+                        error: e.to_string(),
+                        duration_ms,
+                        timestamp: chrono::Utc::now(),
+                    })
+                    .await;
+            }
+            _ => {}
         }
 
         result

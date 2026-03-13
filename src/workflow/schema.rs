@@ -44,6 +44,29 @@ pub struct WorkflowConfig {
     pub gate: HashMap<String, serde_yaml::Value>,
     #[serde(default)]
     pub patterns: HashMap<String, HashMap<String, serde_yaml::Value>>,
+    /// Dynamic plugin definitions to load at workflow startup
+    #[serde(default)]
+    pub plugins: Vec<PluginDef>,
+    /// Event subscriber configuration
+    pub events: Option<EventsConfig>,
+}
+
+/// Definition of a dynamic plugin to load from a shared library
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PluginDef {
+    /// Name used to reference this plugin as a step type in the workflow YAML
+    pub name: String,
+    /// Path to the shared library file (.so / .dylib)
+    pub path: String,
+}
+
+/// Configuration for event subscribers
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EventsConfig {
+    /// HTTP endpoint to POST events to (fire-and-forget)
+    pub webhook: Option<String>,
+    /// File path to append events as JSONL
+    pub file: Option<String>,
 }
 
 /// Named scope (sub-workflow)

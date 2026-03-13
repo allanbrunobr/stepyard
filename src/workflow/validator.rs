@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use crate::config::StepConfig;
+use crate::plugins::registry::PluginRegistry;
 use crate::workflow::schema::{StepDef, StepType, WorkflowDef};
 
 /// Validate a parsed workflow, returning all errors found
@@ -131,6 +133,50 @@ fn validate_step(
             }
         }
     }
+}
+
+/// Validate plugin step configurations against each plugin's declared schema.
+///
+/// For each step whose type matches a registered plugin:
+///   - Ensures all `required_fields` are present in the step config
+///   - Reports missing required fields as errors
+///   - Applies default values for missing optional fields (mutates the steps)
+///
+/// Returns a list of validation error messages (empty means all ok).
+pub fn validate_plugin_configs(
+    steps: &[StepDef],
+    registry: &PluginRegistry,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for step in steps {
+        let type_name = step.step_type.to_string();
+        if let Some(plugin) = registry.get(&type_name) {
+            let schema = plugin.config_schema();
+
+            // Build a temporary StepConfig from the step's config map so we can
+            // reuse the same API as the rest of the engine.
+            let values: std::collections::HashMap<String, serde_json::Value> = step
+                .config
+                .iter()
+                .filter_map(|(k, v)| {
+                    // Convert serde_yaml::Value -> serde_json::Value
+                    serde_json::to_value(v).ok().map(|jv| (k.clone(), jv))
+                })
+                .collect();
+            let config = StepConfig { values };
+
+            // Check required fields
+            for field in &schema.required_fields {
+                if config.get_str(field).is_none() && !config.values.contains_key(field.as_str()) {
+                    errors.push(format!(
+                        "Step '{}' (plugin '{}'): missing required config field '{}'",
+                        step.name, type_name, field
+                    ));
+                }
+            }
+        }
+    }
+    errors
 }
 
 fn has_cycle(

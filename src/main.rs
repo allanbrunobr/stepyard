@@ -7,6 +7,8 @@ mod config;
 mod control_flow;
 mod engine;
 mod error;
+mod events;
+mod plugins;
 mod sandbox;
 mod steps;
 mod workflow;
