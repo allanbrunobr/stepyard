@@ -115,7 +115,9 @@ steps:
     type: map
     scope: review_file
     items: "{{ steps.changed_files.stdout }}"
-    concurrency: 4
+    parallel: 4
+    config:
+      collect: text
 
   # 5. Consolidate all reviews into a final report
   - name: summary
@@ -134,7 +136,7 @@ steps:
       Remove duplicate findings. Be concise. Include file name and line number for each issue.
 
       ## Per-file reviews:
-      {{ steps.file_reviews.outputs | join(sep='\n\n---\n\n') }}
+      {{ steps.file_reviews.stdout }}
 
   # 6. Post comment on PR (if target is a PR number)
   - name: post_comment

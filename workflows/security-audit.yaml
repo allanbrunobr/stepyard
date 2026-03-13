@@ -107,7 +107,9 @@ steps:
     type: map
     scope: audit_file
     items: "{{ steps.find_files.stdout }}"
-    concurrency: 5
+    parallel: 5
+    config:
+      collect: text
 
   # 4. Consolidate all audit results into a final report
   - name: final_report
@@ -137,7 +139,7 @@ steps:
       Deduplicate findings. Include file path and line reference for each issue.
 
       ## Raw Findings Per File:
-      {{ steps.file_audits.outputs | join(sep='\n\n---\n\n') }}
+      {{ steps.file_audits.stdout }}
 
   # 5. Save report to file
   - name: save_report

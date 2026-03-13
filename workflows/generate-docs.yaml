@@ -121,7 +121,9 @@ steps:
     type: map
     scope: document_file
     items: "{{ steps.find_sources.stdout }}"
-    concurrency: 4
+    parallel: 4
+    config:
+      collect: text
 
   # 5. Generate an index.md linking all generated docs
   - name: generate_index
@@ -130,7 +132,7 @@ steps:
       Generate a Markdown index file (index.md) for a documentation directory.
 
       The following documentation files were generated:
-      {{ steps.generated_docs.outputs | join(sep='\n') }}
+      {{ steps.generated_docs.stdout }}
 
       Create a clean index.md with:
       - Title: "# API Documentation"

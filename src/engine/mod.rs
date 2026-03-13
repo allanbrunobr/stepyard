@@ -1094,12 +1094,15 @@ fn extract_parsed_value(output: &StepOutput, step_def: &StepDef) -> Option<Parse
     Some(parsed)
 }
 
-/// Truncate a string to at most `max` chars, appending "…" if cut
+/// Truncate a string to at most `max` chars, appending "…" if cut.
+/// Uses char boundaries to avoid panicking on multi-byte UTF-8 (e.g. emojis).
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let char_count = s.chars().count();
+    if char_count <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        let end: usize = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
+        format!("{}…", &s[..end])
     }
 }
 
