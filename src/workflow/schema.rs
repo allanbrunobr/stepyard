@@ -2,6 +2,18 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+/// Declared output type for a step — controls how raw output is parsed
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputType {
+    #[default]
+    Text,
+    Json,
+    Integer,
+    Lines,
+    Boolean,
+}
+
 /// Top-level workflow definition
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkflowDef {
@@ -78,6 +90,9 @@ pub struct StepDef {
 
     // scope output
     pub outputs: Option<String>,
+
+    // output parsing
+    pub output_type: Option<OutputType>,
 }
 
 /// All supported step types in a workflow.

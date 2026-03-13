@@ -24,6 +24,17 @@ use crate::workflow::schema::StepDef;
 /// Shared reference to a Docker sandbox (None when sandbox is disabled)
 pub type SharedSandbox = Option<Arc<Mutex<DockerSandbox>>>;
 
+/// Typed parsed value produced by output parsing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParsedValue {
+    Text(String),
+    Json(serde_json::Value),
+    Integer(i64),
+    Lines(Vec<String>),
+    Boolean(bool),
+}
+
 /// Trait that each step type implements
 #[async_trait]
 pub trait StepExecutor: Send + Sync {
@@ -100,6 +111,7 @@ impl StepOutput {
             .filter(|l| !l.is_empty())
             .collect()
     }
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
