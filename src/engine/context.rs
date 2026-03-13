@@ -179,6 +179,46 @@ mod tests {
     }
 
     #[test]
+    fn agent_session_id_accessible_in_template() {
+        use crate::steps::{AgentOutput, AgentStats, StepOutput};
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store(
+            "scan",
+            StepOutput::Agent(AgentOutput {
+                response: "done".to_string(),
+                session_id: Some("sess-abc".to_string()),
+                stats: AgentStats::default(),
+            }),
+        );
+        let result = ctx.render_template("{{ steps.scan.session_id }}").unwrap();
+        assert_eq!(result, "sess-abc");
+    }
+
+    #[test]
+    fn cmd_step_session_id_is_empty_string() {
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("build", cmd_output("output", 0));
+        let result = ctx.render_template("{{ steps.build.session_id }}").unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn agent_session_id_none_renders_empty_string() {
+        use crate::steps::{AgentOutput, AgentStats, StepOutput};
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store(
+            "scan",
+            StepOutput::Agent(AgentOutput {
+                response: "done".to_string(),
+                session_id: None,
+                stats: AgentStats::default(),
+            }),
+        );
+        let result = ctx.render_template("{{ steps.scan.session_id }}").unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
     fn child_inherits_parent_steps() {
         let mut parent = Context::new("test".to_string(), HashMap::new());
         parent.store("a", cmd_output("alpha", 0));
@@ -202,5 +242,14 @@ fn collect_steps(ctx: &Context, map: &mut HashMap<String, serde_json::Value>) {
 
 fn step_output_to_value(output: &StepOutput) -> serde_json::Value {
     // Serialize to JSON value for template access
-    serde_json::to_value(output).unwrap_or(serde_json::Value::Null)
+    let mut val = serde_json::to_value(output).unwrap_or(serde_json::Value::Null);
+    // Story 2.3: ensure session_id is always a string (empty if not an agent output or no session)
+    if let serde_json::Value::Object(ref mut map) = val {
+        let sid = match map.get("session_id") {
+            Some(serde_json::Value::String(s)) => serde_json::Value::String(s.clone()),
+            _ => serde_json::Value::String(String::new()),
+        };
+        map.insert("session_id".to_string(), sid);
+    }
+    val
 }
