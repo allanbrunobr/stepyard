@@ -11,6 +11,104 @@ use crate::workflow::schema::StepDef;
 
 use super::{ChatOutput, StepExecutor, StepOutput};
 
+/// Truncation strategy for chat history (Story 5.2)
+#[derive(Debug, Clone)]
+pub enum TruncationStrategy {
+    /// Keep all messages (default)
+    None,
+    /// Keep the last N messages
+    Last(usize),
+    /// Keep the first N messages
+    First(usize),
+    /// Keep the first `first` and last `last` messages
+    FirstLast { first: usize, last: usize },
+    /// Drop oldest messages until total estimated tokens <= max_tokens
+    SlidingWindow { max_tokens: usize },
+}
+
+impl TruncationStrategy {
+    /// Parse from StepConfig keys: truncation_strategy, truncation_count, truncation_first,
+    /// truncation_last, truncation_max_tokens
+    pub fn from_config(config: &crate::config::StepConfig) -> Self {
+        match config.get_str("truncation_strategy") {
+            Some("last") => {
+                let n = config.get_u64("truncation_count").unwrap_or(10) as usize;
+                TruncationStrategy::Last(n)
+            }
+            Some("first") => {
+                let n = config.get_u64("truncation_count").unwrap_or(10) as usize;
+                TruncationStrategy::First(n)
+            }
+            Some("first_last") => {
+                let first = config.get_u64("truncation_first").unwrap_or(2) as usize;
+                let last = config.get_u64("truncation_last").unwrap_or(5) as usize;
+                TruncationStrategy::FirstLast { first, last }
+            }
+            Some("sliding_window") => {
+                let max_tokens =
+                    config.get_u64("truncation_max_tokens").unwrap_or(50_000) as usize;
+                TruncationStrategy::SlidingWindow { max_tokens }
+            }
+            _ => TruncationStrategy::None,
+        }
+    }
+}
+
+/// Estimate token count using simple word-based heuristic (words * 1.3)
+fn estimate_tokens(text: &str) -> usize {
+    let words = text.split_whitespace().count();
+    ((words as f64) * 1.3).ceil() as usize
+}
+
+/// Apply truncation to a list of messages, returning the subset to send
+pub fn truncate_messages(
+    messages: &[ChatMessage],
+    strategy: &TruncationStrategy,
+) -> Vec<ChatMessage> {
+    match strategy {
+        TruncationStrategy::None => messages.to_vec(),
+        TruncationStrategy::Last(n) => {
+            let start = messages.len().saturating_sub(*n);
+            messages[start..].to_vec()
+        }
+        TruncationStrategy::First(n) => {
+            messages[..messages.len().min(*n)].to_vec()
+        }
+        TruncationStrategy::FirstLast { first, last } => {
+            let len = messages.len();
+            let first_end = (*first).min(len);
+            let last_start = len.saturating_sub(*last);
+            if first_end >= last_start {
+                // Overlap or adjacent — return all
+                messages.to_vec()
+            } else {
+                let mut result = messages[..first_end].to_vec();
+                result.extend_from_slice(&messages[last_start..]);
+                result
+            }
+        }
+        TruncationStrategy::SlidingWindow { max_tokens } => {
+            // Greedily include messages from oldest to newest until token budget exceeded
+            // Then drop from the front until we fit
+            let total_tokens: usize =
+                messages.iter().map(|m| estimate_tokens(&m.content)).sum();
+            if total_tokens <= *max_tokens {
+                return messages.to_vec();
+            }
+            let mut tokens_used = total_tokens;
+            let mut drop_count = 0;
+            for msg in messages.iter() {
+                if tokens_used <= *max_tokens {
+                    break;
+                }
+                tokens_used -= estimate_tokens(&msg.content);
+                drop_count += 1;
+            }
+            messages[drop_count..].to_vec()
+        }
+    }
+}
+
 pub struct ChatExecutor;
 
 #[async_trait]
@@ -62,10 +160,13 @@ impl StepExecutor for ChatExecutor {
 
         let prompt = ctx.render_template(prompt_template)?;
 
-        // Story 5.1: Build message list from chat history (if session configured)
+        // Story 5.1 + 5.2: Build message list from chat history with optional truncation
         let session_name = config.get_str("session");
+        let truncation = TruncationStrategy::from_config(config);
         let mut messages: Vec<serde_json::Value> = if let Some(session) = session_name {
-            ctx.get_chat_messages(session)
+            let history = ctx.get_chat_messages(session);
+            let truncated = truncate_messages(&history, &truncation);
+            truncated
                 .into_iter()
                 .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
                 .collect()
@@ -383,6 +484,54 @@ mod tests {
         } else {
             panic!("Expected Chat output");
         }
+    }
+
+    fn make_messages(count: usize) -> Vec<ChatMessage> {
+        (0..count)
+            .map(|i| ChatMessage {
+                role: if i % 2 == 0 { "user".to_string() } else { "assistant".to_string() },
+                content: format!("message {}", i),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn truncation_last_keeps_n_messages() {
+        let msgs = make_messages(50);
+        let result = truncate_messages(&msgs, &TruncationStrategy::Last(10));
+        assert_eq!(result.len(), 10);
+        assert_eq!(result[0].content, "message 40");
+        assert_eq!(result[9].content, "message 49");
+    }
+
+    #[test]
+    fn truncation_first_last_keeps_first_and_last() {
+        let msgs = make_messages(50);
+        let result =
+            truncate_messages(&msgs, &TruncationStrategy::FirstLast { first: 2, last: 5 });
+        assert_eq!(result.len(), 7);
+        assert_eq!(result[0].content, "message 0");
+        assert_eq!(result[1].content, "message 1");
+        assert_eq!(result[2].content, "message 45");
+    }
+
+    #[test]
+    fn truncation_sliding_window_fits_within_tokens() {
+        // Each message "message X" is ~1-2 words → ~2-3 estimated tokens
+        // Build 50 messages; set max_tokens low enough to drop some
+        let msgs = make_messages(50);
+        let result =
+            truncate_messages(&msgs, &TruncationStrategy::SlidingWindow { max_tokens: 50 });
+        // Total tokens of 50 messages would exceed 50; result should be smaller
+        let total: usize = result.iter().map(|m| estimate_tokens(&m.content)).sum();
+        assert!(total <= 50, "Expected tokens <= 50, got {}", total);
+    }
+
+    #[test]
+    fn truncation_none_returns_all() {
+        let msgs = make_messages(10);
+        let result = truncate_messages(&msgs, &TruncationStrategy::None);
+        assert_eq!(result.len(), 10);
     }
 
     #[tokio::test]
