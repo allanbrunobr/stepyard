@@ -8,15 +8,21 @@ pub mod parallel;
 pub mod repeat;
 pub mod template_step;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use crate::config::StepConfig;
 use crate::engine::context::Context;
 use crate::error::StepError;
+use crate::sandbox::docker::DockerSandbox;
 use crate::workflow::schema::StepDef;
+
+/// Shared reference to a Docker sandbox (None when sandbox is disabled)
+pub type SharedSandbox = Option<Arc<Mutex<DockerSandbox>>>;
 
 /// Trait that each step type implements
 #[async_trait]
@@ -26,6 +32,18 @@ pub trait StepExecutor: Send + Sync {
         step_def: &StepDef,
         config: &StepConfig,
         context: &Context,
+    ) -> Result<StepOutput, StepError>;
+}
+
+/// Extended trait for executors that can run inside a sandbox
+#[async_trait]
+pub trait SandboxAwareExecutor: Send + Sync {
+    async fn execute_sandboxed(
+        &self,
+        step_def: &StepDef,
+        config: &StepConfig,
+        context: &Context,
+        sandbox: &SharedSandbox,
     ) -> Result<StepOutput, StepError>;
 }
 

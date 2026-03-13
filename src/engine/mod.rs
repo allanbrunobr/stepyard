@@ -4,16 +4,20 @@ mod template;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 use colored::Colorize;
 use serde::Serialize;
+use tokio::sync::Mutex;
 
 use crate::cli::display;
 use crate::config::{ConfigManager, StepConfig};
 use crate::control_flow::ControlFlow;
 use crate::error::StepError;
+use crate::sandbox::config::SandboxConfig;
+use crate::sandbox::docker::DockerSandbox;
 use crate::sandbox::SandboxMode;
 use crate::steps::*;
 use crate::steps::{
@@ -52,6 +56,9 @@ pub struct StepRecord {
     pub output_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Whether this step ran inside the Docker sandbox
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub sandboxed: bool,
 }
 
 /// Full workflow JSON output (--json mode)
@@ -59,6 +66,7 @@ pub struct StepRecord {
 pub struct WorkflowJsonOutput {
     pub workflow_name: String,
     pub status: String,
+    pub sandbox_mode: String,
     pub steps: Vec<StepRecord>,
     pub total_duration_secs: f64,
     pub total_tokens: u64,
@@ -75,6 +83,8 @@ pub struct Engine {
     pub dry_run: bool,
     resume_from: Option<String>,
     sandbox_mode: SandboxMode,
+    /// Shared Docker sandbox instance (created during run(), destroyed on completion)
+    sandbox: SharedSandbox,
     step_records: Vec<StepRecord>,
     state: Option<WorkflowState>,
     state_file: Option<PathBuf>,
@@ -116,6 +126,7 @@ impl Engine {
             dry_run: options.dry_run,
             resume_from: options.resume_from,
             sandbox_mode: options.sandbox_mode,
+            sandbox: None,
             step_records: Vec::new(),
             state: None,
             state_file: None,
@@ -132,9 +143,7 @@ impl Engine {
         let total_tokens: u64 = self
             .step_records
             .iter()
-            .map(|r| {
-                r.input_tokens.unwrap_or(0) + r.output_tokens.unwrap_or(0)
-            })
+            .map(|r| r.input_tokens.unwrap_or(0) + r.output_tokens.unwrap_or(0))
             .sum();
         let total_cost: f64 = self
             .step_records
@@ -145,12 +154,83 @@ impl Engine {
         WorkflowJsonOutput {
             workflow_name: self.workflow.name.clone(),
             status: status.to_string(),
+            sandbox_mode: format!("{:?}", self.sandbox_mode),
             steps: self.step_records.clone(),
             total_duration_secs: total_duration.as_secs_f64(),
             total_tokens,
             total_cost_usd: total_cost,
         }
     }
+
+    // ── Sandbox Lifecycle ────────────────────────────────────────────────────
+
+    /// Create and start the Docker sandbox container.
+    /// Copies the current working directory into the container as /workspace.
+    async fn sandbox_up(&mut self) -> Result<()> {
+        let sandbox_config = SandboxConfig::from_global_config(&self.workflow.config.global);
+        let workspace = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+
+        let mut docker = DockerSandbox::new(sandbox_config, &workspace);
+
+        if !self.quiet {
+            println!("  {} Creating Docker sandbox container…", "🐳".cyan());
+        }
+
+        docker.create().await?;
+        docker.copy_workspace(&workspace).await?;
+
+        if !self.quiet {
+            println!(
+                "  {} Sandbox ready — workspace copied to container",
+                "🔒".green()
+            );
+        }
+
+        self.sandbox = Some(Arc::new(Mutex::new(docker)));
+        Ok(())
+    }
+
+    /// Copy results from sandbox back to host, then destroy the container.
+    async fn sandbox_down(&mut self) -> Result<()> {
+        if let Some(sb) = self.sandbox.take() {
+            let mut docker = sb.lock().await;
+
+            let workspace = std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string());
+
+            if !self.quiet {
+                println!("  {} Copying results from sandbox…", "📦".cyan());
+            }
+
+            docker.copy_results(&workspace).await?;
+            docker.destroy().await?;
+
+            if !self.quiet {
+                println!("  {} Sandbox destroyed", "🗑️ ".dimmed());
+            }
+        }
+        Ok(())
+    }
+
+    /// Determine whether a step should run inside the sandbox based on sandbox_mode
+    fn should_sandbox_step(&self, step_type: &StepType) -> bool {
+        match self.sandbox_mode {
+            SandboxMode::Disabled => false,
+            SandboxMode::FullWorkflow | SandboxMode::Devbox => {
+                // ALL executable steps run inside the sandbox
+                matches!(step_type, StepType::Cmd | StepType::Agent)
+            }
+            SandboxMode::AgentOnly => {
+                // Only agent steps run inside the sandbox; cmd steps run on host
+                matches!(step_type, StepType::Agent)
+            }
+        }
+    }
+
+    // ── Main Run Loop ────────────────────────────────────────────────────────
 
     pub async fn run(&mut self) -> Result<StepOutput> {
         // ── State / Resume setup ──────────────────────────────────────────────
@@ -163,7 +243,6 @@ impl Engine {
                 Some(path) => {
                     match WorkflowState::load(&path) {
                         Ok(s) => {
-                            // Verify that the resume step exists in the workflow
                             let exists = self.workflow.steps.iter().any(|s| &s.name == resume_step);
                             if !exists {
                                 bail!(
@@ -208,6 +287,11 @@ impl Engine {
             }
         }
 
+        // ── Sandbox: Create container BEFORE step execution ───────────────────
+        if self.sandbox_mode != SandboxMode::Disabled {
+            self.sandbox_up().await?;
+        }
+
         let start = Instant::now();
         let steps = self.workflow.steps.clone();
         let mut last_output = StepOutput::Empty;
@@ -216,84 +300,101 @@ impl Engine {
         let resume_from = self.resume_from.clone();
         let mut resuming = resume_from.is_some();
 
-        for step_def in &steps {
-            // ── Resume: skip steps before the resume point ────────────────────
-            if resuming {
-                let is_resume_point = resume_from.as_deref() == Some(&step_def.name);
-                if !is_resume_point {
-                    // Load this step's output from state
-                    if let Some(ref ls) = loaded_state {
-                        if let Some(output) = ls.steps.get(&step_def.name) {
-                            self.context.store(&step_def.name, output.clone());
-                            if !self.quiet {
-                                println!(
-                                    "  {} {} {}",
-                                    "⏭".yellow(),
-                                    step_def.name,
-                                    "(skipped — loaded from state)".dimmed()
-                                );
+        // ── Execute steps ─────────────────────────────────────────────────────
+        let run_result: Result<(), anyhow::Error> = async {
+            for step_def in &steps {
+                // ── Resume: skip steps before the resume point ────────────────
+                if resuming {
+                    let is_resume_point = resume_from.as_deref() == Some(&step_def.name);
+                    if !is_resume_point {
+                        if let Some(ref ls) = loaded_state {
+                            if let Some(output) = ls.steps.get(&step_def.name) {
+                                self.context.store(&step_def.name, output.clone());
+                                if !self.quiet {
+                                    println!(
+                                        "  {} {} {}",
+                                        "⏭".yellow(),
+                                        step_def.name,
+                                        "(skipped — loaded from state)".dimmed()
+                                    );
+                                }
+                                self.step_records.push(StepRecord {
+                                    name: step_def.name.clone(),
+                                    step_type: step_def.step_type.to_string(),
+                                    status: "skipped_resume".to_string(),
+                                    duration_secs: 0.0,
+                                    output_summary: truncate(output.text(), 100),
+                                    input_tokens: None,
+                                    output_tokens: None,
+                                    cost_usd: None,
+                                    sandboxed: false,
+                                });
                             }
-                            self.step_records.push(StepRecord {
-                                name: step_def.name.clone(),
-                                step_type: step_def.step_type.to_string(),
-                                status: "skipped_resume".to_string(),
-                                duration_secs: 0.0,
-                                output_summary: truncate(output.text(), 100),
-                                input_tokens: None,
-                                output_tokens: None,
-                                cost_usd: None,
-                            });
                         }
+                        continue;
                     }
-                    continue;
+                    resuming = false;
                 }
-                resuming = false; // Execute from this step onwards
-            }
 
-            match self.execute_step(step_def).await {
-                Ok(output) => {
-                    // Save step output to persisted state
-                    current_state.steps.insert(step_def.name.clone(), output.clone());
-                    if let Some(ref p) = self.state_file {
-                        let _ = current_state.save(p);
+                match self.execute_step(step_def).await {
+                    Ok(output) => {
+                        current_state.steps.insert(step_def.name.clone(), output.clone());
+                        if let Some(ref p) = self.state_file {
+                            let _ = current_state.save(p);
+                        }
+                        last_output = output;
+                        step_count += 1;
                     }
-                    last_output = output;
-                    step_count += 1;
-                }
-                Err(StepError::ControlFlow(ControlFlow::Skip { message })) => {
-                    self.context.store(&step_def.name, StepOutput::Empty);
-                    if !self.quiet {
-                        let pb = display::step_start(&step_def.name, &step_def.step_type.to_string());
-                        display::step_skip(&pb, &step_def.name, &message);
+                    Err(StepError::ControlFlow(ControlFlow::Skip { message })) => {
+                        self.context.store(&step_def.name, StepOutput::Empty);
+                        if !self.quiet {
+                            let pb = display::step_start(&step_def.name, &step_def.step_type.to_string());
+                            display::step_skip(&pb, &step_def.name, &message);
+                        }
+                        self.step_records.push(StepRecord {
+                            name: step_def.name.clone(),
+                            step_type: step_def.step_type.to_string(),
+                            status: "skipped".to_string(),
+                            duration_secs: 0.0,
+                            output_summary: message.clone(),
+                            input_tokens: None,
+                            output_tokens: None,
+                            cost_usd: None,
+                            sandboxed: false,
+                        });
                     }
-                    self.step_records.push(StepRecord {
-                        name: step_def.name.clone(),
-                        step_type: step_def.step_type.to_string(),
-                        status: "skipped".to_string(),
-                        duration_secs: 0.0,
-                        output_summary: message.clone(),
-                        input_tokens: None,
-                        output_tokens: None,
-                        cost_usd: None,
-                    });
-                }
-                Err(StepError::ControlFlow(ControlFlow::Fail { message })) => {
-                    if !self.quiet {
-                        display::workflow_failed(&step_def.name, &message);
+                    Err(StepError::ControlFlow(ControlFlow::Fail { message })) => {
+                        if !self.quiet {
+                            display::workflow_failed(&step_def.name, &message);
+                        }
+                        bail!("Step '{}' failed: {}", step_def.name, message);
                     }
-                    bail!("Step '{}' failed: {}", step_def.name, message);
-                }
-                Err(StepError::ControlFlow(ControlFlow::Break { .. })) => {
-                    break;
-                }
-                Err(e) => {
-                    if !self.quiet {
-                        display::workflow_failed(&step_def.name, &e.to_string());
+                    Err(StepError::ControlFlow(ControlFlow::Break { .. })) => {
+                        break;
                     }
-                    return Err(e.into());
+                    Err(e) => {
+                        if !self.quiet {
+                            display::workflow_failed(&step_def.name, &e.to_string());
+                        }
+                        return Err(e.into());
+                    }
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        // ── Sandbox: Destroy container AFTER all steps (always, even on error) ─
+        if self.sandbox_mode != SandboxMode::Disabled {
+            if let Err(e) = self.sandbox_down().await {
+                if !self.quiet {
+                    eprintln!("  {} Sandbox cleanup warning: {e}", "⚠".yellow());
                 }
             }
         }
+
+        // Propagate any error from the step loop
+        run_result?;
 
         if !self.quiet {
             display::workflow_done(start.elapsed(), step_count);
@@ -305,12 +406,15 @@ impl Engine {
 
     pub async fn execute_step(&mut self, step_def: &StepDef) -> Result<StepOutput, StepError> {
         let config = self.resolve_config(step_def);
+        let use_sandbox = self.should_sandbox_step(&step_def.step_type);
 
         let pb = if !self.quiet {
-            Some(display::step_start(
-                &step_def.name,
-                &step_def.step_type.to_string(),
-            ))
+            let label = if use_sandbox {
+                format!("{} 🐳", step_def.step_type)
+            } else {
+                step_def.step_type.to_string()
+            };
+            Some(display::step_start(&step_def.name, &label))
         } else {
             None
         };
@@ -320,12 +424,24 @@ impl Engine {
         tracing::debug!(
             step = %step_def.name,
             step_type = %step_def.step_type,
+            sandboxed = use_sandbox,
             "Executing step"
         );
 
+        // Choose sandbox-aware execution when sandbox is active for this step
+        let sandbox_ref = if use_sandbox { &self.sandbox } else { &None };
+
         let result = match step_def.step_type {
-            StepType::Cmd => CmdExecutor.execute(step_def, &config, &self.context).await,
-            StepType::Agent => AgentExecutor.execute(step_def, &config, &self.context).await,
+            StepType::Cmd => {
+                CmdExecutor
+                    .execute_sandboxed(step_def, &config, &self.context, sandbox_ref)
+                    .await
+            }
+            StepType::Agent => {
+                AgentExecutor
+                    .execute_sandboxed(step_def, &config, &self.context, sandbox_ref)
+                    .await
+            }
             StepType::Gate => GateExecutor.execute(step_def, &config, &self.context).await,
             StepType::Repeat => {
                 RepeatExecutor::new(&self.workflow.scopes)
@@ -346,12 +462,12 @@ impl Engine {
                     step = %step_def.name,
                     step_type = %step_def.step_type,
                     duration_ms = elapsed.as_millis(),
+                    sandboxed = use_sandbox,
                     status = "ok",
                     "Step completed"
                 );
                 self.context.store(&step_def.name, output.clone());
 
-                // Collect record for JSON output
                 let (it, ot, cost) = token_stats(output);
                 self.step_records.push(StepRecord {
                     name: step_def.name.clone(),
@@ -362,6 +478,7 @@ impl Engine {
                     input_tokens: it,
                     output_tokens: ot,
                     cost_usd: cost,
+                    sandboxed: use_sandbox,
                 });
 
                 if let Some(pb) = &pb {
@@ -405,6 +522,7 @@ impl Engine {
                     input_tokens: None,
                     output_tokens: None,
                     cost_usd: None,
+                    sandboxed: use_sandbox,
                 });
                 if let Some(pb) = &pb {
                     display::step_fail(pb, &step_def.name, &e.to_string());
@@ -420,6 +538,9 @@ impl Engine {
         use colored::Colorize;
 
         println!("{} {} (dry-run)", "▶".cyan().bold(), self.workflow.name.bold());
+        if self.sandbox_mode != SandboxMode::Disabled {
+            println!("  {} Sandbox mode: {:?}", "🔒".cyan(), self.sandbox_mode);
+        }
         println!();
 
         let steps = &self.workflow.steps;
@@ -429,11 +550,18 @@ impl Engine {
             let branch = if is_last { "└──" } else { "├──" };
             let config = self.resolve_config(step);
 
+            let sandbox_indicator = if self.should_sandbox_step(&step.step_type) {
+                " 🐳"
+            } else {
+                ""
+            };
+
             println!(
-                "{} {} {}",
+                "{} {} {}{}",
                 branch.dimmed(),
                 step.name.bold(),
-                format!("[{}]", step.step_type).cyan()
+                format!("[{}]", step.step_type).cyan(),
+                sandbox_indicator
             );
 
             let indent = if is_last { "    " } else { "│   " };
@@ -517,7 +645,6 @@ impl Engine {
             }
         }
 
-        // Show timeout if set
         if let Some(t) = config.get_str("timeout") {
             println!("{}  timeout: {}", indent, t.dimmed());
         }
@@ -637,12 +764,13 @@ steps:
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].name, "alpha");
         assert_eq!(records[0].status, "ok");
+        assert!(!records[0].sandboxed);
         assert_eq!(records[1].name, "beta");
         assert_eq!(records[1].status, "ok");
     }
 
     #[tokio::test]
-    async fn json_output_is_valid_structure() {
+    async fn json_output_includes_sandbox_mode() {
         let yaml = r#"
 name: json-output-test
 steps:
@@ -665,11 +793,49 @@ steps:
 
         assert_eq!(parsed["workflow_name"], "json-output-test");
         assert_eq!(parsed["status"], "success");
+        assert_eq!(parsed["sandbox_mode"], "Disabled");
         assert!(parsed["steps"].is_array());
         assert_eq!(parsed["steps"][0]["name"], "greet");
-        assert!(parsed["total_duration_secs"].is_number());
-        assert!(parsed["total_tokens"].is_number());
-        assert!(parsed["total_cost_usd"].is_number());
+    }
+
+    #[test]
+    fn should_sandbox_step_logic() {
+        let yaml = r#"
+name: test
+steps:
+  - name: s
+    type: cmd
+    run: "echo test"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+
+        // Disabled mode → nothing sandboxed
+        let engine = Engine::new(wf.clone(), "".to_string(), HashMap::new(), false, true);
+        assert!(!engine.should_sandbox_step(&StepType::Cmd));
+        assert!(!engine.should_sandbox_step(&StepType::Agent));
+        assert!(!engine.should_sandbox_step(&StepType::Gate));
+
+        // FullWorkflow mode → cmd + agent sandboxed
+        let opts = EngineOptions {
+            sandbox_mode: SandboxMode::FullWorkflow,
+            quiet: true,
+            ..Default::default()
+        };
+        let engine = Engine::with_options(wf.clone(), "".to_string(), HashMap::new(), opts);
+        assert!(engine.should_sandbox_step(&StepType::Cmd));
+        assert!(engine.should_sandbox_step(&StepType::Agent));
+        assert!(!engine.should_sandbox_step(&StepType::Gate));
+
+        // AgentOnly mode → only agent sandboxed
+        let opts = EngineOptions {
+            sandbox_mode: SandboxMode::AgentOnly,
+            quiet: true,
+            ..Default::default()
+        };
+        let engine = Engine::with_options(wf.clone(), "".to_string(), HashMap::new(), opts);
+        assert!(!engine.should_sandbox_step(&StepType::Cmd));
+        assert!(engine.should_sandbox_step(&StepType::Agent));
+        assert!(!engine.should_sandbox_step(&StepType::Gate));
     }
 
     #[test]
@@ -701,7 +867,6 @@ steps:
 "#;
         let wf = crate::workflow::parser::parse_str(yaml).unwrap();
         let engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
-        // Should not panic
         engine.dry_run();
     }
 
@@ -760,7 +925,6 @@ steps:
 
     #[tokio::test]
     async fn resume_fails_for_unknown_step() {
-        // Create a fake state file
         let workflow_name = "test-resume-unknown-step";
         let state = WorkflowState::new(workflow_name);
         let tmp_path = format!("/tmp/minion-{workflow_name}-20991231235959.state.json");
@@ -789,7 +953,6 @@ steps:
             "Expected 'not found in workflow' but got: {err}"
         );
 
-        // Cleanup
         let _ = std::fs::remove_file(&path);
     }
 }

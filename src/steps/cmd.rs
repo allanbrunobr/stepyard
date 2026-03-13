@@ -8,7 +8,7 @@ use crate::engine::context::Context;
 use crate::error::StepError;
 use crate::workflow::schema::StepDef;
 
-use super::{CmdOutput, StepExecutor, StepOutput};
+use super::{CmdOutput, SandboxAwareExecutor, SharedSandbox, StepExecutor, StepOutput};
 
 pub struct CmdExecutor;
 
@@ -20,39 +20,71 @@ impl StepExecutor for CmdExecutor {
         config: &StepConfig,
         ctx: &Context,
     ) -> Result<StepOutput, StepError> {
+        self.execute_sandboxed(step, config, ctx, &None).await
+    }
+}
+
+#[async_trait]
+impl SandboxAwareExecutor for CmdExecutor {
+    async fn execute_sandboxed(
+        &self,
+        step: &StepDef,
+        config: &StepConfig,
+        ctx: &Context,
+        sandbox: &SharedSandbox,
+    ) -> Result<StepOutput, StepError> {
         let run_template = step
             .run
             .as_ref()
             .ok_or_else(|| StepError::Fail("cmd step missing 'run' field".into()))?;
 
         let command = ctx.render_template(run_template)?;
-        let shell = config.get_str("shell").unwrap_or("/bin/bash");
         let timeout = config
             .get_duration("timeout")
             .unwrap_or(Duration::from_secs(60));
         let fail_on_error = config.get_bool("fail_on_error");
-        let working_dir = config.get_str("working_directory").map(String::from);
-
-        let mut cmd = Command::new(shell);
-        cmd.arg("-c").arg(&command);
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        if let Some(dir) = &working_dir {
-            cmd.current_dir(dir);
-        }
 
         let start = Instant::now();
-        let output = tokio::time::timeout(timeout, cmd.output())
-            .await
-            .map_err(|_| StepError::Timeout(timeout))?
-            .map_err(|e| StepError::Fail(format!("Failed to spawn command: {e}")))?;
 
-        let result = CmdOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-            duration: start.elapsed(),
+        // ── Sandbox path: run inside Docker container ─────────────────────
+        let result = if let Some(sb) = sandbox {
+            let sb_guard = sb.lock().await;
+            let sb_output = tokio::time::timeout(timeout, sb_guard.run_command(&command))
+                .await
+                .map_err(|_| StepError::Timeout(timeout))?
+                .map_err(|e| StepError::Fail(format!("Sandbox command failed: {e}")))?;
+
+            CmdOutput {
+                stdout: sb_output.stdout,
+                stderr: sb_output.stderr,
+                exit_code: sb_output.exit_code,
+                duration: start.elapsed(),
+            }
+        } else {
+            // ── Host path: run directly on host ───────────────────────────
+            let shell = config.get_str("shell").unwrap_or("/bin/bash");
+            let working_dir = config.get_str("working_directory").map(String::from);
+
+            let mut cmd = Command::new(shell);
+            cmd.arg("-c").arg(&command);
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
+
+            if let Some(dir) = &working_dir {
+                cmd.current_dir(dir);
+            }
+
+            let output = tokio::time::timeout(timeout, cmd.output())
+                .await
+                .map_err(|_| StepError::Timeout(timeout))?
+                .map_err(|e| StepError::Fail(format!("Failed to spawn command: {e}")))?;
+
+            CmdOutput {
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                exit_code: output.status.code().unwrap_or(-1),
+                duration: start.elapsed(),
+            }
         };
 
         if fail_on_error && result.exit_code != 0 {
@@ -102,6 +134,20 @@ mod tests {
         let result = CmdExecutor.execute(&step, &config, &ctx).await.unwrap();
         assert_eq!(result.text().trim(), "hello");
         assert_eq!(result.exit_code(), 0);
+    }
+
+    #[tokio::test]
+    async fn cmd_echo_via_sandbox_aware_no_sandbox() {
+        // When sandbox is None, SandboxAwareExecutor falls back to host execution
+        let step = empty_step("echo sandbox_test");
+        let config = StepConfig::default();
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = CmdExecutor
+            .execute_sandboxed(&step, &config, &ctx, &None)
+            .await
+            .unwrap();
+        assert_eq!(result.text().trim(), "sandbox_test");
     }
 
     #[tokio::test]
