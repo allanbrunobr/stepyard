@@ -34,6 +34,7 @@ Minion Engine executes multi-step workflows that combine shell commands, Claude 
 - Rust 1.75+ (`rustup` recommended)
 - `claude` CLI installed and authenticated (for agent steps)
 - `gh` CLI installed (for GitHub workflows)
+- Docker Desktop 4.40+ (sandbox is ON by default — required unless you use `--no-sandbox`)
 
 ## Build
 
@@ -44,52 +45,22 @@ cargo build --release
 
 ## Install
 
-### Via cargo (recommended for Rust users)
+### Via crates.io (recommended)
 
 ```bash
 cargo install minion-engine
 minion --version
 ```
 
-### Pre-compiled binaries (no Rust required)
-
-Download the latest binary for your platform from
-[GitHub Releases](https://github.com/allanbrunobr/minion-engine/releases/latest):
-
-```bash
-# macOS — Apple Silicon (M1/M2/M3)
-curl -L https://github.com/allanbrunobr/minion-engine/releases/latest/download/minion-macos-aarch64 -o minion
-chmod +x minion && sudo mv minion /usr/local/bin/
-
-# macOS — Intel
-curl -L https://github.com/allanbrunobr/minion-engine/releases/latest/download/minion-macos-x86_64 -o minion
-chmod +x minion && sudo mv minion /usr/local/bin/
-
-# Linux — x86_64
-curl -L https://github.com/allanbrunobr/minion-engine/releases/latest/download/minion-linux-x86_64 -o minion
-chmod +x minion && sudo mv minion /usr/local/bin/
-
-# Linux — aarch64
-curl -L https://github.com/allanbrunobr/minion-engine/releases/latest/download/minion-linux-aarch64 -o minion
-chmod +x minion && sudo mv minion /usr/local/bin/
-
-# Windows — x86_64
-# Download minion-windows-x86_64.exe from GitHub Releases and add to PATH
-```
-
-### Homebrew (macOS / Linux)
-
-```bash
-brew tap allanbrunobr/minion-engine https://github.com/allanbrunobr/minion-engine
-brew install allanbrunobr/minion-engine/minion-engine
-minion --version
-```
-
 ### Build from source
 
 ```bash
+git clone https://github.com/allanbrunobr/minion-engine.git
+cd minion-engine
 cargo install --path .
 ```
+
+<!-- TODO: Pre-compiled binaries and Homebrew will be available after CI/CD is set up -->
 
 ## Quick Start
 
@@ -97,8 +68,11 @@ cargo install --path .
 # Create a new workflow from a template
 minion init my-workflow --template fix-issue
 
-# Run it
-minion execute my-workflow.yaml -- 247 --verbose
+# Run it (sandbox is ON by default — your project stays safe)
+minion execute my-workflow.yaml --verbose -- 247
+
+# Run without sandbox (directly on your machine)
+minion execute my-workflow.yaml --no-sandbox --verbose -- 247
 
 # List available workflows
 minion list
@@ -115,9 +89,10 @@ minion validate my-workflow.yaml
 ### `minion execute`
 
 ```bash
-minion execute <workflow.yaml> -- [target] [flags]
+minion execute <workflow.yaml> [flags] -- [target]
 
 Flags:
+  --no-sandbox      Disable Docker sandbox (sandbox is ON by default)
   --verbose         Show all step outputs
   --quiet           Only show errors
   --json            Output final result as JSON
@@ -251,7 +226,11 @@ See [docs/STEP-TYPES.md](docs/STEP-TYPES.md) for full documentation.
 ## Example: Fix a GitHub Issue
 
 ```bash
-minion execute workflows/fix-issue.yaml -- 247 --verbose
+# Sandbox is ON by default — AI runs isolated, your project stays safe
+minion execute fix-issue --verbose -- 247
+
+# Without sandbox (runs directly on your machine)
+minion execute fix-issue --no-sandbox --verbose -- 247
 ```
 
 This will:
@@ -262,6 +241,35 @@ This will:
 5. Lint and auto-fix (repeat up to 3x)
 6. Test and auto-fix (repeat up to 2x)
 7. Create a branch, commit, push, and open a PR
+
+All of this happens inside a Docker container **by default**. Your workspace is copied in, the AI works in isolation, and only the results are copied back. If anything goes wrong, the container is destroyed — zero impact on your project.
+
+## Docker Sandbox
+
+The sandbox is **ON by default** — workflows run inside an isolated Docker container with auto-forwarded credentials.
+
+```bash
+# Build the sandbox image (once)
+docker build -f Dockerfile.sandbox -t minion-sandbox:latest .
+
+# Sandbox is ON by default — just run!
+minion execute code-review -- 142
+minion execute security-audit
+minion execute weekly-report
+
+# To run locally without sandbox:
+minion execute code-review --no-sandbox -- 142
+```
+
+Three sandbox modes:
+
+| Mode | How to activate | What runs in Docker |
+|------|-----------------|---------------------|
+| **FullWorkflow** | Default (use `--no-sandbox` to disable) | Everything (all steps) |
+| **AgentOnly** | `config.agent.sandbox: true` | Only AI agent steps |
+| **Devbox** | `config.sandbox.mode: devbox` | Persistent dev container |
+
+Credentials (`ANTHROPIC_API_KEY`, `GH_TOKEN`, `~/.config/gh`, `~/.ssh`) are auto-forwarded. See [docs/DOCKER-SANDBOX.md](docs/DOCKER-SANDBOX.md) for full configuration.
 
 ## Running Tests
 

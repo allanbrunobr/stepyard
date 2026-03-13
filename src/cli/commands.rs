@@ -40,9 +40,13 @@ pub struct ExecuteArgs {
     #[arg(long, value_name = "STEP_NAME")]
     pub resume: Option<String>,
 
-    /// Run entire workflow inside a Docker sandbox
-    #[arg(long)]
+    /// Run inside a Docker sandbox (default: true). Use --no-sandbox to run locally.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::SetTrue)]
     pub sandbox: bool,
+
+    /// Disable Docker sandbox — run directly on your machine
+    #[arg(long = "no-sandbox")]
+    pub no_sandbox: bool,
 
     /// Set workflow variable (KEY=VALUE)
     #[arg(long = "var", value_name = "KEY=VALUE")]
@@ -116,9 +120,10 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
         }
     }
 
-    // Resolve sandbox mode
+    // Resolve sandbox mode: sandbox is ON by default, --no-sandbox disables it
+    let sandbox_flag = args.sandbox && !args.no_sandbox;
     let sandbox_mode = sandbox::resolve_mode(
-        args.sandbox,
+        sandbox_flag,
         &workflow.config.global,
         &workflow.config.agent,
     );

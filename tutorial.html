@@ -783,10 +783,13 @@
       <div class="grid-3">
         <div class="card">
           <div class="card-icon" style="background:var(--cyan-glow);color:var(--cyan);font-size:18px;">&#x1F433;</div>
-          <h4 style="color:var(--cyan)">Modo 1: --sandbox</h4>
-          <p><strong>FullWorkflow</strong> &mdash; tudo roda dentro do Docker. O workspace inteiro e copiado para o container. Resultados copiados de volta ao final.</p>
-          <pre style="margin:12px 0 0;font-size:12px"><span class="cmd">minion execute</span> workflow.yaml \
-  <span class="flag">--sandbox</span></pre>
+          <h4 style="color:var(--cyan)">Modo 1: Default (FullWorkflow)</h4>
+          <p><strong>FullWorkflow</strong> &mdash; tudo roda dentro do Docker <strong>por padrao</strong>. O workspace inteiro e copiado para o container. Resultados copiados de volta ao final.</p>
+          <pre style="margin:12px 0 0;font-size:12px"><span class="cmd">minion execute</span> workflow.yaml
+<span class="cmt"># sandbox ON por padrao!</span>
+
+<span class="cmt"># para desativar:</span>
+<span class="cmd">minion execute</span> workflow.yaml <span class="flag">--no-sandbox</span></pre>
         </div>
         <div class="card">
           <div class="card-icon" style="background:var(--accent-glow);color:var(--accent);font-size:18px;">&#x1F916;</div>
@@ -845,7 +848,7 @@
 
       <div class="tip docker">
         <div class="tip-title">&#x1F433; Zero-Config Smart Defaults</div>
-        <p>Se voce nao especificar <code>env:</code> ou <code>volumes:</code>, o engine faz tudo automaticamente: forwarda <code>ANTHROPIC_API_KEY</code>, <code>GH_TOKEN</code>, monta <code>~/.config/gh</code>, <code>~/.claude</code>, <code>~/.ssh</code> e <code>~/.gitconfig</code> read-only. O <code>gh</code>, <code>claude</code>, <code>git push</code> e API calls funcionam out-of-the-box.</p>
+        <p>Se voce nao especificar <code>env:</code> ou <code>volumes:</code>, o engine faz tudo automaticamente: forwarda <code>ANTHROPIC_API_KEY</code>, <code>GH_TOKEN</code>, monta <code>~/.config/gh</code>, <code>~/.ssh</code> e <code>~/.gitconfig</code> (read-only) e <code>~/.claude</code> (read-write, para sessoes do Claude CLI). O <code>gh</code>, <code>claude</code>, <code>git push</code> e API calls funcionam out-of-the-box.</p>
       </div>
 
       <h3>Build da Imagem de Referencia</h3>
@@ -857,37 +860,26 @@
     <section id="instalacao">
       <div class="section-label">04 &mdash; Instalacao</div>
       <h2>Instalacao Rapida</h2>
-      <p>Tres metodos &mdash; escolha o que funciona melhor pra voce.</p>
-
-      <div class="grid-3">
+      <div class="grid-2">
         <div class="card">
-          <h4 style="color:var(--cyan)">cargo install</h4>
-          <p>Para quem ja tem Rust.</p>
+          <h4 style="color:var(--cyan)">cargo install (recomendado)</h4>
+          <p>Instala via crates.io &mdash; requer Rust 1.75+.</p>
           <pre style="margin:12px 0 0"><span class="cmd">cargo install</span> minion-engine
 <span class="cmd">minion</span> <span class="flag">--version</span></pre>
         </div>
         <div class="card">
-          <h4 style="color:var(--green)">Binary (sem Rust)</h4>
-          <p>Download direto do GitHub Releases.</p>
-          <pre style="margin:12px 0 0"><span class="cmd">curl</span> <span class="flag">-L</span> <span class="str">https://github.com/
-allanbrunobr/minion-engine/
-releases/latest/download/
-minion-macos-aarch64</span> \
-  <span class="flag">-o</span> minion
-<span class="cmd">chmod +x</span> minion</pre>
-        </div>
-        <div class="card">
-          <h4 style="color:var(--orange)">Homebrew</h4>
-          <p>Para macOS e Linux.</p>
-          <pre style="margin:12px 0 0"><span class="cmd">brew tap</span> allanbrunobr/minion
-<span class="cmd">brew install</span> minion-engine
-<span class="cmd">minion</span> <span class="flag">--version</span></pre>
+          <h4 style="color:var(--green)">Build from source</h4>
+          <p>Clone o repositorio e compile.</p>
+          <pre style="margin:12px 0 0"><span class="cmd">git clone</span> <span class="str">https://github.com/
+allanbrunobr/minion-engine.git</span>
+<span class="cmd">cd</span> minion-engine
+<span class="cmd">cargo install</span> <span class="flag">--path .</span></pre>
         </div>
       </div>
 
       <div class="tip">
         <div class="tip-title">Pre-requisitos</div>
-        <p><strong>Docker Desktop 4.40+</strong> (para sandbox). <code>claude</code> CLI instalado e autenticado (para steps agent). <code>gh</code> CLI (para workflows GitHub). <code>ANTHROPIC_API_KEY</code> (para steps chat).</p>
+        <p><strong>Docker Desktop 4.40+</strong> (sandbox e ON por padrao). <code>claude</code> CLI instalado e autenticado (para steps agent). <code>gh</code> CLI (para workflows GitHub). <code>ANTHROPIC_API_KEY</code> (para steps chat).</p>
       </div>
     </section>
 
@@ -905,7 +897,7 @@ minion-macos-aarch64</span> \
           <div class="terminal-title">Terminal &mdash; ~/projects/my-saas</div>
         </div>
         <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">cd</span> ~/projects/my-saas
-<span class="prompt">$</span> <span class="cmd">minion execute</span> workflows/code-review.yaml <span class="flag">--</span> 142 <span class="flag">--sandbox</span> <span class="flag">--verbose</span>
+<span class="prompt">$</span> <span class="cmd">minion execute</span> code-review <span class="flag">--verbose</span> <span class="flag">--</span> 142
 
 <span class="cyan">&#x1F433;</span> <span class="bold">Sandbox created</span> <span class="dim">(node:20, 2 CPUs, 4GB RAM)</span>
 <span class="dim">   workspace copied to /workspace</span>
@@ -1029,7 +1021,7 @@ minion-macos-aarch64</span> \
           <div class="terminal-dot green"></div>
           <div class="terminal-title">Terminal &mdash; Fix Issue #247</div>
         </div>
-        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> workflows/fix-issue.yaml <span class="flag">--</span> 247 <span class="flag">--sandbox</span> <span class="flag">--verbose</span>
+        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> fix-issue <span class="flag">--verbose</span> <span class="flag">--</span> 247
 
 <span class="cyan">&#x1F433;</span> <span class="bold">Sandbox created</span> <span class="dim">(node:20, 2 CPUs, 4GB RAM)</span>
 
@@ -1131,7 +1123,7 @@ minion-macos-aarch64</span> \
           <div class="terminal-dot green"></div>
           <div class="terminal-title">Terminal &mdash; Security Audit</div>
         </div>
-        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> workflows/security-audit.yaml <span class="flag">--sandbox</span> \
+        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> security-audit \
   <span class="flag">--args</span> <span class="str">'{"path": "src/api/"}'</span>
 
 <span class="cyan">&#x1F433;</span> <span class="bold">Sandbox created</span> <span class="dim">(node:20, network: api.anthropic.com only)</span>
@@ -1177,8 +1169,8 @@ minion-macos-aarch64</span> \
           <div class="terminal-dot green"></div>
           <div class="terminal-title">Terminal &mdash; Refactoring</div>
         </div>
-        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> workflows/refactor.yaml \
-  <span class="flag">--</span> <span class="str">"extract auth logic from UserController"</span> <span class="flag">--sandbox</span>
+        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> refactor \
+  <span class="flag">--</span> <span class="str">"extract auth logic from UserController"</span>
 
 <span class="cyan">&#x1F433;</span> <span class="bold">Sandbox created</span>
 
@@ -1226,8 +1218,8 @@ minion-macos-aarch64</span> \
           <div class="terminal-dot green"></div>
           <div class="terminal-title">Terminal &mdash; Flaky Test Fix</div>
         </div>
-        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> workflows/flaky-test-fix.yaml \
-  <span class="flag">--</span> <span class="str">"tests/api/payment.test.ts"</span> <span class="flag">--sandbox</span>
+        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> flaky-test-fix \
+  <span class="flag">--</span> <span class="str">"tests/api/payment.test.ts"</span>
 
 <span class="cyan">&#x1F433;</span> <span class="bold">Sandbox created</span>
 
@@ -1268,7 +1260,7 @@ minion-macos-aarch64</span> \
           <div class="terminal-dot green"></div>
           <div class="terminal-title">Terminal &mdash; Generate Docs</div>
         </div>
-        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> workflows/generate-docs.yaml <span class="flag">--sandbox</span>
+        <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> generate-docs
 
 <span class="cyan">&#x1F433;</span> <span class="bold">Sandbox created</span>
 
@@ -1780,17 +1772,14 @@ minion-macos-aarch64</span> \
         </div>
         <div class="flow-step">
           <div class="flow-step-num purple">4</div>
-          <h4>Ative o sandbox para seguranca</h4>
-          <p>Adicione no YAML do workflow:</p>
-          <pre><span class="key">config:</span>
-  <span class="key">global:</span>
-    <span class="key">sandbox:</span>
-      <span class="key">enabled:</span> <span class="val">true</span></pre>
+          <h4>Sandbox ja e o padrao!</h4>
+          <p>Nao precisa configurar nada &mdash; o sandbox Docker ja e ativado automaticamente. Para configuracao avancada (imagem, rede, recursos), veja a secao <a href="#sandbox">Docker Sandbox</a>.</p>
         </div>
         <div class="flow-step">
           <div class="flow-step-num green">5</div>
           <h4>Execute!</h4>
-          <pre><span class="cmd">minion execute</span> code-review.yaml <span class="flag">--</span> 142 <span class="flag">--sandbox</span> <span class="flag">--verbose</span></pre>
+          <pre><span class="cmd">minion execute</span> code-review <span class="flag">--verbose</span> <span class="flag">--</span> 142
+<span class="cmt"># sandbox ON por padrao — seu projeto esta seguro</span></pre>
         </div>
       </div>
     </section>
@@ -1799,7 +1788,7 @@ minion-macos-aarch64</span> \
     <section id="comparacao">
       <div class="section-label">20 &mdash; Comparacao</div>
       <h2>&#x1F433; Com e Sem Sandbox</h2>
-      <p>Por que voce deveria sempre usar <code>--sandbox</code>.</p>
+      <p>O sandbox e o padrao &mdash; veja por que isso e importante.</p>
 
       <table>
         <thead>
@@ -1844,8 +1833,8 @@ minion-macos-aarch64</span> \
       </table>
 
       <div class="tip warn">
-        <div class="tip-title">Recomendacao</div>
-        <p>Sempre use <code>--sandbox</code> em producao e CI/CD. O overhead e minimo (3-5s para criar/destruir o container) e a seguranca que voce ganha e enorme. O unico caso onde sem sandbox faz sentido e durante desenvolvimento local rapido de um workflow.</p>
+        <div class="tip-title">Padrao Seguro</div>
+        <p>O sandbox e <strong>ON por padrao</strong> &mdash; voce nao precisa fazer nada para ativa-lo. O overhead e minimo (3-5s para criar/destruir o container) e a seguranca e enorme. Use <code>--no-sandbox</code> apenas durante desenvolvimento local rapido de um workflow.</p>
       </div>
     </section>
 
@@ -1861,9 +1850,9 @@ minion-macos-aarch64</span> \
         </thead>
         <tbody>
           <tr>
-            <td><code>minion execute &lt;yaml&gt; -- [target]</code></td>
+            <td><code>minion execute &lt;yaml&gt; [flags] -- [target]</code></td>
             <td>Executa um workflow</td>
-            <td><code>--verbose</code> <code>--quiet</code> <code>--json</code> <code>--dry-run</code> <code>--sandbox</code> <code>--resume &lt;step&gt;</code> <code>--var KEY=VAL</code> <code>--args '{}'</code></td>
+            <td><code>--verbose</code> <code>--quiet</code> <code>--json</code> <code>--dry-run</code> <code>--no-sandbox</code> <code>--resume &lt;step&gt;</code> <code>--var KEY=VAL</code> <code>--args '{}'</code></td>
           </tr>
           <tr>
             <td><code>minion validate &lt;yaml&gt;</code></td>
@@ -1892,8 +1881,8 @@ minion-macos-aarch64</span> \
 
       <div class="grid-2">
         <div class="card">
-          <h4 style="color:var(--cyan)">&#x1F433; --sandbox</h4>
-          <p>Roda o workflow inteiro em Docker sandbox isolado. Requer Docker Desktop 4.40+. O workspace e copiado para o container e resultados copiados de volta.</p>
+          <h4 style="color:var(--cyan)">&#x1F433; --no-sandbox</h4>
+          <p>Desativa o Docker sandbox (que e <strong>ON por padrao</strong>). Use apenas para desenvolvimento local rapido. Sem sandbox, o agent roda direto na sua maquina.</p>
         </div>
         <div class="card">
           <h4 style="color:var(--yellow)">--dry-run</h4>
@@ -2064,7 +2053,7 @@ minion-macos-aarch64</span> \
 
       <div class="faq-item">
         <div class="faq-q">Preciso de Docker instalado?</div>
-        <div class="faq-a">Sim, Docker Desktop 4.40+ e necessario para usar o modo sandbox (<code>--sandbox</code>). Sem Docker, voce ainda pode usar o Minion Engine normalmente &mdash; os workflows rodam direto na sua maquina, so nao tem o isolamento do container.</div>
+        <div class="faq-a">Sim, Docker Desktop 4.40+ e necessario pois o sandbox e <strong>ON por padrao</strong>. Sem Docker, use <code>--no-sandbox</code> &mdash; os workflows rodam direto na sua maquina, so nao tem o isolamento do container.</div>
       </div>
 
       <div class="faq-item">
@@ -2079,7 +2068,7 @@ minion-macos-aarch64</span> \
 
       <div class="faq-item">
         <div class="faq-q">Posso usar em CI/CD?</div>
-        <div class="faq-a">Sim! Use a flag <code>--json</code> para output estruturado sem spinners e cores. Combine com <code>--sandbox</code> para isolamento no runner de CI. Funciona com GitHub Actions, GitLab CI, CircleCI, ou qualquer plataforma que tenha Docker disponivel.</div>
+        <div class="faq-a">Sim! Use a flag <code>--json</code> para output estruturado sem spinners e cores. O sandbox ja e ON por padrao, entao o isolamento no runner de CI vem de graca. Funciona com GitHub Actions, GitLab CI, CircleCI, ou qualquer plataforma que tenha Docker disponivel.</div>
       </div>
 
       <div class="faq-item">
@@ -2089,7 +2078,7 @@ minion-macos-aarch64</span> \
 
       <div class="faq-item">
         <div class="faq-q">E se o agent fizer besteira?</div>
-        <div class="faq-a">Com sandbox: o container e destruido e seu codigo original permanece intocado. Sem sandbox: voce pode usar <code>--resume</code> para retomar de um ponto anterior, ou <code>git reset</code>. Mas e por isso que recomendamos <strong>sempre</strong> usar <code>--sandbox</code> &mdash; a seguranca e o principal diferencial.</div>
+        <div class="faq-a">Com o sandbox (padrao): o container e destruido e seu codigo original permanece intocado. Se voce usou <code>--no-sandbox</code>: voce pode usar <code>--resume</code> para retomar de um ponto anterior, ou <code>git reset</code>. Por isso o sandbox e o padrao &mdash; a seguranca e o principal diferencial.</div>
       </div>
 
       <div class="faq-item">

@@ -76,11 +76,12 @@ impl SandboxConfig {
         "GITHUB_TOKEN",
     ];
 
-    /// Well-known host directories that are auto-mounted read-only when the
+    /// Well-known host directories that are auto-mounted when the
     /// user does NOT specify an explicit `volumes:` list.
+    /// Note: ~/.claude needs read-write access because Claude CLI writes session data.
     pub const AUTO_VOLUMES: &'static [&'static str] = &[
         "~/.config/gh:/root/.config/gh:ro",
-        "~/.claude:/root/.claude:ro",
+        "~/.claude:/root/.claude:rw",
         "~/.ssh:/root/.ssh:ro",
         "~/.gitconfig:/root/.gitconfig:ro",
     ];

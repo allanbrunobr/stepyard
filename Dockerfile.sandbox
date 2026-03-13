@@ -2,7 +2,7 @@
 # Minion Engine — Reference Sandbox Image
 #
 # Build:  docker build -f Dockerfile.sandbox -t minion-sandbox:latest .
-# Usage:  minion execute workflow.yaml --sandbox
+# Usage:  minion execute workflow.yaml  (sandbox is ON by default)
 #
 # This image contains every tool needed by the standard workflow
 # scenarios (code-review, fix-issue, refactor, weekly-report,
