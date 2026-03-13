@@ -253,31 +253,39 @@ impl DockerSandbox {
 
     /// Copy results from the sandbox back to the host.
     ///
-    /// Uses the same exclude list as `copy_workspace` to avoid copying
-    /// large build directories and `.git` internals back. Also suppresses
-    /// macOS tar xattr warnings on the receiving end.
+    /// First checks whether any files were actually modified inside the
+    /// container (via `git status --porcelain`). If nothing changed, the
+    /// copy is skipped entirely — this is the common case for read-only
+    /// workflows like code-review.
     pub async fn copy_results(&self, dest: &str) -> Result<()> {
         let id = self.container_id.as_ref().context("Container not created")?;
 
-        // Always exclude .git when copying back — it's large and the host
-        // already has the authoritative copy.
-        let mut exclude_patterns: Vec<String> = self
-            .config
-            .effective_exclude()
-            .into_iter()
-            .collect();
-        if !exclude_patterns.iter().any(|p| p == ".git") {
-            exclude_patterns.push(".git".to_string());
+        // Check if any files were modified inside the container.
+        // If nothing changed, skip the (potentially slow) copy-back.
+        let check = Command::new("docker")
+            .args(["exec", id, "git", "-C", "/workspace", "status", "--porcelain"])
+            .output()
+            .await;
+
+        if let Ok(output) = check {
+            let changed = String::from_utf8_lossy(&output.stdout);
+            let changed = changed.trim();
+            if changed.is_empty() {
+                tracing::info!("No files changed in sandbox — skipping copy-back");
+                return Ok(());
+            }
+            tracing::info!(changed_files = %changed, "Sandbox has modified files — copying back");
         }
 
-        let mut excludes = String::new();
-        for pattern in &exclude_patterns {
-            excludes.push_str(&format!(" --exclude='{pattern}'"));
-        }
-
+        // Copy only the changed files back using git ls-files
+        // This is much faster than copying the entire workspace.
         let pipe_cmd = format!(
-            "docker exec {id} tar -cf -{excludes} -C /workspace . 2>/dev/null \
-             | tar -xf - -C '{dest}' 2>/dev/null; exit 0"
+            "docker exec {id} sh -c \
+             'cd /workspace && git diff --name-only HEAD 2>/dev/null; \
+              git ls-files --others --exclude-standard 2>/dev/null' \
+             | while read f; do \
+                 docker cp \"{id}:/workspace/$f\" \"{dest}/$f\" 2>/dev/null; \
+               done; exit 0"
         );
 
         Command::new("/bin/sh")
