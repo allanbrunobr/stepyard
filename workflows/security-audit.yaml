@@ -35,7 +35,7 @@ config:
   cmd:
     fail_on_error: false
     timeout: 60s
-    shell: "/bin/bash"
+    shell: "/bin/zsh"
 
 scopes:
   # ── Audit a single file ─────────────────────────────────
@@ -106,7 +106,7 @@ steps:
   - name: file_audits
     type: map
     scope: audit_file
-    items: "{{ steps.find_files.stdout | split(pat='\n') | filter(s='') }}"
+    items: "{{ steps.find_files.stdout }}"
     concurrency: 5
 
   # 4. Consolidate all audit results into a final report

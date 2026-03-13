@@ -49,7 +49,7 @@ config:
   cmd:
     fail_on_error: false
     timeout: 300s
-    shell: "/bin/bash"
+    shell: "/bin/zsh"
 
 scopes:
   # ── Single test run ────────────────────────────────────

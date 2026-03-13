@@ -13,7 +13,7 @@ config:
   cmd:
     fail_on_error: true
     timeout: 60s
-    shell: "/bin/bash"
+    shell: "/bin/zsh"
 
 scopes:
   lint_fix:

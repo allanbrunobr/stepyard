@@ -27,8 +27,9 @@ use crate::sandbox::docker::DockerSandbox;
 use crate::sandbox::SandboxMode;
 use crate::steps::*;
 use crate::steps::{
-    agent::AgentExecutor, cmd::CmdExecutor, gate::GateExecutor, repeat::RepeatExecutor,
-    script::ScriptExecutor,
+    agent::AgentExecutor, call::CallExecutor, chat::ChatExecutor, cmd::CmdExecutor,
+    gate::GateExecutor, map::MapExecutor, parallel::ParallelExecutor,
+    repeat::RepeatExecutor, script::ScriptExecutor, template_step::TemplateStepExecutor,
 };
 use crate::plugins::loader::PluginLoader;
 use crate::workflow::schema::{OutputType, StepDef, StepType, WorkflowDef};
@@ -608,23 +609,35 @@ impl Engine {
                     .execute(step_def, &config, &self.context)
                     .await
             }
+            StepType::Chat => {
+                ChatExecutor.execute(step_def, &config, &self.context).await
+            }
+            StepType::Map => {
+                MapExecutor::new(&self.workflow.scopes)
+                    .execute(step_def, &config, &self.context)
+                    .await
+            }
+            StepType::Parallel => {
+                ParallelExecutor::new(&self.workflow.scopes)
+                    .execute(step_def, &config, &self.context)
+                    .await
+            }
+            StepType::Call => {
+                CallExecutor::new(&self.workflow.scopes)
+                    .execute(step_def, &config, &self.context)
+                    .await
+            }
+            StepType::Template => {
+                let prompts_dir = self.workflow.prompts_dir.as_deref();
+                TemplateStepExecutor::new(prompts_dir)
+                    .execute(step_def, &config, &self.context)
+                    .await
+            }
             StepType::Script => {
                 ScriptExecutor.execute(step_def, &config, &self.context).await
             }
-            _ => {
-                // ── Plugin dispatch ──────────────────────────────────────────
-                // Check if a loaded plugin handles this step type name
-                let type_name = step_def.step_type.to_string();
-                let registry = self.plugin_registry.lock().await;
-                if let Some(plugin) = registry.get(&type_name) {
-                    plugin.execute(step_def, &config, &self.context).await
-                } else {
-                    Err(StepError::Fail(format!(
-                        "Step type '{}' not yet implemented",
-                        step_def.step_type
-                    )))
-                }
-            }
+            // Note: all StepType variants are covered above.
+            // Plugin dispatch will be added via a dedicated StepType::Plugin variant.
         };
 
         let elapsed = start.elapsed();

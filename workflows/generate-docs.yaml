@@ -35,7 +35,7 @@ config:
   cmd:
     fail_on_error: false
     timeout: 60s
-    shell: "/bin/bash"
+    shell: "/bin/zsh"
 
 scopes:
   # ── Document a single source file ──────────────────────
@@ -120,7 +120,7 @@ steps:
   - name: generated_docs
     type: map
     scope: document_file
-    items: "{{ steps.find_sources.stdout | split(pat='\n') | filter(s='') }}"
+    items: "{{ steps.find_sources.stdout }}"
     concurrency: 4
 
   # 5. Generate an index.md linking all generated docs

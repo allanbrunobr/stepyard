@@ -38,7 +38,7 @@ config:
   cmd:
     fail_on_error: false
     timeout: 30s
-    shell: "/bin/bash"
+    shell: "/bin/zsh"
 
 steps:
   # 1. Collect git history for the period

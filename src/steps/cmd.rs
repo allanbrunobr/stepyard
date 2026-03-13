@@ -70,6 +70,24 @@ impl SandboxAwareExecutor for CmdExecutor {
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
 
+            // Ensure common tool directories are in PATH (gh, cargo, brew, etc.)
+            let current_path = std::env::var("PATH").unwrap_or_default();
+            let extra_dirs = ["/usr/local/bin", "/opt/homebrew/bin", "/usr/local/sbin"];
+            let mut full_path = current_path.clone();
+            for dir in &extra_dirs {
+                if !current_path.contains(dir) {
+                    full_path = format!("{}:{}", dir, full_path);
+                }
+            }
+            // Also include ~/.cargo/bin for Rust tools
+            if let Some(home) = std::env::var("HOME").ok() {
+                let cargo_bin = format!("{}/.cargo/bin", home);
+                if !full_path.contains(&cargo_bin) {
+                    full_path = format!("{}:{}", cargo_bin, full_path);
+                }
+            }
+            cmd.env("PATH", &full_path);
+
             if let Some(dir) = &working_dir {
                 cmd.current_dir(dir);
             }

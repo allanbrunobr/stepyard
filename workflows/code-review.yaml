@@ -43,7 +43,7 @@ config:
   cmd:
     fail_on_error: false
     timeout: 60s
-    shell: "/bin/bash"
+    shell: "/bin/zsh"
 
 prompts_dir: ./prompts
 
@@ -114,7 +114,7 @@ steps:
   - name: file_reviews
     type: map
     scope: review_file
-    items: "{{ steps.changed_files.stdout | split(pat='\n') | filter(s='') }}"
+    items: "{{ steps.changed_files.stdout }}"
     concurrency: 4
 
   # 5. Consolidate all reviews into a final report
