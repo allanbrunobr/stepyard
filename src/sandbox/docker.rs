@@ -62,6 +62,33 @@ impl DockerSandbox {
         }
     }
 
+    /// Auto-detect `GH_TOKEN` from the `gh` CLI if not already set.
+    ///
+    /// Many developers authenticate via `gh auth login` but never export
+    /// `GH_TOKEN`.  This method bridges the gap so that `gh` commands
+    /// inside the Docker sandbox work out of the box.
+    async fn auto_detect_gh_token() {
+        // Skip if the user already has a token in the environment
+        if std::env::var("GH_TOKEN").is_ok() || std::env::var("GITHUB_TOKEN").is_ok() {
+            return;
+        }
+
+        let output = Command::new("gh")
+            .args(["auth", "token"])
+            .output()
+            .await;
+
+        if let Ok(o) = output {
+            if o.status.success() {
+                let token = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !token.is_empty() {
+                    std::env::set_var("GH_TOKEN", &token);
+                    tracing::info!("Auto-detected GH_TOKEN from `gh auth token`");
+                }
+            }
+        }
+    }
+
     /// Create the sandbox container (without starting it)
     pub async fn create(&mut self) -> Result<()> {
         if !Self::is_sandbox_available().await {
@@ -83,6 +110,13 @@ impl DockerSandbox {
             "-w".to_string(),
             "/workspace".to_string(),
         ];
+
+        // ── Auto-detect credentials ────────────────────────────────
+        // If GH_TOKEN / GITHUB_TOKEN are not in the environment but the
+        // `gh` CLI is authenticated, auto-populate GH_TOKEN so that
+        // `gh` commands work inside the container without the user
+        // having to manually pass `GH_TOKEN=$(gh auth token)`.
+        Self::auto_detect_gh_token().await;
 
         // ── Environment variables ───────────────────────────────────
         // Forward host env vars into the container so that CLI tools
