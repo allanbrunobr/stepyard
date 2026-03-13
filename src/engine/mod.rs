@@ -1040,4 +1040,77 @@ steps:
 
         let _ = std::fs::remove_file(&path);
     }
+
+    #[tokio::test]
+    async fn output_type_integer_parses_number() {
+        let yaml = r#"
+name: test-parse
+steps:
+  - name: count
+    type: cmd
+    run: "echo 42"
+    output_type: integer
+  - name: use_count
+    type: cmd
+    run: "echo {{ count.output }}"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let result = engine.run().await.unwrap();
+        assert_eq!(result.text().trim(), "42");
+    }
+
+    #[tokio::test]
+    async fn output_type_integer_fails_on_non_number() {
+        let yaml = r#"
+name: test-parse-fail
+steps:
+  - name: count
+    type: cmd
+    run: "echo not_a_number"
+    output_type: integer
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let err = engine.run().await.unwrap_err();
+        assert!(err.to_string().contains("integer"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn output_type_json_allows_dot_access() {
+        let yaml = r#"
+name: test-json
+steps:
+  - name: scan
+    type: cmd
+    run: "echo '{\"count\": 5}'"
+    output_type: json
+  - name: use_scan
+    type: cmd
+    run: "echo {{ scan.output.count }}"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let result = engine.run().await.unwrap();
+        assert_eq!(result.text().trim(), "5");
+    }
+
+    #[tokio::test]
+    async fn output_type_lines_allows_length_filter() {
+        let yaml = r#"
+name: test-lines
+steps:
+  - name: files
+    type: cmd
+    run: "printf 'a.rs\nb.rs\nc.rs'"
+    output_type: lines
+  - name: count_files
+    type: cmd
+    run: "echo {{ files.output | length }}"
+"#;
+        let wf = parser::parse_str(yaml).unwrap();
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let result = engine.run().await.unwrap();
+        assert_eq!(result.text().trim(), "3");
+    }
 }

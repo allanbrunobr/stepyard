@@ -265,6 +265,49 @@ mod tests {
         // Child can see own step
         assert!(child.get_step("b").is_some());
     }
+
+    #[test]
+    fn output_key_defaults_to_text() {
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("fetch", cmd_output("hello world", 0));
+        // Without parsed value, {{fetch.output}} returns the raw text
+        let result = ctx.render_template("{{ fetch.output }}").unwrap();
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn output_key_with_json_parsed_value() {
+        use crate::steps::ParsedValue;
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("scan", cmd_output(r#"{"count": 5}"#, 0));
+        ctx.store_parsed("scan", ParsedValue::Json(serde_json::json!({"count": 5})));
+        // JSON parsed value allows dot-path access
+        let result = ctx.render_template("{{ scan.output.count }}").unwrap();
+        assert_eq!(result, "5");
+    }
+
+    #[test]
+    fn output_key_with_lines_parsed_value() {
+        use crate::steps::ParsedValue;
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("files", cmd_output("a.rs\nb.rs\nc.rs", 0));
+        ctx.store_parsed(
+            "files",
+            ParsedValue::Lines(vec!["a.rs".into(), "b.rs".into(), "c.rs".into()]),
+        );
+        // Lines parsed value renders with | length filter
+        let result = ctx.render_template("{{ files.output | length }}").unwrap();
+        assert_eq!(result, "3");
+    }
+
+    #[test]
+    fn step_accessible_directly_by_name() {
+        let mut ctx = Context::new("".to_string(), HashMap::new());
+        ctx.store("greet", cmd_output("hi", 0));
+        // Steps are also accessible directly by name (not just via steps.)
+        let result = ctx.render_template("{{ greet.output }}").unwrap();
+        assert_eq!(result, "hi");
+    }
 }
 
 fn collect_steps_with_parsed(ctx: &Context, map: &mut HashMap<String, serde_json::Value>) {
