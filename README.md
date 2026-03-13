@@ -73,9 +73,17 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # 3. Authenticate with GitHub (once) — GH_TOKEN is auto-detected
 gh auth login
 
-# 4. Run a code review on PR #42 (sandbox is ON by default)
-minion execute workflows/code-review.yaml --sandbox -- 42
+# 4. Navigate to the project you want to analyze
+cd /path/to/your-project
+
+# 5. Create a workflow (or copy one from the minion-engine repo)
+minion init code-review --template code-review
+
+# 6. Run it against a PR (sandbox is ON by default)
+minion execute code-review.yaml --sandbox -- 42
 ```
+
+> **Important:** `minion` operates on the **current directory**. Always `cd` into the project you want to analyze before running a workflow. In sandbox mode, the current directory is copied into an isolated Docker container where all steps execute.
 
 That's it. No manual `GH_TOKEN` export, no shell tricks — credentials are auto-detected.
 
