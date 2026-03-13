@@ -229,13 +229,19 @@ impl Engine {
             println!("  {} Creating Docker sandbox container…", "🐳".cyan());
         }
 
+        let t0 = Instant::now();
         docker.create().await?;
+        let create_ms = t0.elapsed().as_millis();
+
+        let t1 = Instant::now();
         docker.copy_workspace(&workspace).await?;
+        let copy_ms = t1.elapsed().as_millis();
 
         // Configure Git safe.directory inside the container so that
         // Git/gh commands work on the copied workspace (avoids
         // "dubious ownership" errors when host UID != container UID).
         // Also set user.name/email defaults for any git operations.
+        let t2 = Instant::now();
         let _ = docker
             .run_command(
                 "git config --global --add safe.directory /workspace \
@@ -243,13 +249,28 @@ impl Engine {
                  && git config --global user.email 'minion@localhost'",
             )
             .await;
+        let git_ms = t2.elapsed().as_millis();
+
+        let total_ms = t0.elapsed().as_millis();
 
         if !self.quiet {
             println!(
-                "  {} Sandbox ready — workspace copied to container",
-                "🔒".green()
+                "  {} Sandbox ready — container {:.1}s, copy {:.1}s, git {:.1}s (total {:.1}s)",
+                "🔒".green(),
+                create_ms as f64 / 1000.0,
+                copy_ms as f64 / 1000.0,
+                git_ms as f64 / 1000.0,
+                total_ms as f64 / 1000.0,
             );
         }
+
+        tracing::info!(
+            create_ms,
+            copy_ms,
+            git_ms,
+            total_ms,
+            "Sandbox setup complete"
+        );
 
         self.sandbox = Some(Arc::new(Mutex::new(docker)));
         Ok(())
@@ -268,12 +289,24 @@ impl Engine {
                 println!("  {} Copying results from sandbox…", "📦".cyan());
             }
 
+            let t0 = Instant::now();
             docker.copy_results(&workspace).await?;
+            let copy_back_ms = t0.elapsed().as_millis();
+
+            let t1 = Instant::now();
             docker.destroy().await?;
+            let destroy_ms = t1.elapsed().as_millis();
 
             if !self.quiet {
-                println!("  {} Sandbox destroyed", "🗑️ ".dimmed());
+                println!(
+                    "  {} Sandbox destroyed — copy-back {:.1}s, destroy {:.1}s",
+                    "🗑️ ".dimmed(),
+                    copy_back_ms as f64 / 1000.0,
+                    destroy_ms as f64 / 1000.0,
+                );
             }
+
+            tracing::info!(copy_back_ms, destroy_ms, "Sandbox teardown complete");
         }
         Ok(())
     }

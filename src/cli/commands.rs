@@ -143,6 +143,11 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
         }
     }
 
+    // ── Pre-flight: validate required environment variables ──────────────
+    // Give clear, actionable errors before starting the workflow so that
+    // developers installing via `cargo install` know exactly what's missing.
+    validate_environment(&workflow, sandbox_mode != SandboxMode::Disabled, args.json)?;
+
     let opts = EngineOptions {
         verbose: args.verbose,
         quiet: args.quiet,
@@ -198,6 +203,145 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
             Err(e)
         }
     }
+}
+
+/// Pre-flight validation: check that required env vars and tools are available.
+///
+/// This runs **before** any Docker containers or API calls, so the developer
+/// gets an instant, actionable error message instead of a cryptic failure
+/// mid-workflow.
+fn validate_environment(
+    workflow: &crate::workflow::schema::WorkflowDef,
+    sandbox_enabled: bool,
+    json_mode: bool,
+) -> anyhow::Result<()> {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    // ── Check ANTHROPIC_API_KEY (required for chat/map steps) ────────────
+    let has_chat_steps = workflow.steps.iter().any(|s| {
+        matches!(
+            s.step_type,
+            crate::workflow::schema::StepType::Chat | crate::workflow::schema::StepType::Map
+        )
+    });
+    if has_chat_steps && std::env::var("ANTHROPIC_API_KEY").is_err() {
+        errors.push(
+            "ANTHROPIC_API_KEY is not set.\n\
+             This workflow uses AI steps (chat/map) that require the Anthropic API.\n\
+             \n\
+             Set it in your shell profile (~/.zshrc, ~/.bashrc, etc.):\n\
+               export ANTHROPIC_API_KEY=\"sk-ant-...\"\n\
+             \n\
+             Or pass it inline:\n\
+               ANTHROPIC_API_KEY=\"sk-ant-...\" minion execute <workflow> -- <target>"
+                .to_string(),
+        );
+    }
+
+    // ── Check GH_TOKEN / gh CLI (if workflow uses gh commands) ───────────
+    let uses_gh = workflow.steps.iter().any(|s| {
+        s.run.as_deref().map_or(false, |r| r.contains("gh "))
+    });
+    if uses_gh
+        && std::env::var("GH_TOKEN").is_err()
+        && std::env::var("GITHUB_TOKEN").is_err()
+    {
+        // Check if gh CLI can produce a token (will be auto-detected later).
+        // We use `gh auth token` instead of `gh auth status` because the
+        // latter returns exit 1 if *any* configured account has a stale
+        // token, even when the active account is fine.
+        let gh_ok = std::process::Command::new("gh")
+            .args(["auth", "token"])
+            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !gh_ok {
+            errors.push(
+                "GitHub authentication is not configured.\n\
+                 This workflow uses `gh` CLI commands that require authentication.\n\
+                 \n\
+                 Option 1 — Authenticate the gh CLI (recommended):\n\
+                   gh auth login\n\
+                 \n\
+                 Option 2 — Set a token manually:\n\
+                   export GH_TOKEN=\"ghp_...\"\n\
+                 \n\
+                 The token needs 'repo' scope for private repositories."
+                    .to_string(),
+            );
+        } else {
+            // gh is authenticated — token will be auto-detected in sandbox setup
+            warnings.push(
+                "GH_TOKEN not in environment — will auto-detect from `gh auth token`."
+                    .to_string(),
+            );
+        }
+    }
+
+    // ── Check Docker image exists (if sandbox) ──────────────────────────
+    if sandbox_enabled {
+        let image = {
+            let cfg = crate::sandbox::SandboxConfig::from_global_config(
+                &workflow.config.global,
+            );
+            cfg.image().to_string()
+        };
+        let image_exists = std::process::Command::new("docker")
+            .args(["image", "inspect", &image])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !image_exists {
+            errors.push(format!(
+                "Docker image '{image}' not found.\n\
+                 \n\
+                 Build it first:\n\
+                   docker build -t {image} .\n\
+                 \n\
+                 Or specify a different image in your workflow config:\n\
+                   config:\n\
+                     global:\n\
+                       sandbox:\n\
+                         image: \"ubuntu:22.04\""
+            ));
+        }
+    }
+
+    // ── Report results ──────────────────────────────────────────────────
+    if !errors.is_empty() {
+        if json_mode {
+            let json = serde_json::json!({
+                "error": "Pre-flight checks failed",
+                "type": "EnvironmentError",
+                "details": errors,
+            });
+            println!("{}", serde_json::to_string_pretty(&json)?);
+            std::process::exit(1);
+        }
+        eprintln!("\x1b[31mPre-flight checks failed:\x1b[0m\n");
+        for (i, err) in errors.iter().enumerate() {
+            if i > 0 {
+                eprintln!();
+            }
+            eprintln!("  \x1b[31m✗\x1b[0m {err}");
+        }
+        eprintln!();
+        bail!("{} pre-flight check(s) failed", errors.len());
+    }
+
+    // Print warnings (non-blocking)
+    for w in &warnings {
+        tracing::info!("{w}");
+    }
+
+    Ok(())
 }
 
 /// Extract the step name from an error message like "Step 'foo' failed: ..."

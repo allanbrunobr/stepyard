@@ -62,6 +62,33 @@ impl DockerSandbox {
         }
     }
 
+    /// Auto-detect `GH_TOKEN` from the `gh` CLI if not already set.
+    ///
+    /// Many developers authenticate via `gh auth login` but never export
+    /// `GH_TOKEN`.  This method bridges the gap so that `gh` commands
+    /// inside the Docker sandbox work out of the box.
+    async fn auto_detect_gh_token() {
+        // Skip if the user already has a token in the environment
+        if std::env::var("GH_TOKEN").is_ok() || std::env::var("GITHUB_TOKEN").is_ok() {
+            return;
+        }
+
+        let output = Command::new("gh")
+            .args(["auth", "token"])
+            .output()
+            .await;
+
+        if let Ok(o) = output {
+            if o.status.success() {
+                let token = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !token.is_empty() {
+                    std::env::set_var("GH_TOKEN", &token);
+                    tracing::info!("Auto-detected GH_TOKEN from `gh auth token`");
+                }
+            }
+        }
+    }
+
     /// Create the sandbox container (without starting it)
     pub async fn create(&mut self) -> Result<()> {
         if !Self::is_sandbox_available().await {
@@ -83,6 +110,13 @@ impl DockerSandbox {
             "-w".to_string(),
             "/workspace".to_string(),
         ];
+
+        // ── Auto-detect credentials ────────────────────────────────
+        // If GH_TOKEN / GITHUB_TOKEN are not in the environment but the
+        // `gh` CLI is authenticated, auto-populate GH_TOKEN so that
+        // `gh` commands work inside the container without the user
+        // having to manually pass `GH_TOKEN=$(gh auth token)`.
+        Self::auto_detect_gh_token().await;
 
         // ── Environment variables ───────────────────────────────────
         // Forward host env vars into the container so that CLI tools
@@ -251,20 +285,48 @@ impl DockerSandbox {
         Ok(SandboxOutput { stdout, stderr, exit_code })
     }
 
-    /// Copy results from the sandbox back to the host
+    /// Copy results from the sandbox back to the host.
+    ///
+    /// First checks whether any files were actually modified inside the
+    /// container (via `git status --porcelain`). If nothing changed, the
+    /// copy is skipped entirely — this is the common case for read-only
+    /// workflows like code-review.
     pub async fn copy_results(&self, dest: &str) -> Result<()> {
         let id = self.container_id.as_ref().context("Container not created")?;
 
-        let output = Command::new("docker")
-            .args(["cp", &format!("{id}:/workspace/."), dest])
+        // Check if any files were modified inside the container.
+        // If nothing changed, skip the (potentially slow) copy-back.
+        let check = Command::new("docker")
+            .args(["exec", id, "git", "-C", "/workspace", "status", "--porcelain"])
+            .output()
+            .await;
+
+        if let Ok(output) = check {
+            let changed = String::from_utf8_lossy(&output.stdout);
+            let changed = changed.trim();
+            if changed.is_empty() {
+                tracing::info!("No files changed in sandbox — skipping copy-back");
+                return Ok(());
+            }
+            tracing::info!(changed_files = %changed, "Sandbox has modified files — copying back");
+        }
+
+        // Copy only the changed files back using git ls-files
+        // This is much faster than copying the entire workspace.
+        let pipe_cmd = format!(
+            "docker exec {id} sh -c \
+             'cd /workspace && git diff --name-only HEAD 2>/dev/null; \
+              git ls-files --others --exclude-standard 2>/dev/null' \
+             | while read f; do \
+                 docker cp \"{id}:/workspace/$f\" \"{dest}/$f\" 2>/dev/null; \
+               done; exit 0"
+        );
+
+        Command::new("/bin/sh")
+            .args(["-c", &pipe_cmd])
             .output()
             .await
-            .context("docker cp results failed")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("docker cp results failed: {stderr}");
-        }
+            .context("copy results from container failed")?;
 
         Ok(())
     }
