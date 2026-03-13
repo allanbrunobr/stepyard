@@ -16,6 +16,8 @@ use crate::cli::display;
 use crate::config::{ConfigManager, StepConfig};
 use crate::control_flow::ControlFlow;
 use crate::error::StepError;
+use crate::events::types::Event;
+use crate::events::EventBus;
 use crate::plugins::registry::PluginRegistry;
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::docker::DockerSandbox;
@@ -92,6 +94,8 @@ pub struct Engine {
     state_file: Option<PathBuf>,
     /// Plugin registry for dynamically-loaded step types
     plugin_registry: Arc<Mutex<PluginRegistry>>,
+    /// Event bus for lifecycle events
+    pub event_bus: EventBus,
 }
 
 impl Engine {
@@ -155,6 +159,7 @@ impl Engine {
             state: None,
             state_file: None,
             plugin_registry: Arc::new(Mutex::new(registry)),
+            event_bus: EventBus::new(),
         }
     }
 
@@ -317,6 +322,13 @@ impl Engine {
             self.sandbox_up().await?;
         }
 
+        // ── Event: WorkflowStarted ────────────────────────────────────────────
+        self.event_bus
+            .emit(Event::WorkflowStarted {
+                timestamp: chrono::Utc::now(),
+            })
+            .await;
+
         let start = Instant::now();
         let steps = self.workflow.steps.clone();
         let mut last_output = StepOutput::Empty;
@@ -418,6 +430,14 @@ impl Engine {
             }
         }
 
+        // ── Event: WorkflowCompleted ──────────────────────────────────────────
+        self.event_bus
+            .emit(Event::WorkflowCompleted {
+                duration_ms: start.elapsed().as_millis() as u64,
+                timestamp: chrono::Utc::now(),
+            })
+            .await;
+
         // Propagate any error from the step loop
         run_result?;
 
@@ -445,6 +465,15 @@ impl Engine {
         };
 
         let start = Instant::now();
+
+        // ── Event: StepStarted ────────────────────────────────────────────────
+        self.event_bus
+            .emit(Event::StepStarted {
+                step_name: step_def.name.clone(),
+                step_type: step_def.step_type.to_string(),
+                timestamp: chrono::Utc::now(),
+            })
+            .await;
 
         tracing::debug!(
             step = %step_def.name,
@@ -490,6 +519,7 @@ impl Engine {
         };
 
         let elapsed = start.elapsed();
+        let duration_ms = elapsed.as_millis() as u64;
 
         match &result {
             Ok(output) => {
@@ -563,6 +593,32 @@ impl Engine {
                     display::step_fail(pb, &step_def.name, &e.to_string());
                 }
             }
+        }
+
+        // ── Event: StepCompleted / StepFailed ─────────────────────────────────
+        match &result {
+            Ok(_) => {
+                self.event_bus
+                    .emit(Event::StepCompleted {
+                        step_name: step_def.name.clone(),
+                        step_type: step_def.step_type.to_string(),
+                        duration_ms,
+                        timestamp: chrono::Utc::now(),
+                    })
+                    .await;
+            }
+            Err(e) if !matches!(e, StepError::ControlFlow(_)) => {
+                self.event_bus
+                    .emit(Event::StepFailed {
+                        step_name: step_def.name.clone(),
+                        step_type: step_def.step_type.to_string(),
+                        error: e.to_string(),
+                        duration_ms,
+                        timestamp: chrono::Utc::now(),
+                    })
+                    .await;
+            }
+            _ => {}
         }
 
         result
