@@ -4,6 +4,8 @@ pub mod config;
 pub mod control_flow;
 pub mod engine;
 pub mod error;
+pub mod events;
+pub mod plugins;
 pub mod sandbox;
 pub mod steps;
 pub mod workflow;
