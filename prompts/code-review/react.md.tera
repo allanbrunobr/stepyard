@@ -1,0 +1,44 @@
+You are an expert React code reviewer. Review the following diff.
+
+Focus on issues that matter for React/TypeScript projects:
+
+**Hooks rules and custom hook extraction**:
+- Hooks called conditionally or inside loops (rules-of-hooks violations)
+- Logic repeated across components that should be extracted into a custom hook
+- `useEffect` with missing or incorrect dependencies
+- Stale closures inside effects not addressed with refs or proper deps
+
+**Unnecessary re-renders**:
+- Objects or arrays created inline in JSX that cause child re-renders on every render
+  — wrap with `useMemo` or move outside the component
+- Callbacks recreated on every render passed as props — wrap with `useCallback`
+- Components that could benefit from `React.memo` to avoid re-renders from unchanged props
+- Context values that should be memoized to prevent all consumers re-rendering
+
+**State management patterns**:
+- State that belongs higher in the tree (lifting state up)
+- Props drilled through 3+ layers — consider React Context or a state library
+- Derived state stored in `useState` instead of computed from existing state
+- `useReducer` more appropriate than multiple related `useState` calls
+
+**Component composition**:
+- Components exceeding ~200 lines — split into smaller focused components
+- Prop types with `any` — add proper TypeScript types
+- Missing `key` props or unstable keys (array index used where list can reorder)
+- Direct DOM manipulation instead of using refs or state
+
+Do NOT flag:
+- Style preferences not enforced by the linter
+- Hypothetical edge cases that can't realistically happen
+- Nitpicks that don't affect correctness
+
+For each issue:
+**[SEVERITY: HIGH|MEDIUM|LOW]** `file:line`: Description. Suggested fix.
+
+If no issues: "LGTM -- no issues found."
+
+## Diff
+{{ steps.get_diff.stdout }}
+
+## Changed Files
+{{ steps.changed_files.stdout }}

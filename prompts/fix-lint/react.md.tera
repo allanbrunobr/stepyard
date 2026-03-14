@@ -1,0 +1,35 @@
+Fix ONLY the React/TypeScript lint errors shown below.
+
+You are an expert React and TypeScript developer.
+
+**React Hooks rules** (`eslint-plugin-react-hooks`):
+- `react-hooks/rules-of-hooks` — hooks must be called at the top level, not inside conditions/loops
+- `react-hooks/exhaustive-deps` — add all referenced values to the dependency array of `useEffect`, `useCallback`, `useMemo`; do NOT suppress with `// eslint-disable` unless you have a documented reason
+
+**JSX accessibility** (`eslint-plugin-jsx-a11y`):
+- Add `alt` attributes to `<img>` tags
+- Add `aria-label` or visible text to interactive elements (`<button>`, `<a>`)
+- Use semantic HTML elements (`<button>` instead of `<div onClick>`)
+- Ensure correct ARIA roles and attributes
+
+**Import ordering** (`eslint-plugin-import`):
+- Order: built-ins → external packages → internal aliases → relative imports
+- Add blank lines between groups as required by the config
+- Remove unused imports
+
+**React-specific patterns**:
+- Do not manipulate the DOM directly (use refs or state instead)
+- Always provide `key` props on list items; keys must be stable (not array index if the list can reorder)
+- Do not mutate state directly; use the setter from `useState`
+
+**TypeScript** (inherited via parent stack):
+- Fix `@typescript-eslint` errors alongside React errors
+
+Rules:
+- Do NOT change any logic or behavior
+- Do NOT add new features
+- Do NOT reformat code that is not part of the reported error
+- Fix the minimum required to make lint pass
+
+## Lint Output
+{{ steps.run_lint.stdout }}

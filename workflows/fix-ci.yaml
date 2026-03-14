@@ -1,0 +1,101 @@
+# ============================================================
+# fix-ci.yaml — Generic CI Lint Fix Workflow
+# ============================================================
+#
+# Usage:
+#   minion execute workflows/fix-ci.yaml --target <PR_NUMBER>
+#   minion execute workflows/fix-ci.yaml --target <PR_NUMBER> --args '{"branch": "main"}'
+#
+# What it does:
+#   1. Checks out the PR branch
+#   2. Detects the project stack (Rust, Java, React, Python, etc.)
+#   3. Installs dependencies using the stack-specific install command
+#   4. Runs the stack-specific lint tool
+#   5. If lint fails, uses an AI agent with the stack-specific prompt to fix it
+#   6. Repeats lint + fix up to 3 times
+#   7. Commits and pushes the fix
+#
+# Requirements:
+#   - Stack detection and prompt registry configured (registry.yaml)
+#   - Stack tools: {{ stack.tools.install }}, {{ stack.tools.lint }}
+#   - Prompt template: {{ prompts.fix-lint }} (resolved from registry)
+# ============================================================
+
+name: fix-ci
+version: 1
+description: "Auto-detect project stack and fix CI lint failures using stack-specific tools and prompts"
+
+config:
+  global:
+    timeout: 600s
+    working_directory: "."
+
+  agent:
+    command: claude
+    flags: ["-p", "--output-format", "stream-json"]
+    permissions: skip
+    model: claude-sonnet-4-20250514
+
+  cmd:
+    fail_on_error: true
+    timeout: 120s
+    shell: "/bin/zsh"
+
+scopes:
+  lint_fix:
+    steps:
+      - name: run_lint
+        type: cmd
+        run: "{{ stack.tools.lint }} 2>&1"
+        config:
+          fail_on_error: false
+
+      - name: check_lint
+        type: gate
+        condition: "{{ steps.run_lint.exit_code == 0 }}"
+        on_pass: break
+        message: "Lint passed"
+
+      - name: fix_lint
+        type: agent
+        prompt: "{{ prompts.fix-lint }}"
+        config:
+          timeout: 300s
+
+steps:
+  # 1. Checkout the PR branch
+  - name: checkout
+    type: cmd
+    run: |
+      gh pr checkout {{ target }}
+
+  # 2. Install dependencies using the stack-specific install command
+  - name: install
+    type: cmd
+    run: "{{ stack.tools.install }} 2>&1"
+    config:
+      fail_on_error: false
+      timeout: 300s
+
+  # 3. Run lint + fix loop (up to 3 iterations)
+  - name: lint_gate
+    type: repeat
+    scope: lint_fix
+    max_iterations: 3
+
+  # 4. Commit the fix
+  - name: commit
+    type: cmd
+    run: |
+      git add -A
+      git diff --cached --quiet || git commit -m "fix(ci): resolve lint failures
+
+Automated fix by Minion Engine (fix-ci workflow)
+Stack: {{ stack.name }}"
+    config:
+      fail_on_error: false
+
+  # 5. Push the fix to the PR branch
+  - name: push
+    type: cmd
+    run: "git push"

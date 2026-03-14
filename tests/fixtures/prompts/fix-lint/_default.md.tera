@@ -1,0 +1,3 @@
+# Default lint fix prompt
+Fix the errors below.
+{{ steps.run_lint.stdout }}
