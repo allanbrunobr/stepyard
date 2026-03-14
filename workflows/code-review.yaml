@@ -9,7 +9,11 @@
 # What it does:
 #   1. Fetches the diff for the given PR or branch
 #   2. Identifies changed files
-#   3. Runs a parallel code review agent per changed file
+#   3. For each file:
+#      a. Detects the language (Python, TypeScript, Rust, etc.)
+#      b. Loads the language-specific review prompt
+#      c. Reads project context (CLAUDE.md / ARCHITECTURE.md)
+#      d. Reviews the file diff with full architectural awareness
 #   4. Consolidates findings into a structured summary
 #   5. Posts the summary as a PR comment (if PR number given)
 #
@@ -50,8 +54,49 @@ prompts_dir: ./prompts
 scopes:
   # ── Review a single file ────────────────────────────────
   # scope.value = file path
+  # Detects the language from the file extension, loads the
+  # matching prompt (prompts/code-review/{lang}.md.tera), and
+  # uses it to guide the review.
   review_file:
     steps:
+      - name: detect_lang
+        type: cmd
+        run: |
+          file="{{ scope.value }}"
+          ext="${file##*.}"
+          case "$ext" in
+            py) printf "python" ;;
+            ts|tsx) printf "typescript" ;;
+            rs) printf "rust" ;;
+            java) printf "java" ;;
+            jsx) printf "react" ;;
+            js) printf "javascript" ;;
+            *) printf "_default" ;;
+          esac
+
+      - name: load_prompt
+        type: cmd
+        run: |
+          lang="{{ steps.detect_lang.stdout }}"
+          pf="prompts/code-review/${lang}.md.tera"
+          if [ ! -f "$pf" ]; then
+            pf="prompts/code-review/_default.md.tera"
+          fi
+          sed '/^## Diff/,$d' "$pf"
+
+      - name: project_context
+        type: cmd
+        run: |
+          if [ -f "CLAUDE.md" ]; then
+            cat CLAUDE.md
+          elif [ -f "ARCHITECTURE.md" ]; then
+            cat ARCHITECTURE.md
+          elif [ -f "README.md" ]; then
+            head -200 README.md
+          else
+            echo ""
+          fi
+
       - name: file_diff
         type: cmd
         run: "git diff {{ target }}...HEAD -- {{ scope.value }} 2>/dev/null || git diff HEAD~1 -- {{ scope.value }}"
@@ -59,21 +104,13 @@ scopes:
       - name: review
         type: chat
         prompt: |
-          You are an expert code reviewer. Review the following diff for the file `{{ scope.value }}`.
+          You are reviewing the file `{{ scope.value }}` (detected language: {{ steps.detect_lang.stdout }}).
 
-          Focus on:
-          - Bugs and logic errors
-          - Security vulnerabilities (injection, XSS, auth bypass, etc.)
-          - Performance issues (N+1 queries, unnecessary allocations, etc.)
-          - Missing error handling
-          - Code clarity and maintainability
+          {{ steps.load_prompt.stdout }}
 
-          Do NOT nitpick style — only report issues that matter.
-
-          For each issue found, use this format:
-          **[SEVERITY: HIGH|MEDIUM|LOW]** `line_number`: Description of the issue.
-
-          If no issues found, respond with: "✅ No issues found."
+          ## Project Architecture Context
+          Use this to understand the project structure and conventions when evaluating the changes:
+          {{ steps.project_context.stdout }}
 
           ## Diff
           {{ steps.file_diff.stdout }}
