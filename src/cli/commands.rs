@@ -279,33 +279,33 @@ async fn validate_environment(
         }
     }
 
-    // ── Check Docker image exists (if sandbox) ──────────────────────────
+    // ── Check Docker image exists; auto-build if missing ──────────────
     if sandbox_enabled {
         let image = {
             let cfg = crate::sandbox::SandboxConfig::from_global_config(&workflow.config.global);
             cfg.image().to_string()
         };
-        let image_exists = std::process::Command::new("docker")
-            .args(["image", "inspect", &image])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
 
-        if !image_exists {
-            errors.push(format!(
-                "Docker image '{image}' not found.\n\
-                 \n\
-                 Build it first:\n\
-                   docker build -t {image} .\n\
-                 \n\
-                 Or specify a different image in your workflow config:\n\
-                   config:\n\
-                     global:\n\
-                       sandbox:\n\
-                         image: \"ubuntu:22.04\""
-            ));
+        if !crate::sandbox::DockerSandbox::image_exists(&image).await {
+            // Auto-build the default image from the embedded Dockerfile
+            if image == crate::sandbox::SandboxConfig::DEFAULT_IMAGE {
+                if let Err(e) = crate::sandbox::DockerSandbox::auto_build_image(&image).await {
+                    errors.push(format!(
+                        "Docker image '{image}' not found and auto-build failed:\n  {e}"
+                    ));
+                }
+            } else {
+                // Custom image — we can't auto-build it
+                errors.push(format!(
+                    "Docker image '{image}' not found.\n\
+                     \n\
+                     Build or pull the image first, or use the default image:\n\
+                       config:\n\
+                         global:\n\
+                           sandbox:\n\
+                             image: \"minion-sandbox:latest\""
+                ));
+            }
         }
     }
 
