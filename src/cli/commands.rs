@@ -240,13 +240,11 @@ fn validate_environment(
     }
 
     // ── Check GH_TOKEN / gh CLI (if workflow uses gh commands) ───────────
-    let uses_gh = workflow.steps.iter().any(|s| {
-        s.run.as_deref().map_or(false, |r| r.contains("gh "))
-    });
-    if uses_gh
-        && std::env::var("GH_TOKEN").is_err()
-        && std::env::var("GITHUB_TOKEN").is_err()
-    {
+    let uses_gh = workflow
+        .steps
+        .iter()
+        .any(|s| s.run.as_deref().map_or(false, |r| r.contains("gh ")));
+    if uses_gh && std::env::var("GH_TOKEN").is_err() && std::env::var("GITHUB_TOKEN").is_err() {
         // Check if gh CLI can produce a token (will be auto-detected later).
         // We use `gh auth token` instead of `gh auth status` because the
         // latter returns exit 1 if *any* configured account has a stale
@@ -276,8 +274,7 @@ fn validate_environment(
         } else {
             // gh is authenticated — token will be auto-detected in sandbox setup
             warnings.push(
-                "GH_TOKEN not in environment — will auto-detect from `gh auth token`."
-                    .to_string(),
+                "GH_TOKEN not in environment — will auto-detect from `gh auth token`.".to_string(),
             );
         }
     }
@@ -285,9 +282,7 @@ fn validate_environment(
     // ── Check Docker image exists (if sandbox) ──────────────────────────
     if sandbox_enabled {
         let image = {
-            let cfg = crate::sandbox::SandboxConfig::from_global_config(
-                &workflow.config.global,
-            );
+            let cfg = crate::sandbox::SandboxConfig::from_global_config(&workflow.config.global);
             cfg.image().to_string()
         };
         let image_exists = std::process::Command::new("docker")
@@ -311,6 +306,75 @@ fn validate_environment(
                        sandbox:\n\
                          image: \"ubuntu:22.04\""
             ));
+        }
+    }
+
+    // ── Check stack context variables and prompt files ───────────────────
+    {
+        let uses_stack_vars = workflow_references_stack_vars(workflow);
+        let uses_prompt_vars = workflow_references_prompt_vars(workflow);
+
+        if uses_stack_vars || uses_prompt_vars {
+            let registry_path = std::path::Path::new("prompts/registry.yaml");
+            if !registry_path.exists() {
+                if uses_stack_vars {
+                    warnings.push(
+                        "Workflow references {{ stack.* }} variables but 'prompts/registry.yaml' \
+                         was not found. Stack variables will be empty at runtime.\n\
+                         Create prompts/registry.yaml to enable automatic stack detection."
+                            .to_string(),
+                    );
+                }
+                if uses_prompt_vars {
+                    errors.push(
+                        "Workflow references {{ prompts.* }} but 'prompts/registry.yaml' was not found.\n\
+                         \n\
+                         Create prompts/registry.yaml and add prompt template files, e.g.:\n\
+                           prompts/<function>/_default.md.tera"
+                            .to_string(),
+                    );
+                }
+            } else {
+                // Registry exists — parse it
+                match crate::prompts::registry::Registry::from_file(registry_path) {
+                    Err(e) => {
+                        errors.push(format!(
+                            "Failed to parse 'prompts/registry.yaml': {e}\n\
+                             Fix the YAML syntax before running the workflow."
+                        ));
+                    }
+                    Ok(registry) => {
+                        // If workflow uses prompts.*, verify prompt files exist after detecting stack
+                        if uses_prompt_vars {
+                            let workspace = std::path::Path::new(".");
+                            match crate::prompts::detector::StackDetector::detect(
+                                &registry, workspace,
+                            ) {
+                                Err(e) => {
+                                    warnings.push(format!(
+                                        "Stack detection failed: {e}\n\
+                                         Prompt files cannot be validated. Ensure a supported \
+                                         project file (e.g. Cargo.toml, package.json) is present."
+                                    ));
+                                }
+                                Ok(stack_info) => {
+                                    let prompts_dir =
+                                        workflow.prompts_dir.as_deref().unwrap_or("prompts");
+                                    let prompts_path = std::path::Path::new(prompts_dir);
+                                    let missing = collect_missing_prompts(
+                                        workflow,
+                                        &stack_info,
+                                        prompts_path,
+                                    );
+                                    for m in missing {
+                                        errors.push(m);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -350,6 +414,100 @@ fn extract_failed_step(msg: &str) -> Option<&str> {
     let rest = &msg[start + 6..];
     let end = rest.find('\'')?;
     Some(&rest[..end])
+}
+
+/// Return true if any step in the workflow (including scopes) references `{{ stack.` variables.
+fn workflow_references_stack_vars(workflow: &crate::workflow::schema::WorkflowDef) -> bool {
+    let contains_stack = |s: &str| s.contains("{{ stack.") || s.contains("{{stack.");
+    let step_has_stack = |step: &crate::workflow::schema::StepDef| {
+        step.run.as_deref().map_or(false, contains_stack)
+            || step.prompt.as_deref().map_or(false, contains_stack)
+            || step.condition.as_deref().map_or(false, contains_stack)
+    };
+
+    if workflow.steps.iter().any(step_has_stack) {
+        return true;
+    }
+    workflow
+        .scopes
+        .values()
+        .any(|scope| scope.steps.iter().any(step_has_stack))
+}
+
+/// Return true if any step in the workflow (including scopes) references `{{ prompts.` variables.
+fn workflow_references_prompt_vars(workflow: &crate::workflow::schema::WorkflowDef) -> bool {
+    let contains_prompts = |s: &str| s.contains("{{ prompts.") || s.contains("{{prompts.");
+    let step_has_prompts = |step: &crate::workflow::schema::StepDef| {
+        step.run.as_deref().map_or(false, contains_prompts)
+            || step.prompt.as_deref().map_or(false, contains_prompts)
+            || step.condition.as_deref().map_or(false, contains_prompts)
+    };
+
+    if workflow.steps.iter().any(step_has_prompts) {
+        return true;
+    }
+    workflow
+        .scopes
+        .values()
+        .any(|scope| scope.steps.iter().any(step_has_prompts))
+}
+
+/// Scan the workflow for `{{ prompts.X }}` references and verify the prompt files exist.
+/// Returns a list of error messages for any missing prompt files.
+fn collect_missing_prompts(
+    workflow: &crate::workflow::schema::WorkflowDef,
+    stack_info: &crate::prompts::detector::StackInfo,
+    prompts_dir: &std::path::Path,
+) -> Vec<String> {
+    let mut missing = Vec::new();
+    let mut checked = std::collections::HashSet::new();
+
+    let check_text = |text: &str,
+                      missing: &mut Vec<String>,
+                      checked: &mut std::collections::HashSet<String>| {
+        let mut s = text;
+        while let Some(pos) = s.find("prompts.") {
+            let after = &s[pos + 8..];
+            // Extract function name: read until whitespace, `}}`, `|`, or `?` or `!`
+            let end = after
+                .find(|c: char| c.is_whitespace() || c == '}' || c == '|' || c == '?' || c == '!')
+                .unwrap_or(after.len());
+            let fn_name = after[..end].trim();
+            if !fn_name.is_empty() && checked.insert(fn_name.to_string()) {
+                match crate::prompts::resolver::PromptResolver::resolve(
+                    fn_name,
+                    stack_info,
+                    prompts_dir,
+                ) {
+                    Ok(_) => {}
+                    Err(e) => missing.push(format!("{e}")),
+                }
+            }
+            s = &s[pos + 8 + end.min(after.len())..];
+        }
+    };
+
+    let scan_step = |step: &crate::workflow::schema::StepDef,
+                     missing: &mut Vec<String>,
+                     checked: &mut std::collections::HashSet<String>| {
+        if let Some(ref run) = step.run {
+            check_text(run, missing, checked);
+        }
+        if let Some(ref prompt) = step.prompt {
+            check_text(prompt, missing, checked);
+        }
+    };
+
+    for step in &workflow.steps {
+        scan_step(step, &mut missing, &mut checked);
+    }
+    for scope in workflow.scopes.values() {
+        for step in &scope.steps {
+            scan_step(step, &mut missing, &mut checked);
+        }
+    }
+
+    missing
 }
 
 pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
@@ -444,7 +602,9 @@ pub async fn init(args: InitArgs) -> anyhow::Result<()> {
         format!("{}.yaml", args.name)
     };
 
-    let out_dir = args.output.unwrap_or_else(|| std::env::current_dir().unwrap());
+    let out_dir = args
+        .output
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
     let out_path = out_dir.join(&filename);
 
     if out_path.exists() {
