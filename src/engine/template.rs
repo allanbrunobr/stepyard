@@ -1,9 +1,10 @@
-// Template preprocessing: handles ?, !, and from("name") syntax before Tera rendering
+// Template preprocessing: handles ?, !, from("name"), and prompts.X syntax before Tera rendering
 
 use std::collections::HashMap;
 
 use crate::engine::context::Context;
 use crate::error::StepError;
+use crate::prompts::resolver::PromptResolver;
 
 /// Result of template preprocessing
 #[derive(Debug)]
@@ -34,7 +35,10 @@ pub fn preprocess_template(template: &str, ctx: &Context) -> Result<PreprocessRe
         let use_tag = match (double_brace, tag_open) {
             (None, None) => {
                 result.push_str(remaining);
-                return Ok(PreprocessResult { template: result, injected });
+                return Ok(PreprocessResult {
+                    template: result,
+                    injected,
+                });
             }
             (None, Some(_)) => true,
             (Some(_), None) => false,
@@ -51,7 +55,10 @@ pub fn preprocess_template(template: &str, ctx: &Context) -> Result<PreprocessRe
                 remaining = &remaining[end + 2..];
             } else {
                 result.push_str(remaining);
-                return Ok(PreprocessResult { template: result, injected });
+                return Ok(PreprocessResult {
+                    template: result,
+                    injected,
+                });
             }
         } else {
             // `{{` expression block
@@ -79,14 +86,26 @@ pub fn preprocess_template(template: &str, ctx: &Context) -> Result<PreprocessRe
                         )));
                     }
                     format!("{{{{ {} }}}}", transformed)
+                } else if let Some(fn_name) = trimmed.strip_prefix("prompts.") {
+                    // Prompt resolution: {{ prompts.fix-lint }} → inline rendered prompt
+                    let fn_name = fn_name.trim();
+                    let var_name = format!("__prompt_{}__", sanitize_prompt_name(fn_name));
+                    if !injected.contains_key(&var_name) {
+                        let content = resolve_prompt_content(fn_name, ctx)?;
+                        injected.insert(var_name.clone(), serde_json::Value::String(content));
+                    }
+                    format!("{{{{ {} }}}}", var_name)
                 } else {
                     // Normal expression: transform from() calls (missing = error)
                     let transformed = transform_from_calls(trimmed, ctx, false, &mut injected)?;
-                    format!("{{{{{}}}}}", if transformed == trimmed {
-                        expr.to_string()
-                    } else {
-                        format!(" {} ", transformed)
-                    })
+                    format!(
+                        "{{{{{}}}}}",
+                        if transformed == trimmed {
+                            expr.to_string()
+                        } else {
+                            format!(" {} ", transformed)
+                        }
+                    )
                 };
 
                 result.push_str(&processed);
@@ -98,7 +117,10 @@ pub fn preprocess_template(template: &str, ctx: &Context) -> Result<PreprocessRe
         }
     }
 
-    Ok(PreprocessResult { template: result, injected })
+    Ok(PreprocessResult {
+        template: result,
+        injected,
+    })
 }
 
 /// Transform `from("step_name")` calls in an expression to `__from_<name>__` variables.
@@ -160,7 +182,12 @@ fn transform_from_calls(
         }
 
         // Replace `from("name")` with `__from_name__` in the expression
-        result = format!("{}{}{}", &result[..abs_pos], &var_name, &result[end_of_call..]);
+        result = format!(
+            "{}{}{}",
+            &result[..abs_pos],
+            &var_name,
+            &result[end_of_call..]
+        );
         search_from = abs_pos + var_name.len();
     }
 
@@ -172,9 +199,70 @@ fn transform_from_calls(
 fn sanitize_step_name(name: &str) -> String {
     let sanitized: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("__from_{}__", sanitized)
+}
+
+/// Sanitize a prompt function name into a valid Tera variable name segment.
+/// Converts `fix-lint` → `fix_lint`
+fn sanitize_prompt_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Resolve and render the prompt content for `{{ prompts.fn_name }}`.
+///
+/// Looks up the prompt file using `PromptResolver`, reads its contents, and
+/// renders it as a Tera template with the current context.  If no stack info
+/// is available the call fails with a descriptive error.
+fn resolve_prompt_content(fn_name: &str, ctx: &Context) -> Result<String, StepError> {
+    let stack_info = ctx.get_stack_info().ok_or_else(|| {
+        StepError::Fail(format!(
+            "Cannot resolve '{{{{ prompts.{fn_name} }}}}': no stack detected. \
+             Create prompts/registry.yaml with a matching stack definition."
+        ))
+    })?;
+
+    let prompts_dir = &ctx.prompts_dir;
+    let prompt_path = PromptResolver::resolve(fn_name, stack_info, prompts_dir)?;
+
+    let content = std::fs::read_to_string(&prompt_path).map_err(|e| {
+        StepError::Fail(format!(
+            "Failed to read prompt file '{}': {e}",
+            prompt_path.display()
+        ))
+    })?;
+
+    // Render the prompt file itself as a Tera template with the current context
+    let mut tera = tera::Tera::default();
+    tera.add_raw_template("__prompt__", &content).map_err(|e| {
+        StepError::Template(format!(
+            "Prompt template error in '{}': {e}",
+            prompt_path.display()
+        ))
+    })?;
+
+    let tera_ctx = ctx.to_tera_context();
+    tera.render("__prompt__", &tera_ctx).map_err(|e| {
+        StepError::Template(format!(
+            "Prompt render error in '{}': {e}",
+            prompt_path.display()
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -234,7 +322,11 @@ mod tests {
             }),
         );
         let result = preprocess_template(r#"{{ from("global-config").output }}"#, &ctx).unwrap();
-        assert!(result.template.contains("__from_global_config__"), "{}", result.template);
+        assert!(
+            result.template.contains("__from_global_config__"),
+            "{}",
+            result.template
+        );
         assert!(result.injected.contains_key("__from_global_config__"));
     }
 
@@ -251,7 +343,11 @@ mod tests {
         let ctx = empty_ctx();
         // With ? suffix, missing step should NOT fail — returns empty
         let result = preprocess_template(r#"{{ from("nonexistent").output? }}"#, &ctx).unwrap();
-        assert!(result.template.contains("default(value=\"\")"), "{}", result.template);
+        assert!(
+            result.template.contains("default(value=\"\")"),
+            "{}",
+            result.template
+        );
         assert!(result.injected.contains_key("__from_nonexistent__"));
     }
 
@@ -268,5 +364,112 @@ mod tests {
         let tmpl = "{% if true %}yes{% endif %}";
         let result = preprocess_template(tmpl, &ctx).unwrap();
         assert_eq!(result.template, tmpl);
+    }
+
+    // Story 11.6 tests
+
+    fn ctx_with_stack(stack_name: &str, prompts_dir: &std::path::Path) -> Context {
+        use crate::prompts::detector::StackInfo;
+        let mut ctx = empty_ctx();
+        ctx.stack_info = Some(StackInfo {
+            name: stack_name.to_string(),
+            parent_chain: vec![],
+            tools: HashMap::new(),
+        });
+        ctx.prompts_dir = prompts_dir.to_path_buf();
+        ctx
+    }
+
+    #[test]
+    fn prompts_expression_resolves_to_file_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let fn_dir = dir.path().join("fix-lint");
+        std::fs::create_dir_all(&fn_dir).unwrap();
+        std::fs::write(fn_dir.join("rust.md.tera"), "Run cargo clippy").unwrap();
+
+        let ctx = ctx_with_stack("rust", dir.path());
+        let result = preprocess_template("{{ prompts.fix-lint }}", &ctx).unwrap();
+
+        // The template should contain a __prompt_fix_lint__ variable
+        assert!(
+            result.template.contains("__prompt_fix_lint__"),
+            "template: {}",
+            result.template
+        );
+        // The injected map should have the rendered content
+        let content = result
+            .injected
+            .get("__prompt_fix_lint__")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert_eq!(content, "Run cargo clippy");
+    }
+
+    #[test]
+    fn prompts_expression_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let fn_dir = dir.path().join("fix-lint");
+        std::fs::create_dir_all(&fn_dir).unwrap();
+        std::fs::write(fn_dir.join("_default.md.tera"), "Default prompt").unwrap();
+        // No rust.md.tera
+
+        let ctx = ctx_with_stack("rust", dir.path());
+        let result = preprocess_template("{{ prompts.fix-lint }}", &ctx).unwrap();
+        let content = result
+            .injected
+            .get("__prompt_fix_lint__")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert_eq!(content, "Default prompt");
+    }
+
+    #[test]
+    fn prompts_expression_fails_without_stack_info() {
+        let dir = tempfile::tempdir().unwrap();
+        // No stack_info set in ctx
+        let mut ctx = empty_ctx();
+        ctx.prompts_dir = dir.path().to_path_buf();
+
+        let err = preprocess_template("{{ prompts.fix-lint }}", &ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("no stack detected"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn prompts_expression_fails_when_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        // No prompt files at all
+        let ctx = ctx_with_stack("rust", dir.path());
+
+        let err = preprocess_template("{{ prompts.fix-lint }}", &ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("No prompt for fix-lint/rust"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn prompts_prompt_template_receives_context_variables() {
+        let dir = tempfile::tempdir().unwrap();
+        let fn_dir = dir.path().join("greet");
+        std::fs::create_dir_all(&fn_dir).unwrap();
+        // Prompt file uses a Tera expression itself
+        std::fs::write(fn_dir.join("rust.md.tera"), "Hello {{ target }}!").unwrap();
+
+        let mut ctx = ctx_with_stack("rust", dir.path());
+        ctx.insert_var("target", serde_json::Value::String("world".to_string()));
+
+        let result = preprocess_template("{{ prompts.greet }}", &ctx).unwrap();
+        let content = result
+            .injected
+            .get("__prompt_greet__")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert_eq!(content, "Hello world!");
     }
 }

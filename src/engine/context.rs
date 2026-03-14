@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::prompts::detector::StackInfo;
 use crate::steps::{ParsedValue, StepOutput};
 
 /// A single chat message (user or assistant turn)
@@ -30,6 +32,10 @@ pub struct Context {
     pub session_id: Option<String>,
     /// Shared chat session store — inherited by child contexts via Arc clone
     chat_sessions: ChatSessionStore,
+    /// Detected stack info for prompt resolution (Story 11.5/11.6)
+    pub stack_info: Option<StackInfo>,
+    /// Directory where prompt template files live (defaults to "prompts")
+    pub prompts_dir: PathBuf,
 }
 
 impl Context {
@@ -46,6 +52,8 @@ impl Context {
             scope_index: 0,
             session_id: None,
             chat_sessions: Arc::new(Mutex::new(HashMap::new())),
+            stack_info: None,
+            prompts_dir: PathBuf::from("prompts"),
         }
     }
 
@@ -64,6 +72,11 @@ impl Context {
         self.steps
             .get(name)
             .or_else(|| self.parent.as_ref().and_then(|p| p.get_step(name)))
+    }
+
+    /// Insert a variable into this context
+    pub fn insert_var(&mut self, name: impl Into<String>, value: serde_json::Value) {
+        self.variables.insert(name.into(), value);
     }
 
     /// Get a variable
@@ -93,7 +106,13 @@ impl Context {
     }
 
     /// Create a child context for a scope
-    pub fn child(parent: Arc<Context>, scope_value: Option<serde_json::Value>, index: usize) -> Self {
+    pub fn child(
+        parent: Arc<Context>,
+        scope_value: Option<serde_json::Value>,
+        index: usize,
+    ) -> Self {
+        let stack_info = parent.stack_info.clone();
+        let prompts_dir = parent.prompts_dir.clone();
         Self {
             steps: HashMap::new(),
             parsed_outputs: HashMap::new(),
@@ -103,7 +122,16 @@ impl Context {
             scope_index: index,
             session_id: parent.session_id.clone(),
             chat_sessions: Arc::clone(&parent.chat_sessions),
+            stack_info,
+            prompts_dir,
         }
+    }
+
+    /// Get the stack_info from this context or any parent
+    pub fn get_stack_info(&self) -> Option<&StackInfo> {
+        self.stack_info
+            .as_ref()
+            .or_else(|| self.parent.as_ref().and_then(|p| p.get_stack_info()))
     }
 
     /// Get the Tera-ready value for a step by name (used by from() preprocessing).
@@ -139,14 +167,25 @@ impl Context {
 
     /// Return all stored messages for a chat session (empty vec if session doesn't exist)
     pub fn get_chat_messages(&self, session: &str) -> Vec<ChatMessage> {
-        let guard = self.chat_sessions.lock().expect("chat_sessions lock poisoned");
-        guard.get(session).map(|h| h.messages.clone()).unwrap_or_default()
+        let guard = self
+            .chat_sessions
+            .lock()
+            .expect("chat_sessions lock poisoned");
+        guard
+            .get(session)
+            .map(|h| h.messages.clone())
+            .unwrap_or_default()
     }
 
     /// Append messages to a chat session, creating the session if it doesn't exist
     pub fn append_chat_messages(&self, session: &str, messages: Vec<ChatMessage>) {
-        let mut guard = self.chat_sessions.lock().expect("chat_sessions lock poisoned");
-        let history = guard.entry(session.to_string()).or_insert_with(ChatHistory::default);
+        let mut guard = self
+            .chat_sessions
+            .lock()
+            .expect("chat_sessions lock poisoned");
+        let history = guard
+            .entry(session.to_string())
+            .or_insert_with(ChatHistory::default);
         history.messages.extend(messages);
     }
 
@@ -440,7 +479,10 @@ fn collect_steps_with_parsed(ctx: &Context, map: &mut HashMap<String, serde_json
     }
     for (name, output) in &ctx.steps {
         let parsed = ctx.parsed_outputs.get(name);
-        map.insert(name.clone(), step_output_to_value_with_parsed(output, parsed));
+        map.insert(
+            name.clone(),
+            step_output_to_value_with_parsed(output, parsed),
+        );
     }
 }
 

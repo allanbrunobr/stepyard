@@ -1,5 +1,5 @@
-pub mod cli;
 pub mod claude;
+pub mod cli;
 pub mod config;
 pub mod control_flow;
 pub mod engine;

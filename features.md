@@ -193,13 +193,13 @@
 - Description: [Epic 11: Prompt Registry, Story 11.5] After stack detection, inject stack variables into the Tera context: {{ stack.name }}, {{ stack.tools.lint }}, {{ stack.tools.test }}, {{ stack.tools.build }}, {{ stack.parent }}. Workflows can reference detected stack info without hardcoding commands. Integrate StackDetector into Engine initialization when prompts/registry.yaml exists.
 - Dependencies: Feature 28
 - Files: src/engine/mod.rs, src/engine/context.rs
-- Status: pending
+- Status: done
 
 ## Feature 32: Auto-Resolved Prompt Variables
 - Description: [Epic 11: Prompt Registry, Story 11.6] Expose {{ prompts.fix-lint }}, {{ prompts.fix-test }}, {{ prompts.code-review }} in the template context. Each variable auto-resolves to the rendered content of the appropriate prompt .md.tera file for the detected stack using PromptResolver + fallback chain. Combines detection + resolution + rendering into a single template variable access.
 - Dependencies: Feature 29, Feature 31
 - Files: src/engine/context.rs, src/prompts/mod.rs
-- Status: pending
+- Status: done
 
 ## Feature 33: Base Prompt Templates (_default)
 - Description: [Epic 11: Prompt Registry, Story 11.7] Create language-agnostic fallback prompts: prompts/fix-lint/_default.md.tera, prompts/fix-test/_default.md.tera, and prompts/code-review/_default.md.tera. These serve as universal fallbacks when no stack-specific prompt exists. Include Tera placeholders for {{ steps.run_lint.stdout }} and other contextual data.
@@ -241,7 +241,7 @@
 - Description: [Epic 11: Prompt Registry, Story 11.13] Add stack detection to validate_environment() in cli/commands.rs. When a workflow references {{ stack.* }} or {{ prompts.* }}, pre-flight validates that registry.yaml exists, stack can be detected, and required prompt files are found. Provides actionable error: "No prompt for fix-lint/go — create prompts/fix-lint/go.md.tera or prompts/fix-lint/_default.md.tera".
 - Dependencies: Feature 28, Feature 29
 - Files: src/cli/commands.rs
-- Status: pending
+- Status: done
 
 ## Feature 40: Integration Tests for Prompt Resolver
 - Description: [Epic 11: Prompt Registry, Story 11.14] Add integration tests covering: registry.yaml parsing, stack detection from fixture projects (Java, React, Python, Rust), fallback chain traversal (react→typescript→_default), dynamic template path loading, missing prompt error messages, and circular inheritance detection. Use tempdir fixtures with marker files.

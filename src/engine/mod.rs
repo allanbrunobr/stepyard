@@ -21,17 +21,21 @@ use crate::error::StepError;
 use crate::events::subscribers::{FileSubscriber, WebhookSubscriber};
 use crate::events::types::Event;
 use crate::events::EventBus;
+use crate::plugins::loader::PluginLoader;
 use crate::plugins::registry::PluginRegistry;
+use crate::prompts::{
+    detector::{StackDetector, StackInfo},
+    registry::Registry,
+};
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::docker::DockerSandbox;
 use crate::sandbox::SandboxMode;
 use crate::steps::*;
 use crate::steps::{
     agent::AgentExecutor, call::CallExecutor, chat::ChatExecutor, cmd::CmdExecutor,
-    gate::GateExecutor, map::MapExecutor, parallel::ParallelExecutor,
-    repeat::RepeatExecutor, script::ScriptExecutor, template_step::TemplateStepExecutor,
+    gate::GateExecutor, map::MapExecutor, parallel::ParallelExecutor, repeat::RepeatExecutor,
+    script::ScriptExecutor, template_step::TemplateStepExecutor,
 };
-use crate::plugins::loader::PluginLoader;
 use crate::workflow::schema::{OutputType, StepDef, StepType, WorkflowDef};
 use context::Context;
 use state::WorkflowState;
@@ -103,6 +107,8 @@ pub struct Engine {
     plugin_registry: Arc<Mutex<PluginRegistry>>,
     /// Event bus for lifecycle events
     pub event_bus: EventBus,
+    /// Detected stack info (populated at init if prompts/registry.yaml exists)
+    pub stack_info: Option<StackInfo>,
 }
 
 impl Engine {
@@ -127,7 +133,7 @@ impl Engine {
         vars: HashMap<String, serde_json::Value>,
         options: EngineOptions,
     ) -> Self {
-        let context = Context::new(target, vars);
+        let mut context = Context::new(target, vars);
         let config_manager = ConfigManager::new(workflow.config.clone());
         // JSON mode implies quiet (no decorative output)
         let quiet = options.quiet || options.json;
@@ -164,6 +170,27 @@ impl Engine {
             }
         }
 
+        // ── Detect stack if registry exists ──────────────────────────────────
+        let stack_info = detect_stack_if_registry_exists();
+        if let Some(ref info) = stack_info {
+            let stack_val = serde_json::json!({
+                "name": info.name,
+                "parent": info.parent_chain.first().cloned().unwrap_or_else(|| "_default".to_string()),
+                "tools": {
+                    "lint": info.tools.get("lint").cloned().unwrap_or_default(),
+                    "test": info.tools.get("test").cloned().unwrap_or_default(),
+                    "build": info.tools.get("build").cloned().unwrap_or_default(),
+                    "install": info.tools.get("install").cloned().unwrap_or_default(),
+                }
+            });
+            context.insert_var("stack", stack_val);
+            context.stack_info = Some(info.clone());
+        }
+        // Set prompts_dir from workflow config or default
+        if let Some(ref pd) = workflow.prompts_dir {
+            context.prompts_dir = std::path::PathBuf::from(pd);
+        }
+
         Self {
             workflow,
             context,
@@ -181,6 +208,7 @@ impl Engine {
             pending_futures: HashMap::new(),
             plugin_registry: Arc::new(Mutex::new(registry)),
             event_bus,
+            stack_info,
         }
     }
 
@@ -196,11 +224,7 @@ impl Engine {
             .iter()
             .map(|r| r.input_tokens.unwrap_or(0) + r.output_tokens.unwrap_or(0))
             .sum();
-        let total_cost: f64 = self
-            .step_records
-            .iter()
-            .filter_map(|r| r.cost_usd)
-            .sum();
+        let total_cost: f64 = self.step_records.iter().filter_map(|r| r.cost_usd).sum();
 
         WorkflowJsonOutput {
             workflow_name: self.workflow.name.clone(),
@@ -340,32 +364,35 @@ impl Engine {
         let mut loaded_state: Option<WorkflowState> = None;
         if let Some(ref resume_step) = self.resume_from.clone() {
             match WorkflowState::find_latest(&self.workflow.name) {
-                Some(path) => {
-                    match WorkflowState::load(&path) {
-                        Ok(s) => {
-                            let exists = self.workflow.steps.iter().any(|s| &s.name == resume_step);
-                            if !exists {
-                                bail!(
-                                    "Resume step '{}' not found in workflow '{}'. \
+                Some(path) => match WorkflowState::load(&path) {
+                    Ok(s) => {
+                        let exists = self.workflow.steps.iter().any(|s| &s.name == resume_step);
+                        if !exists {
+                            bail!(
+                                "Resume step '{}' not found in workflow '{}'. \
                                      Available steps: {}",
-                                    resume_step,
-                                    self.workflow.name,
-                                    self.workflow.steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
-                                );
-                            }
-                            if !self.quiet {
-                                println!(
-                                    "  {} Resuming from step '{}' (state: {})",
-                                    "↺".cyan(),
-                                    resume_step,
-                                    path.display()
-                                );
-                            }
-                            loaded_state = Some(s);
+                                resume_step,
+                                self.workflow.name,
+                                self.workflow
+                                    .steps
+                                    .iter()
+                                    .map(|s| s.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
                         }
-                        Err(e) => bail!("Failed to load state file {}: {e}", path.display()),
+                        if !self.quiet {
+                            println!(
+                                "  {} Resuming from step '{}' (state: {})",
+                                "↺".cyan(),
+                                resume_step,
+                                path.display()
+                            );
+                        }
+                        loaded_state = Some(s);
                     }
-                }
+                    Err(e) => bail!("Failed to load state file {}: {e}", path.display()),
+                },
                 None => {
                     bail!(
                         "No state file found for workflow '{}'. \
@@ -465,7 +492,9 @@ impl Engine {
 
                 match self.execute_step(step_def).await {
                     Ok(output) => {
-                        current_state.steps.insert(step_def.name.clone(), output.clone());
+                        current_state
+                            .steps
+                            .insert(step_def.name.clone(), output.clone());
                         if let Some(ref p) = self.state_file {
                             let _ = current_state.save(p);
                         }
@@ -475,7 +504,10 @@ impl Engine {
                     Err(StepError::ControlFlow(ControlFlow::Skip { message })) => {
                         self.context.store(&step_def.name, StepOutput::Empty);
                         if !self.quiet {
-                            let pb = display::step_start(&step_def.name, &step_def.step_type.to_string());
+                            let pb = display::step_start(
+                                &step_def.name,
+                                &step_def.step_type.to_string(),
+                            );
                             display::step_skip(&pb, &step_def.name, &message);
                         }
                         self.step_records.push(StepRecord {
@@ -654,9 +686,7 @@ impl Engine {
                     .execute(step_def, &config, &self.context)
                     .await
             }
-            StepType::Chat => {
-                ChatExecutor.execute(step_def, &config, &self.context).await
-            }
+            StepType::Chat => ChatExecutor.execute(step_def, &config, &self.context).await,
             StepType::Map => {
                 MapExecutor::new(&self.workflow.scopes)
                     .execute(step_def, &config, &self.context)
@@ -679,10 +709,11 @@ impl Engine {
                     .await
             }
             StepType::Script => {
-                ScriptExecutor.execute(step_def, &config, &self.context).await
-            }
-            // Note: all StepType variants are covered above.
-            // Plugin dispatch will be added via a dedicated StepType::Plugin variant.
+                ScriptExecutor
+                    .execute(step_def, &config, &self.context)
+                    .await
+            } // Note: all StepType variants are covered above.
+              // Plugin dispatch will be added via a dedicated StepType::Plugin variant.
         };
 
         let elapsed = start.elapsed();
@@ -806,7 +837,11 @@ impl Engine {
     pub fn dry_run(&self) {
         use colored::Colorize;
 
-        println!("{} {} (dry-run)", "▶".cyan().bold(), self.workflow.name.bold());
+        println!(
+            "{} {} (dry-run)",
+            "▶".cyan().bold(),
+            self.workflow.name.bold()
+        );
         if self.sandbox_mode != SandboxMode::Disabled {
             println!("  {} Sandbox mode: {:?}", "🔒".cyan(), self.sandbox_mode);
         }
@@ -825,7 +860,11 @@ impl Engine {
                 ""
             };
 
-            let async_indicator = if step.async_exec == Some(true) { " ⚡" } else { "" };
+            let async_indicator = if step.async_exec == Some(true) {
+                " ⚡"
+            } else {
+                ""
+            };
 
             println!(
                 "{} {} {}{}{}",
@@ -879,7 +918,11 @@ impl Engine {
                 let scope_name = step.scope.as_deref().unwrap_or("<none>");
                 let max_iter = step.max_iterations.unwrap_or(1);
                 println!("{}  scope: {}", indent, scope_name.dimmed());
-                println!("{}  max_iterations: {}", indent, max_iter.to_string().dimmed());
+                println!(
+                    "{}  max_iterations: {}",
+                    indent,
+                    max_iter.to_string().dimmed()
+                );
                 self.print_scope_steps(scope_name, indent);
             }
             StepType::Map => {
@@ -915,7 +958,7 @@ impl Engine {
                     println!("{}  template: {}", indent, run.dimmed());
                 }
             }
-        StepType::Script => {
+            StepType::Script => {
                 if let Some(ref run) = step.run {
                     let preview = truncate(&run.replace('\n', " "), 80);
                     println!("{}  script: {}", indent, preview.dimmed());
@@ -953,10 +996,7 @@ impl Engine {
     /// Spawn an async step as a tokio task. Returns a JoinHandle for later awaiting.
     /// Creates a minimal context (target only) for the spawned task since the
     /// executor templates are rendered inside the task.
-    fn spawn_async_step(
-        &self,
-        step_def: &StepDef,
-    ) -> JoinHandle<Result<StepOutput, StepError>> {
+    fn spawn_async_step(&self, step_def: &StepDef) -> JoinHandle<Result<StepOutput, StepError>> {
         let step = step_def.clone();
         let config = self.resolve_config(step_def);
         let target = self
@@ -1088,17 +1128,15 @@ fn parse_step_output(output: StepOutput, step_def: &StepDef) -> Result<StepOutpu
             serde_json::from_str::<serde_json::Value>(&text)
                 .map_err(|e| StepError::Fail(format!("Failed to parse output as JSON: {e}")))?;
         }
-        OutputType::Boolean => {
-            match text.to_lowercase().as_str() {
-                "true" | "1" | "yes" | "false" | "0" | "no" => {}
-                _ => {
-                    return Err(StepError::Fail(format!(
-                        "Failed to parse '{}' as boolean",
-                        text
-                    )));
-                }
+        OutputType::Boolean => match text.to_lowercase().as_str() {
+            "true" | "1" | "yes" | "false" | "0" | "no" => {}
+            _ => {
+                return Err(StepError::Fail(format!(
+                    "Failed to parse '{}' as boolean",
+                    text
+                )));
             }
-        }
+        },
         OutputType::Lines | OutputType::Text => {}
     }
 
@@ -1151,11 +1189,42 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Detect the project stack from `prompts/registry.yaml` if it exists.
+/// Returns `None` silently if there is no registry or detection fails.
+fn detect_stack_if_registry_exists() -> Option<StackInfo> {
+    let registry_path = std::path::Path::new("prompts/registry.yaml");
+    if !registry_path.exists() {
+        return None;
+    }
+    match Registry::from_file(registry_path) {
+        Ok(registry) => {
+            let workspace = std::path::Path::new(".");
+            match StackDetector::detect(&registry, workspace) {
+                Ok(info) => {
+                    tracing::info!(stack = %info.name, "Detected project stack");
+                    Some(info)
+                }
+                Err(e) => {
+                    tracing::debug!("Stack detection failed: {e}");
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to parse prompts/registry.yaml: {e}");
+            None
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::workflow::parser;
+
+    /// Global mutex to serialize tests that change the process working directory.
+    static CWD_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
     #[tokio::test]
     async fn engine_runs_sequential_cmd_steps() {
@@ -1552,14 +1621,20 @@ steps:
     run: "echo sync_result"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let opts = EngineOptions { quiet: true, ..Default::default() };
+        let opts = EngineOptions {
+            quiet: true,
+            ..Default::default()
+        };
         let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
         let result = engine.run().await.unwrap();
         // sync_step is the last synchronous step
         assert!(result.text().contains("sync_result"));
         // bg_task should be recorded after join_all
         let records = engine.step_records();
-        assert!(records.iter().any(|r| r.name == "bg_task"), "bg_task should be in records");
+        assert!(
+            records.iter().any(|r| r.name == "bg_task"),
+            "bg_task should be in records"
+        );
     }
 
     #[test]
@@ -1623,14 +1698,26 @@ steps:
     run: "echo done"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let opts = EngineOptions { quiet: true, ..Default::default() };
+        let opts = EngineOptions {
+            quiet: true,
+            ..Default::default()
+        };
         let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
         engine.run().await.unwrap();
 
         let records = engine.step_records();
-        assert!(records.iter().any(|r| r.name == "task_a"), "task_a should be recorded");
-        assert!(records.iter().any(|r| r.name == "task_b"), "task_b should be recorded");
-        assert!(records.iter().any(|r| r.name == "sync_done"), "sync_done should be recorded");
+        assert!(
+            records.iter().any(|r| r.name == "task_a"),
+            "task_a should be recorded"
+        );
+        assert!(
+            records.iter().any(|r| r.name == "task_b"),
+            "task_b should be recorded"
+        );
+        assert!(
+            records.iter().any(|r| r.name == "sync_done"),
+            "sync_done should be recorded"
+        );
     }
 
     // ── Story 4.3: Script step dispatch ─────────────────────────────────────
@@ -1647,9 +1734,97 @@ steps:
       x.to_string()
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let opts = EngineOptions { quiet: true, ..Default::default() };
+        let opts = EngineOptions {
+            quiet: true,
+            ..Default::default()
+        };
         let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
         let result = engine.run().await.unwrap();
         assert_eq!(result.text().trim(), "42");
+    }
+
+    #[test]
+    fn stack_context_injected_when_registry_exists() {
+        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let dir = tempfile::tempdir().unwrap();
+        let orig_dir = std::env::current_dir().unwrap();
+
+        // Create prompts/registry.yaml and a marker file
+        let prompts_dir = dir.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        let registry_yaml = r#"
+version: 1
+detection_order:
+  - rust
+stacks:
+  rust:
+    file_markers:
+      - Cargo.toml
+    tools:
+      lint: "cargo clippy"
+      test: "cargo test"
+      build: "cargo build"
+      install: "cargo fetch"
+"#;
+        std::fs::write(prompts_dir.join("registry.yaml"), registry_yaml).unwrap();
+        // Create the Cargo.toml marker
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let yaml = "name: test\nsteps:\n  - name: s\n    type: cmd\n    run: \"echo hi\"\n";
+        let wf = parser::parse_str(yaml).unwrap();
+        let engine = Engine::with_options(
+            wf,
+            "target".to_string(),
+            HashMap::new(),
+            EngineOptions {
+                quiet: true,
+                ..Default::default()
+            },
+        );
+
+        let result = engine.context.render_template("{{ stack.name }}").unwrap();
+        assert_eq!(result, "rust");
+
+        let lint = engine
+            .context
+            .render_template("{{ stack.tools.lint }}")
+            .unwrap();
+        assert_eq!(lint, "cargo clippy");
+
+        assert!(engine.stack_info.is_some());
+        assert_eq!(engine.stack_info.as_ref().unwrap().name, "rust");
+
+        std::env::set_current_dir(orig_dir).unwrap();
+    }
+
+    #[test]
+    fn stack_context_skipped_when_no_registry() {
+        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let yaml = "name: test\nsteps:\n  - name: s\n    type: cmd\n    run: \"echo hi\"\n";
+        let wf = parser::parse_str(yaml).unwrap();
+        // Run from a tempdir without any registry.yaml
+        let dir = tempfile::tempdir().unwrap();
+        let orig_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let engine = Engine::with_options(
+            wf,
+            "target".to_string(),
+            HashMap::new(),
+            EngineOptions {
+                quiet: true,
+                ..Default::default()
+            },
+        );
+        // Should not crash, stack_info is None
+        assert!(engine.stack_info.is_none());
+        // stack variable not in context
+        assert!(engine.context.get_var("stack").is_none());
+
+        std::env::set_current_dir(orig_dir).unwrap();
     }
 }
