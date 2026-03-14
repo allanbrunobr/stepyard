@@ -1,0 +1,95 @@
+minion-engine/
+├── Cargo.toml                          # Project config (v0.2.1)
+├── Cargo.lock
+├── README.md
+├── LICENSE
+├── ARCHITECTURE-MINION-ENGINE.md
+├── EPICS-AND-STORIES.md
+│
+├── src/
+│   ├── main.rs                         # CLI entrypoint (33 lines)
+│   ├── lib.rs                          # Library root (11 lines)
+│   ├── error.rs                        # Error types (120 lines)
+│   ├── control_flow.rs                 # Control flow exceptions (20 lines)
+│   │
+│   ├── engine/                         # Core workflow execution
+│   │   ├── mod.rs                      # Engine orchestrator (1655 lines) ★ HUB
+│   │   ├── context.rs                  # Context tree + template rendering (490 lines) ★ HUB
+│   │   ├── template.rs                 # Template preprocessing ?,!,from() (272 lines)
+│   │   └── state.rs                    # Workflow state persistence (143 lines)
+│   │
+│   ├── workflow/                       # YAML schema + parsing
+│   │   ├── mod.rs                      # Module root (3 lines)
+│   │   ├── schema.rs                   # WorkflowDef, StepDef, StepType (168 lines) ★ HUB
+│   │   ├── parser.rs                   # YAML parsing (91 lines)
+│   │   └── validator.rs               # Workflow validation (275 lines)
+│   │
+│   ├── steps/                          # Step executors (10 types)
+│   │   ├── mod.rs                      # Traits + output types (189 lines) ★ HUB
+│   │   ├── cmd.rs                      # Shell command executor (228 lines)
+│   │   ├── agent.rs                    # Claude Code CLI executor (442 lines)
+│   │   ├── chat.rs                     # Anthropic/OpenAI API (595 lines)
+│   │   ├── gate.rs                     # Conditional branching (159 lines)
+│   │   ├── map.rs                      # Parallel iteration (747 lines)
+│   │   ├── parallel.rs                 # Concurrent steps (220 lines)
+│   │   ├── repeat.rs                   # Retry loops (316 lines)
+│   │   ├── call.rs                     # Scope invocation (234 lines)
+│   │   ├── template_step.rs            # .md.tera rendering (118 lines)
+│   │   └── script.rs                   # Rhai scripting (285 lines)
+│   │
+│   ├── cli/                            # Command-line interface
+│   │   ├── mod.rs                      # CLI struct + subcommands (65 lines)
+│   │   ├── commands.rs                 # Command implementations (612 lines)
+│   │   ├── display.rs                  # Colored terminal output (184 lines)
+│   │   └── init_templates.rs           # Workflow templates (292 lines)
+│   │
+│   ├── sandbox/                        # Docker isolation
+│   │   ├── mod.rs                      # Mode resolution (127 lines)
+│   │   ├── docker.rs                   # Container lifecycle (428 lines)
+│   │   └── config.rs                   # Sandbox configuration (332 lines)
+│   │
+│   ├── config/                         # 4-layer config system
+│   │   ├── mod.rs                      # StepConfig struct (53 lines)
+│   │   ├── manager.rs                  # Config resolution (139 lines)
+│   │   └── merge.rs                    # YAML→JSON conversion (6 lines)
+│   │
+│   ├── claude/                         # Claude Code integration
+│   │   ├── mod.rs                      # Module root (5 lines)
+│   │   └── session.rs                  # Session continuity (109 lines)
+│   │
+│   ├── plugins/                        # Dynamic plugin system
+│   │   ├── mod.rs                      # Plugin trait (42 lines)
+│   │   ├── registry.rs                 # Plugin registry (43 lines)
+│   │   └── loader.rs                   # .dylib/.so loader (62 lines)
+│   │
+│   └── events/                         # Event bus system
+│       ├── mod.rs                      # EventBus (64 lines)
+│       ├── types.rs                    # Event enum (41 lines)
+│       └── subscribers.rs              # Webhook/file subscribers (86 lines)
+│
+├── workflows/                          # Example YAML workflows
+│   ├── hello-world.yaml                # Simple test (39 lines)
+│   ├── simple-test.yaml                # Minimal test (18 lines)
+│   ├── code-review.yaml                # PR review (172 lines)
+│   ├── fix-issue.yaml                  # Issue fixing (178 lines)
+│   ├── refactor.yaml                   # Refactoring (200 lines)
+│   ├── security-audit.yaml             # Security scan (158 lines)
+│   ├── flaky-test-fix.yaml             # Flaky test fix (232 lines)
+│   ├── generate-docs.yaml              # Doc generation (162 lines)
+│   └── weekly-report.yaml              # Weekly report (180 lines)
+│
+├── tests/
+│   ├── integration.rs                  # Integration tests (365 lines)
+│   └── fixtures/
+│       ├── mock_claude.sh              # Mock Claude CLI (5 lines)
+│       ├── map_serial.yaml             # Map test fixture (18 lines)
+│       └── template_step.yaml          # Template test fixture (17 lines)
+│
+├── _bmad-output/
+│   └── planning-artifacts/
+│       └── epics.md                    # BMAD epics (previous session)
+│
+└── .hive/                              # Hive analysis output
+    ├── codebase-map.json
+    ├── file-tree.txt
+    └── summary.md
