@@ -6,6 +6,10 @@ use tokio::process::Command;
 
 use super::config::SandboxConfig;
 
+/// The reference Dockerfile embedded at compile time so `cargo install`
+/// users get auto-build without needing the source tree.
+pub const EMBEDDED_DOCKERFILE: &str = include_str!("../../Dockerfile.sandbox");
+
 /// Manages a Docker sandbox container lifecycle
 pub struct DockerSandbox {
     container_id: Option<String>,
@@ -29,6 +33,59 @@ impl DockerSandbox {
             config,
             workspace_path: workspace_path.into(),
         }
+    }
+
+    /// Check if a Docker image exists locally.
+    pub async fn image_exists(image: &str) -> bool {
+        Command::new("docker")
+            .args(["image", "inspect", image])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// Auto-build the default sandbox image from the embedded Dockerfile.
+    /// Writes the Dockerfile to a temp dir and runs `docker build`.
+    pub async fn auto_build_image(image: &str) -> Result<()> {
+        let tmp = std::env::temp_dir().join("minion-sandbox-build");
+        std::fs::create_dir_all(&tmp)
+            .context("Failed to create temp dir for Docker build")?;
+
+        let dockerfile_path = tmp.join("Dockerfile");
+        std::fs::write(&dockerfile_path, EMBEDDED_DOCKERFILE)
+            .context("Failed to write embedded Dockerfile")?;
+
+        tracing::info!("Building Docker image '{image}' (this may take a few minutes on first run)...");
+        eprintln!(
+            "\n  ⟳ Building Docker image '{}' — first run only, please wait...\n",
+            image,
+        );
+
+        let output = Command::new("docker")
+            .args(["build", "-t", image, "-f"])
+            .arg(&dockerfile_path)
+            .arg(&tmp)
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .await
+            .context("Failed to run docker build")?;
+
+        // Clean up temp dir (best-effort)
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        if !output.success() {
+            bail!(
+                "Docker build failed for image '{image}'. \
+                 Check the output above for errors."
+            );
+        }
+
+        tracing::info!("Successfully built Docker image '{image}'");
+        Ok(())
     }
 
     /// Check if Docker is available in PATH
