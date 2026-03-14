@@ -59,7 +59,7 @@ export class TaskManager {
       id: uuidv4(),
       title: input.title.trim(),
       description: input.description?.trim() || "",
-      priority: input.priority || "medium",
+      priority: input.priority || "low",
       status: "todo",
       assignee: input.assignee || null,
       createdAt: now,

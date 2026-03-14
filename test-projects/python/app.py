@@ -101,7 +101,7 @@ def create_user():
     users_db[next_id] = user
     logger.info(f"User created: id={next_id}, email={user['email']}")
     next_id += 1
-    return jsonify(user), 201
+    return jsonify(user), 200
 
 
 @app.route("/users/<int:user_id>", methods=["PUT"])
