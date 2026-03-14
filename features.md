@@ -169,25 +169,25 @@
 - Description: [Epic 11: Prompt Registry, Story 11.1] Create prompts/registry.yaml defining stack detection rules (file markers, content_match patterns), parent inheritance chains (react→typescript→javascript), tool commands (lint, test, build per stack), and detection_order priority. Implement Registry struct and YAML parser in new src/prompts/registry.rs.
 - Dependencies: none
 - Files: prompts/registry.yaml, src/prompts/mod.rs, src/prompts/registry.rs
-- Status: pending
+- Status: done
 
 ## Feature 28: Stack Detector
 - Description: [Epic 11: Prompt Registry, Story 11.2] Implement StackDetector that reads registry.yaml and auto-detects the project's technology stack by checking file markers (pom.xml, package.json, Cargo.toml) and content patterns (spring-boot in pom.xml, react in package.json). Follows detection_order priority for specificity (java-spring before java). Returns StackInfo with name, parent chain, and tool commands.
 - Dependencies: Feature 27
 - Files: src/prompts/detector.rs
-- Status: pending
+- Status: done
 
 ## Feature 29: Prompt Resolver with Fallback Chain
 - Description: [Epic 11: Prompt Registry, Story 11.3] Implement PromptResolver that resolves a prompt file given a function name (fix-lint, fix-test, code-review) and detected stack. Follows the parent inheritance chain (react→typescript→javascript→_default.md.tera) until a .md.tera file is found. Returns resolved file path or descriptive error with suggestion to create the missing file.
 - Dependencies: Feature 27
 - Files: src/prompts/resolver.rs
-- Status: pending
+- Status: done
 
 ## Feature 30: Dynamic Template Path in TemplateStepExecutor
 - Description: [Epic 11: Prompt Registry, Story 11.4] Modify TemplateStepExecutor to support dynamic path via the step.prompt field. When prompt is set (e.g., "fix-lint/{{ lang }}"), render it as a Tera template and use the result as the file path instead of hardcoded step.name. Backward-compatible — falls back to step.name.md.tera when prompt is absent. Approximately 5 lines changed in template_step.rs.
 - Dependencies: none
 - Files: src/steps/template_step.rs
-- Status: pending
+- Status: done
 
 ## Feature 31: Stack Context Variables in Engine
 - Description: [Epic 11: Prompt Registry, Story 11.5] After stack detection, inject stack variables into the Tera context: {{ stack.name }}, {{ stack.tools.lint }}, {{ stack.tools.test }}, {{ stack.tools.build }}, {{ stack.parent }}. Workflows can reference detected stack info without hardcoding commands. Integrate StackDetector into Engine initialization when prompts/registry.yaml exists.
@@ -205,37 +205,37 @@
 - Description: [Epic 11: Prompt Registry, Story 11.7] Create language-agnostic fallback prompts: prompts/fix-lint/_default.md.tera, prompts/fix-test/_default.md.tera, and prompts/code-review/_default.md.tera. These serve as universal fallbacks when no stack-specific prompt exists. Include Tera placeholders for {{ steps.run_lint.stdout }} and other contextual data.
 - Dependencies: Feature 29
 - Files: prompts/fix-lint/_default.md.tera, prompts/fix-test/_default.md.tera, prompts/code-review/_default.md.tera
-- Status: pending
+- Status: done
 
 ## Feature 34: Java Prompt Templates
 - Description: [Epic 11: Prompt Registry, Story 11.8] Create Java-specific prompts: fix-lint/java.md.tera (Checkstyle, SpotBugs, PMD, Google Java Style), fix-test/java.md.tera (JUnit5, Mockito, AssertJ), code-review/java.md.tera (SOLID, Spring patterns, Maven/Gradle). Add java-spring.md.tera variants with Spring Boot Test, MockMvc, and @Configuration expertise.
 - Dependencies: Feature 33
 - Files: prompts/fix-lint/java.md.tera, prompts/fix-lint/java-spring.md.tera, prompts/fix-test/java.md.tera, prompts/fix-test/java-spring.md.tera, prompts/code-review/java.md.tera
-- Status: pending
+- Status: done
 
 ## Feature 35: React and TypeScript Prompt Templates
 - Description: [Epic 11: Prompt Registry, Story 11.9] Create React/TS prompts: fix-lint/react.md.tera (ESLint + hooks rules, JSX), fix-lint/typescript.md.tera (ESLint, Prettier, strict mode), fix-test/react.md.tera (React Testing Library, Cypress), code-review/react.md.tera (hooks patterns, rendering optimization, state management). React inherits from TypeScript via registry.yaml.
 - Dependencies: Feature 33
 - Files: prompts/fix-lint/react.md.tera, prompts/fix-lint/typescript.md.tera, prompts/fix-test/react.md.tera, prompts/code-review/react.md.tera
-- Status: pending
+- Status: done
 
 ## Feature 36: Python and Rust Prompt Templates
 - Description: [Epic 11: Prompt Registry, Story 11.10] Create Python prompts: fix-lint/python.md.tera (ruff, mypy, flake8), fix-test/python.md.tera (pytest, unittest), code-review/python.md.tera. Create Rust prompts: fix-lint/rust.md.tera (clippy), fix-test/rust.md.tera (cargo test), code-review/rust.md.tera. Completes initial coverage for 5 stacks.
 - Dependencies: Feature 33
 - Files: prompts/fix-lint/python.md.tera, prompts/fix-lint/rust.md.tera, prompts/fix-test/python.md.tera, prompts/fix-test/rust.md.tera, prompts/code-review/python.md.tera, prompts/code-review/rust.md.tera
-- Status: pending
+- Status: done
 
 ## Feature 37: fix-ci.yaml Workflow
 - Description: [Epic 11: Prompt Registry, Story 11.11] Create workflows/fix-ci.yaml — generic CI fix workflow that: checks out PR branch, auto-detects stack via registry, installs deps using {{ stack.tools.install }}, runs lint via {{ stack.tools.lint }}, loads specialized prompt via {{ prompts.fix-lint }}, fixes errors in repeat loop (max 3), commits and pushes fix. Zero hardcoded language logic in the YAML.
 - Dependencies: Feature 31, Feature 32
 - Files: workflows/fix-ci.yaml
-- Status: pending
+- Status: done
 
 ## Feature 38: fix-test.yaml Workflow
 - Description: [Epic 11: Prompt Registry, Story 11.12] Create workflows/fix-test.yaml — similar to fix-ci but for test failures. Runs {{ stack.tools.test }}, loads {{ prompts.fix-test }} for detected stack, fixes failing tests in repeat loop (max 3), pushes fix. Supports both unit and integration test modes via args.mode parameter.
 - Dependencies: Feature 37
 - Files: workflows/fix-test.yaml
-- Status: pending
+- Status: done
 
 ## Feature 39: Integrate Stack Detection in Pre-Flight Validation
 - Description: [Epic 11: Prompt Registry, Story 11.13] Add stack detection to validate_environment() in cli/commands.rs. When a workflow references {{ stack.* }} or {{ prompts.* }}, pre-flight validates that registry.yaml exists, stack can be detected, and required prompt files are found. Provides actionable error: "No prompt for fix-lint/go — create prompts/fix-lint/go.md.tera or prompts/fix-lint/_default.md.tera".
@@ -247,4 +247,4 @@
 - Description: [Epic 11: Prompt Registry, Story 11.14] Add integration tests covering: registry.yaml parsing, stack detection from fixture projects (Java, React, Python, Rust), fallback chain traversal (react→typescript→_default), dynamic template path loading, missing prompt error messages, and circular inheritance detection. Use tempdir fixtures with marker files.
 - Dependencies: Feature 29, Feature 30
 - Files: tests/prompt_resolver.rs, tests/fixtures/registry.yaml, tests/fixtures/prompts/
-- Status: pending
+- Status: done

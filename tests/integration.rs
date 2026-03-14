@@ -7,7 +7,7 @@ async fn run_workflow(yaml: &str, target: &str) -> anyhow::Result<minion_engine:
     let wf = parser::parse_str(yaml)?;
     let errors = validator::validate(&wf);
     assert!(errors.is_empty(), "Workflow validation errors: {:?}", errors);
-    let mut engine = Engine::new(wf, target.to_string(), HashMap::new(), false, true);
+    let mut engine = Engine::new(wf, target.to_string(), HashMap::new(), false, true).await;
     engine.run().await
 }
 
@@ -18,7 +18,7 @@ async fn simple_test_workflow_runs_without_errors() {
     let errors = validator::validate(&wf);
     assert!(errors.is_empty(), "Validation errors: {:?}", errors);
 
-    let mut engine = Engine::new(wf, "test_target".to_string(), HashMap::new(), false, true);
+    let mut engine = Engine::new(wf, "test_target".to_string(), HashMap::new(), false, true).await;
     let result = engine.run().await.expect("simple-test workflow should succeed");
     // Last step is ls -la — output should be non-empty
     assert!(!result.text().is_empty());
@@ -142,7 +142,7 @@ steps:
     let wf = parser::parse_str(yaml).unwrap();
     let errors = validator::validate(&wf);
     assert!(errors.is_empty());
-    let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+    let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
     let result = engine.run().await;
     assert!(result.is_err(), "workflow should fail when gate blocks");
     let msg = result.unwrap_err().to_string();
@@ -299,7 +299,7 @@ steps:
     let errors = validator::validate(&wf);
     assert!(errors.is_empty(), "validation errors: {:?}", errors);
 
-    let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+    let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
     // The mock produces a valid JSON lines response — engine should succeed
     match engine.run().await {
         Ok(output) => {
@@ -348,7 +348,9 @@ async fn all_yaml_fixtures_are_valid() {
     if let Ok(entries) = std::fs::read_dir(fixtures_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
+            if path.extension().is_some_and(|e| e == "yaml" || e == "yml")
+                && !path.file_name().unwrap().to_str().unwrap().starts_with("registry")
+            {
                 let wf = parser::parse_file(&path)
                     .unwrap_or_else(|e| panic!("{} should parse: {e}", path.display()));
                 let errors = validator::validate(&wf);

@@ -1,86 +1,67 @@
 {
-  "generated": "2026-03-12",
+  "generated": "2026-03-14",
   "source": "bmad",
+  "epic": "Epic 11: Prompt Registry",
   "worktrees": [
     {
       "id": "wt1",
       "path": "../minion-engine-bmad-wt1",
       "branch": "minion-engine-bmad-wt1",
-      "features": [1, 2, 3, 20, 21, 25, 26],
-      "stories": ["1.1", "1.2", "1.3", "8.1", "8.2", "10.1", "10.2"],
-      "epics": ["Epic 1: Typed Output Parsing", "Epic 8: Three-Accessor Pattern", "Epic 10: Cross-Scope Output Access"],
-      "ownedFiles": ["src/engine/template.rs"],
-      "ownedDirs": [],
-      "readOnlyFiles": ["src/steps/agent.rs", "src/steps/cmd.rs", "src/steps/chat.rs", "src/steps/gate.rs", "src/steps/repeat.rs", "src/steps/map.rs", "src/steps/parallel.rs", "src/steps/call.rs", "src/steps/template_step.rs"],
-      "forbiddenDirs": ["src/plugins", "src/events"],
-      "sharedFiles": [
-        {"path": "src/workflow/schema.rs", "strategy": "append_only", "note": "Add output_type field to StepDef"},
-        {"path": "src/engine/mod.rs", "strategy": "deferred", "note": "Add output parsing after step execution"},
-        {"path": "src/engine/context.rs", "strategy": "single_owner", "note": "Primary owner for template rendering changes"},
-        {"path": "src/steps/mod.rs", "strategy": "append_only", "note": "Add ParsedValue enum"}
-      ]
+      "features": [27, 28],
+      "stories": ["11.1", "11.2"],
+      "description": "Registry YAML Schema + Parser, Stack Detector",
+      "ownedFiles": [
+        "src/prompts/mod.rs",
+        "src/prompts/registry.rs",
+        "src/prompts/detector.rs",
+        "prompts/registry.yaml",
+        "src/lib.rs"
+      ],
+      "ownedDirs": ["src/prompts/"],
+      "readOnlyFiles": ["src/steps/mod.rs", "src/engine/mod.rs", "src/error.rs", "Cargo.toml"],
+      "forbiddenDirs": ["src/steps/template_step.rs", "src/engine/template.rs", "src/cli/", "prompts/fix-lint/", "prompts/fix-test/", "prompts/code-review/", "workflows/", "tests/"],
+      "sharedFiles": []
     },
     {
       "id": "wt2",
       "path": "../minion-engine-bmad-wt2",
       "branch": "minion-engine-bmad-wt2",
-      "features": [4, 5, 6, 13, 14, 18, 19],
-      "stories": ["2.1", "2.2", "2.3", "5.1", "5.2", "7.1", "7.2"],
-      "epics": ["Epic 2: Agent Session Continuity", "Epic 5: Chat Session Management", "Epic 7: Map Collect/Reduce Helpers"],
-      "ownedFiles": ["src/steps/agent.rs", "src/steps/chat.rs", "src/steps/map.rs"],
+      "features": [29, 30],
+      "stories": ["11.3", "11.4"],
+      "description": "Prompt Resolver with Fallback Chain, Dynamic Template Path",
+      "ownedFiles": ["src/prompts/resolver.rs", "src/steps/template_step.rs"],
       "ownedDirs": [],
-      "readOnlyFiles": ["src/engine/mod.rs", "src/engine/template.rs", "src/steps/cmd.rs", "src/steps/gate.rs", "src/steps/repeat.rs", "src/steps/parallel.rs", "src/steps/call.rs", "src/steps/template_step.rs"],
-      "forbiddenDirs": ["src/plugins", "src/events"],
-      "sharedFiles": [
-        {"path": "src/workflow/schema.rs", "strategy": "append_only", "note": "Add resume, fork_session, collect, reduce, truncation fields"},
-        {"path": "src/engine/context.rs", "strategy": "single_owner", "note": "Add session_id to tera context and chat_sessions storage only"}
-      ]
+      "readOnlyFiles": ["src/prompts/mod.rs", "src/prompts/registry.rs", "src/prompts/detector.rs", "src/steps/mod.rs", "src/engine/context.rs", "src/error.rs", "Cargo.toml"],
+      "forbiddenDirs": ["src/engine/template.rs", "src/engine/mod.rs", "src/cli/", "prompts/", "workflows/", "src/lib.rs"],
+      "sharedFiles": []
     },
     {
       "id": "wt3",
       "path": "../minion-engine-bmad-wt3",
       "branch": "minion-engine-bmad-wt3",
-      "features": [7, 8, 9, 10, 11, 12],
-      "stories": ["3.1", "3.2", "3.3", "4.1", "4.2", "4.3"],
-      "epics": ["Epic 3: Per-Step Async Execution", "Epic 4: Embedded Script Step"],
-      "ownedFiles": ["src/steps/script.rs"],
+      "features": [31, 32, 39],
+      "stories": ["11.5", "11.6", "11.13"],
+      "description": "Stack Context Variables, Auto-Resolved Prompts, Pre-Flight Validation",
+      "ownedFiles": ["src/engine/mod.rs", "src/engine/context.rs", "src/engine/template.rs", "src/cli/commands.rs"],
       "ownedDirs": [],
-      "readOnlyFiles": ["src/engine/context.rs", "src/engine/template.rs", "src/steps/agent.rs", "src/steps/cmd.rs", "src/steps/chat.rs", "src/steps/gate.rs", "src/steps/repeat.rs", "src/steps/map.rs", "src/steps/parallel.rs", "src/steps/call.rs"],
-      "forbiddenDirs": ["src/plugins", "src/events"],
-      "sharedFiles": [
-        {"path": "src/engine/mod.rs", "strategy": "deferred", "note": "Primary: async execution loop + Script dispatch"},
-        {"path": "src/workflow/schema.rs", "strategy": "append_only", "note": "Add async_exec field and Script variant"},
-        {"path": "Cargo.toml", "strategy": "append_only", "note": "Add rhai dependency"},
-        {"path": "src/steps/mod.rs", "strategy": "append_only", "note": "Register ScriptExecutor"}
-      ]
+      "readOnlyFiles": ["src/prompts/mod.rs", "src/prompts/registry.rs", "src/prompts/detector.rs", "src/prompts/resolver.rs", "src/steps/mod.rs", "src/workflow/schema.rs", "Cargo.toml"],
+      "forbiddenDirs": ["prompts/", "workflows/", "tests/", "src/lib.rs", "src/steps/template_step.rs"],
+      "sharedFiles": []
     },
     {
       "id": "wt4",
       "path": "../minion-engine-bmad-wt4",
       "branch": "minion-engine-bmad-wt4",
-      "features": [15, 16, 17, 22, 23, 24],
-      "stories": ["6.1", "6.2", "6.3", "9.1", "9.2", "9.3"],
-      "epics": ["Epic 6: Plugin System", "Epic 9: Event & Instrumentation System"],
-      "ownedFiles": ["src/plugins/mod.rs", "src/plugins/registry.rs", "src/plugins/loader.rs", "src/events/mod.rs", "src/events/types.rs", "src/events/subscribers.rs"],
-      "ownedDirs": ["src/plugins", "src/events"],
-      "readOnlyFiles": ["src/engine/context.rs", "src/engine/template.rs", "src/steps/agent.rs", "src/steps/cmd.rs", "src/steps/chat.rs", "src/steps/gate.rs", "src/steps/repeat.rs", "src/steps/map.rs", "src/steps/parallel.rs", "src/steps/call.rs", "src/steps/template_step.rs"],
-      "forbiddenDirs": [],
-      "sharedFiles": [
-        {"path": "src/engine/mod.rs", "strategy": "deferred", "note": "Add plugin dispatch fallback + event emission"},
-        {"path": "src/workflow/schema.rs", "strategy": "append_only", "note": "Add events config section"},
-        {"path": "Cargo.toml", "strategy": "append_only", "note": "Add libloading dependency"},
-        {"path": "src/workflow/validator.rs", "strategy": "append_only", "note": "Add plugin validation"},
-        {"path": "src/lib.rs", "strategy": "append_only", "note": "Add pub mod plugins and events"}
-      ]
+      "features": [33, 34, 35, 36, 37, 38, 40],
+      "stories": ["11.7", "11.8", "11.9", "11.10", "11.11", "11.12", "11.14"],
+      "description": "Templates (_default, Java, React/TS, Python/Rust), Workflows, Integration Tests",
+      "ownedFiles": ["workflows/fix-ci.yaml", "workflows/fix-test.yaml", "tests/prompt_resolver.rs"],
+      "ownedDirs": ["prompts/fix-lint/", "prompts/fix-test/", "prompts/code-review/", "tests/fixtures/"],
+      "readOnlyFiles": ["prompts/registry.yaml", "src/prompts/resolver.rs", "src/prompts/registry.rs", "features.md"],
+      "forbiddenDirs": ["src/", ".hive/", "Cargo.toml"],
+      "sharedFiles": []
     }
   ],
   "mergeOrder": ["wt1", "wt2", "wt3", "wt4"],
-  "sharedFiles": [
-    {"path": "src/workflow/schema.rs", "strategy": "append_only", "owners": ["wt1", "wt2", "wt3", "wt4"]},
-    {"path": "src/engine/mod.rs", "strategy": "deferred", "owners": ["wt1", "wt3", "wt4"]},
-    {"path": "src/engine/context.rs", "strategy": "single_owner", "primary": "wt1", "secondary": ["wt2"]},
-    {"path": "Cargo.toml", "strategy": "append_only", "owners": ["wt3", "wt4"]},
-    {"path": "src/steps/mod.rs", "strategy": "append_only", "owners": ["wt1", "wt3"]},
-    {"path": "src/lib.rs", "strategy": "append_only", "owners": ["wt4"]}
-  ]
+  "sharedFiles": []
 }

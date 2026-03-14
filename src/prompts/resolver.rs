@@ -3,20 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::StepError;
 
-/// Minimal representation of a detected stack with its parent chain.
-///
-/// WT-1 will provide the real `StackInfo` from `src/prompts/detector.rs`.
-/// This struct mirrors the integration contract agreed on in the BMAD spec.
-#[derive(Debug, Clone)]
-pub struct StackInfo {
-    /// Primary stack name, e.g. `"react"`, `"typescript"`, `"javascript"`
-    pub name: String,
-    /// Ordered list of parent stack names from closest to furthest ancestor,
-    /// e.g. `["typescript", "javascript"]` for a `react` stack.
-    pub parent_chain: Vec<String>,
-    /// Detected tool versions (name → version string), reserved for future use.
-    pub tools: std::collections::HashMap<String, String>,
-}
+// Re-export StackInfo from the canonical definition in detector.rs
+pub use super::detector::StackInfo;
 
 /// Resolves a prompt file for a given (function, stack) pair using the
 /// ADR-02 fallback chain algorithm:

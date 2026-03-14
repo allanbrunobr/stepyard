@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use crate::engine::context::Context;
 use crate::error::StepError;
-use crate::prompts::resolver::PromptResolver;
 
 /// Result of template preprocessing
 #[derive(Debug)]
@@ -226,9 +225,10 @@ fn sanitize_prompt_name(name: &str) -> String {
 
 /// Resolve and render the prompt content for `{{ prompts.fn_name }}`.
 ///
-/// Looks up the prompt file using `PromptResolver`, reads its contents, and
-/// renders it as a Tera template with the current context.  If no stack info
-/// is available the call fails with a descriptive error.
+/// Looks up the prompt file using the ADR-02 fallback chain (sync variant for
+/// template preprocessing), reads its contents, and renders it as a Tera
+/// template with the current context.  If no stack info is available the call
+/// fails with a descriptive error.
 fn resolve_prompt_content(fn_name: &str, ctx: &Context) -> Result<String, StepError> {
     let stack_info = ctx.get_stack_info().ok_or_else(|| {
         StepError::Fail(format!(
@@ -238,7 +238,38 @@ fn resolve_prompt_content(fn_name: &str, ctx: &Context) -> Result<String, StepEr
     })?;
 
     let prompts_dir = &ctx.prompts_dir;
-    let prompt_path = PromptResolver::resolve(fn_name, stack_info, prompts_dir)?;
+
+    // Sync fallback chain matching PromptResolver::resolve() logic:
+    // 1. prompts/{fn}/{stack.name}.md.tera
+    // 2. Walk parent_chain
+    // 3. prompts/{fn}/_default.md.tera
+    let mut candidates: Vec<&str> = vec![&stack_info.name];
+    for parent in &stack_info.parent_chain {
+        candidates.push(parent.as_str());
+    }
+
+    let prompt_path = {
+        let mut found: Option<std::path::PathBuf> = None;
+        for name in &candidates {
+            let path = prompts_dir.join(fn_name).join(format!("{}.md.tera", name));
+            if path.exists() {
+                found = Some(path);
+                break;
+            }
+        }
+        if found.is_none() {
+            let default_path = prompts_dir.join(fn_name).join("_default.md.tera");
+            if default_path.exists() {
+                found = Some(default_path);
+            }
+        }
+        found.ok_or_else(|| {
+            StepError::Fail(format!(
+                "No prompt for {}/{} — create prompts/{}/{}.md.tera or prompts/{}/_default.md.tera",
+                fn_name, stack_info.name, fn_name, stack_info.name, fn_name
+            ))
+        })?
+    };
 
     let content = std::fs::read_to_string(&prompt_path).map_err(|e| {
         StepError::Fail(format!(

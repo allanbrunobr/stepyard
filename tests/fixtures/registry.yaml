@@ -1,8 +1,24 @@
 # Test registry for prompt resolver integration tests
+version: 1
+detection_order:
+  - react
+  - java-spring
+  - java
+  - typescript
+  - javascript
+  - python
+  - rust
+
 stacks:
+  _default:
+    tools:
+      lint: "echo 'no linter'"
+      test: "echo 'no test'"
+      install: "echo 'no install'"
+
   rust:
-    name: rust
-    markers:
+    parent: _default
+    file_markers:
       - Cargo.toml
     tools:
       lint: "cargo clippy -- -D warnings"
@@ -10,8 +26,8 @@ stacks:
       install: "cargo build"
 
   java:
-    name: java
-    markers:
+    parent: _default
+    file_markers:
       - pom.xml
       - build.gradle
     tools:
@@ -20,18 +36,19 @@ stacks:
       install: "mvn install -DskipTests"
 
   java-spring:
-    name: java-spring
     parent: java
-    markers:
+    file_markers:
       - pom.xml
+    content_match:
+      pom.xml: "spring-boot"
     tools:
       lint: "mvn checkstyle:check"
       test: "mvn test"
       install: "mvn install -DskipTests"
 
   python:
-    name: python
-    markers:
+    parent: _default
+    file_markers:
       - pyproject.toml
       - setup.py
       - requirements.txt
@@ -41,8 +58,8 @@ stacks:
       install: "pip install -e ."
 
   typescript:
-    name: typescript
-    markers:
+    parent: javascript
+    file_markers:
       - tsconfig.json
     tools:
       lint: "npx eslint . --ext .ts"
@@ -50,18 +67,19 @@ stacks:
       install: "npm install"
 
   react:
-    name: react
     parent: typescript
-    markers:
+    file_markers:
       - package.json
+    content_match:
+      package.json: "react"
     tools:
       lint: "npx eslint . --ext .ts,.tsx"
       test: "npx jest"
       install: "npm install"
 
   javascript:
-    name: javascript
-    markers:
+    parent: _default
+    file_markers:
       - package.json
     tools:
       lint: "npx eslint ."

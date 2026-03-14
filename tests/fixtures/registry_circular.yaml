@@ -1,9 +1,13 @@
 # Registry with circular inheritance for testing circular detection
+version: 1
+detection_order:
+  - alpha
+  - beta
+
 stacks:
   alpha:
-    name: alpha
     parent: beta
-    markers:
+    file_markers:
       - alpha.toml
     tools:
       lint: "alpha-lint"
@@ -11,9 +15,8 @@ stacks:
       install: "alpha-install"
 
   beta:
-    name: beta
     parent: alpha
-    markers:
+    file_markers:
       - beta.toml
     tools:
       lint: "beta-lint"

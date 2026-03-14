@@ -112,7 +112,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(
+    pub async fn new(
         workflow: WorkflowDef,
         target: String,
         vars: HashMap<String, serde_json::Value>,
@@ -124,10 +124,10 @@ impl Engine {
             quiet,
             ..Default::default()
         };
-        Self::with_options(workflow, target, vars, options)
+        Self::with_options(workflow, target, vars, options).await
     }
 
-    pub fn with_options(
+    pub async fn with_options(
         workflow: WorkflowDef,
         target: String,
         vars: HashMap<String, serde_json::Value>,
@@ -171,7 +171,7 @@ impl Engine {
         }
 
         // ── Detect stack if registry exists ──────────────────────────────────
-        let stack_info = detect_stack_if_registry_exists();
+        let stack_info = detect_stack_if_registry_exists().await;
         if let Some(ref info) = stack_info {
             let stack_val = serde_json::json!({
                 "name": info.name,
@@ -1191,15 +1191,15 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// Detect the project stack from `prompts/registry.yaml` if it exists.
 /// Returns `None` silently if there is no registry or detection fails.
-fn detect_stack_if_registry_exists() -> Option<StackInfo> {
+async fn detect_stack_if_registry_exists() -> Option<StackInfo> {
     let registry_path = std::path::Path::new("prompts/registry.yaml");
     if !registry_path.exists() {
         return None;
     }
-    match Registry::from_file(registry_path) {
+    match Registry::from_file(registry_path).await {
         Ok(registry) => {
             let workspace = std::path::Path::new(".");
-            match StackDetector::detect(&registry, workspace) {
+            match StackDetector::detect(&registry, workspace).await {
                 Ok(info) => {
                     tracing::info!(stack = %info.name, "Detected project stack");
                     Some(info)
@@ -1239,7 +1239,7 @@ steps:
     run: "echo second"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         let result = engine.run().await.unwrap();
         assert_eq!(result.text().trim(), "second");
         assert!(engine.context.get_step("step1").is_some());
@@ -1262,7 +1262,7 @@ steps:
     run: "echo {{ steps.produce.stdout }}"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         let result = engine.run().await.unwrap();
         assert!(result.text().contains("hello_world"));
     }
@@ -1284,7 +1284,7 @@ steps:
             json: true,
             ..Default::default()
         };
-        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts).await;
         engine.run().await.unwrap();
 
         let records = engine.step_records();
@@ -1310,7 +1310,7 @@ steps:
             json: true,
             ..Default::default()
         };
-        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts).await;
         let start = Instant::now();
         engine.run().await.unwrap();
         let out = engine.json_output("success", start.elapsed());
@@ -1325,8 +1325,8 @@ steps:
         assert_eq!(parsed["steps"][0]["name"], "greet");
     }
 
-    #[test]
-    fn should_sandbox_step_logic() {
+    #[tokio::test]
+    async fn should_sandbox_step_logic() {
         let yaml = r#"
 name: test
 steps:
@@ -1337,7 +1337,7 @@ steps:
         let wf = parser::parse_str(yaml).unwrap();
 
         // Disabled mode → nothing sandboxed
-        let engine = Engine::new(wf.clone(), "".to_string(), HashMap::new(), false, true);
+        let engine = Engine::new(wf.clone(), "".to_string(), HashMap::new(), false, true).await;
         assert!(!engine.should_sandbox_step(&StepType::Cmd));
         assert!(!engine.should_sandbox_step(&StepType::Agent));
         assert!(!engine.should_sandbox_step(&StepType::Gate));
@@ -1348,7 +1348,7 @@ steps:
             quiet: true,
             ..Default::default()
         };
-        let engine = Engine::with_options(wf.clone(), "".to_string(), HashMap::new(), opts);
+        let engine = Engine::with_options(wf.clone(), "".to_string(), HashMap::new(), opts).await;
         assert!(engine.should_sandbox_step(&StepType::Cmd));
         assert!(engine.should_sandbox_step(&StepType::Agent));
         assert!(!engine.should_sandbox_step(&StepType::Gate));
@@ -1359,14 +1359,14 @@ steps:
             quiet: true,
             ..Default::default()
         };
-        let engine = Engine::with_options(wf.clone(), "".to_string(), HashMap::new(), opts);
+        let engine = Engine::with_options(wf.clone(), "".to_string(), HashMap::new(), opts).await;
         assert!(!engine.should_sandbox_step(&StepType::Cmd));
         assert!(engine.should_sandbox_step(&StepType::Agent));
         assert!(!engine.should_sandbox_step(&StepType::Gate));
     }
 
-    #[test]
-    fn dry_run_does_not_panic() {
+    #[tokio::test]
+    async fn dry_run_does_not_panic() {
         let yaml = r#"
 name: dry-run-test
 scopes:
@@ -1393,12 +1393,12 @@ steps:
     max_iterations: 3
 "#;
         let wf = crate::workflow::parser::parse_str(yaml).unwrap();
-        let engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         engine.dry_run();
     }
 
-    #[test]
-    fn dry_run_all_step_types() {
+    #[tokio::test]
+    async fn dry_run_all_step_types() {
         let yaml = r#"
 name: all-types
 steps:
@@ -1417,7 +1417,7 @@ steps:
         run: "echo p1"
 "#;
         let wf = crate::workflow::parser::parse_str(yaml).unwrap();
-        let engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         engine.dry_run();
     }
 
@@ -1442,7 +1442,7 @@ steps:
             quiet: true,
             ..Default::default()
         };
-        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts).await;
         let err = engine.run().await.unwrap_err();
         assert!(
             err.to_string().contains("No state file found"),
@@ -1473,7 +1473,7 @@ steps:
             quiet: true,
             ..Default::default()
         };
-        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts).await;
         let err = engine.run().await.unwrap_err();
         assert!(
             err.to_string().contains("not found in workflow"),
@@ -1493,7 +1493,7 @@ steps:
     run: "echo '{{ missing.output? }}'"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         let result = engine.run().await.unwrap();
         // safe accessor returns empty string when step doesn't exist
         assert_eq!(result.text().trim(), "");
@@ -1512,7 +1512,7 @@ steps:
     run: "echo '{{ produce.output? }}'"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         let result = engine.run().await.unwrap();
         assert!(result.text().contains("hello"));
     }
@@ -1527,7 +1527,7 @@ steps:
     run: "echo '{{ nonexistent.output! }}'"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         let err = engine.run().await.unwrap_err();
         assert!(err.to_string().contains("strict access"), "{err}");
     }
@@ -1546,7 +1546,7 @@ steps:
     run: "echo {{ count.output }}"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         let result = engine.run().await.unwrap();
         assert_eq!(result.text().trim(), "42");
     }
@@ -1562,7 +1562,7 @@ steps:
     output_type: integer
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         let err = engine.run().await.unwrap_err();
         assert!(err.to_string().contains("integer"), "{err}");
     }
@@ -1581,7 +1581,7 @@ steps:
     run: "echo {{ scan.output.count }}"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         let result = engine.run().await.unwrap();
         assert_eq!(result.text().trim(), "5");
     }
@@ -1600,7 +1600,7 @@ steps:
     run: "echo {{ files.output | length }}"
 "#;
         let wf = parser::parse_str(yaml).unwrap();
-        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let mut engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         let result = engine.run().await.unwrap();
         assert_eq!(result.text().trim(), "3");
     }
@@ -1625,7 +1625,7 @@ steps:
             quiet: true,
             ..Default::default()
         };
-        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts).await;
         let result = engine.run().await.unwrap();
         // sync_step is the last synchronous step
         assert!(result.text().contains("sync_result"));
@@ -1637,8 +1637,8 @@ steps:
         );
     }
 
-    #[test]
-    fn dry_run_shows_async_lightning_indicator() {
+    #[tokio::test]
+    async fn dry_run_shows_async_lightning_indicator() {
         let yaml = r#"
 name: dry-async
 steps:
@@ -1652,13 +1652,13 @@ steps:
 "#;
         // dry_run should not panic and the async step should have ⚡ in output
         let wf = parser::parse_str(yaml).unwrap();
-        let engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true);
+        let engine = Engine::new(wf, "".to_string(), HashMap::new(), false, true).await;
         // Just verify it doesn't panic
         engine.dry_run();
     }
 
-    #[test]
-    fn should_sandbox_step_script_always_false() {
+    #[tokio::test]
+    async fn should_sandbox_step_script_always_false() {
         let yaml = r#"
 name: test
 steps:
@@ -1674,7 +1674,7 @@ steps:
             quiet: true,
             ..Default::default()
         };
-        let engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts).await;
         assert!(!engine.should_sandbox_step(&StepType::Script));
     }
 
@@ -1702,7 +1702,7 @@ steps:
             quiet: true,
             ..Default::default()
         };
-        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts).await;
         engine.run().await.unwrap();
 
         let records = engine.step_records();
@@ -1738,13 +1738,13 @@ steps:
             quiet: true,
             ..Default::default()
         };
-        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts);
+        let mut engine = Engine::with_options(wf, "".to_string(), HashMap::new(), opts).await;
         let result = engine.run().await.unwrap();
         assert_eq!(result.text().trim(), "42");
     }
 
-    #[test]
-    fn stack_context_injected_when_registry_exists() {
+    #[tokio::test]
+    async fn stack_context_injected_when_registry_exists() {
         let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let dir = tempfile::tempdir().unwrap();
@@ -1783,7 +1783,8 @@ stacks:
                 quiet: true,
                 ..Default::default()
             },
-        );
+        )
+        .await;
 
         let result = engine.context.render_template("{{ stack.name }}").unwrap();
         assert_eq!(result, "rust");
@@ -1800,8 +1801,8 @@ stacks:
         std::env::set_current_dir(orig_dir).unwrap();
     }
 
-    #[test]
-    fn stack_context_skipped_when_no_registry() {
+    #[tokio::test]
+    async fn stack_context_skipped_when_no_registry() {
         let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let yaml = "name: test\nsteps:\n  - name: s\n    type: cmd\n    run: \"echo hi\"\n";
@@ -1819,7 +1820,8 @@ stacks:
                 quiet: true,
                 ..Default::default()
             },
-        );
+        )
+        .await;
         // Should not crash, stack_info is None
         assert!(engine.stack_info.is_none());
         // stack variable not in context

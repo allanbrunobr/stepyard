@@ -146,7 +146,7 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
     // ── Pre-flight: validate required environment variables ──────────────
     // Give clear, actionable errors before starting the workflow so that
     // developers installing via `cargo install` know exactly what's missing.
-    validate_environment(&workflow, sandbox_mode != SandboxMode::Disabled, args.json)?;
+    validate_environment(&workflow, sandbox_mode != SandboxMode::Disabled, args.json).await?;
 
     let opts = EngineOptions {
         verbose: args.verbose,
@@ -157,7 +157,7 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
         sandbox_mode,
     };
 
-    let mut engine = Engine::with_options(workflow.clone(), target, vars, opts);
+    let mut engine = Engine::with_options(workflow.clone(), target, vars, opts).await;
 
     // ── Dry-run mode ──────────────────────────────────────────────────────────
     if args.dry_run {
@@ -210,7 +210,7 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
 /// This runs **before** any Docker containers or API calls, so the developer
 /// gets an instant, actionable error message instead of a cryptic failure
 /// mid-workflow.
-fn validate_environment(
+async fn validate_environment(
     workflow: &crate::workflow::schema::WorkflowDef,
     sandbox_enabled: bool,
     json_mode: bool,
@@ -336,7 +336,7 @@ fn validate_environment(
                 }
             } else {
                 // Registry exists — parse it
-                match crate::prompts::registry::Registry::from_file(registry_path) {
+                match crate::prompts::registry::Registry::from_file(registry_path).await {
                     Err(e) => {
                         errors.push(format!(
                             "Failed to parse 'prompts/registry.yaml': {e}\n\
@@ -349,7 +349,9 @@ fn validate_environment(
                             let workspace = std::path::Path::new(".");
                             match crate::prompts::detector::StackDetector::detect(
                                 &registry, workspace,
-                            ) {
+                            )
+                            .await
+                            {
                                 Err(e) => {
                                     warnings.push(format!(
                                         "Stack detection failed: {e}\n\
@@ -365,7 +367,8 @@ fn validate_environment(
                                         workflow,
                                         &stack_info,
                                         prompts_path,
-                                    );
+                                    )
+                                    .await;
                                     for m in missing {
                                         errors.push(m);
                                     }
@@ -454,7 +457,7 @@ fn workflow_references_prompt_vars(workflow: &crate::workflow::schema::WorkflowD
 
 /// Scan the workflow for `{{ prompts.X }}` references and verify the prompt files exist.
 /// Returns a list of error messages for any missing prompt files.
-fn collect_missing_prompts(
+async fn collect_missing_prompts(
     workflow: &crate::workflow::schema::WorkflowDef,
     stack_info: &crate::prompts::detector::StackInfo,
     prompts_dir: &std::path::Path,
@@ -462,48 +465,56 @@ fn collect_missing_prompts(
     let mut missing = Vec::new();
     let mut checked = std::collections::HashSet::new();
 
-    let check_text = |text: &str,
-                      missing: &mut Vec<String>,
-                      checked: &mut std::collections::HashSet<String>| {
+    // Collect all prompt function names referenced in a text string
+    fn extract_prompt_names(text: &str, checked: &mut std::collections::HashSet<String>) -> Vec<String> {
+        let mut names = Vec::new();
         let mut s = text;
         while let Some(pos) = s.find("prompts.") {
             let after = &s[pos + 8..];
-            // Extract function name: read until whitespace, `}}`, `|`, or `?` or `!`
             let end = after
                 .find(|c: char| c.is_whitespace() || c == '}' || c == '|' || c == '?' || c == '!')
                 .unwrap_or(after.len());
             let fn_name = after[..end].trim();
             if !fn_name.is_empty() && checked.insert(fn_name.to_string()) {
-                match crate::prompts::resolver::PromptResolver::resolve(
-                    fn_name,
-                    stack_info,
-                    prompts_dir,
-                ) {
-                    Ok(_) => {}
-                    Err(e) => missing.push(format!("{e}")),
-                }
+                names.push(fn_name.to_string());
             }
             s = &s[pos + 8 + end.min(after.len())..];
         }
-    };
+        names
+    }
 
-    let scan_step = |step: &crate::workflow::schema::StepDef,
-                     missing: &mut Vec<String>,
-                     checked: &mut std::collections::HashSet<String>| {
+    // Collect all prompt function names from all steps
+    let mut all_names = Vec::new();
+    for step in &workflow.steps {
         if let Some(ref run) = step.run {
-            check_text(run, missing, checked);
+            all_names.extend(extract_prompt_names(run, &mut checked));
         }
         if let Some(ref prompt) = step.prompt {
-            check_text(prompt, missing, checked);
+            all_names.extend(extract_prompt_names(prompt, &mut checked));
         }
-    };
-
-    for step in &workflow.steps {
-        scan_step(step, &mut missing, &mut checked);
     }
     for scope in workflow.scopes.values() {
         for step in &scope.steps {
-            scan_step(step, &mut missing, &mut checked);
+            if let Some(ref run) = step.run {
+                all_names.extend(extract_prompt_names(run, &mut checked));
+            }
+            if let Some(ref prompt) = step.prompt {
+                all_names.extend(extract_prompt_names(prompt, &mut checked));
+            }
+        }
+    }
+
+    // Resolve each prompt name asynchronously
+    for fn_name in &all_names {
+        match crate::prompts::resolver::PromptResolver::resolve(
+            fn_name,
+            stack_info,
+            prompts_dir,
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(e) => missing.push(format!("{e}")),
         }
     }
 
