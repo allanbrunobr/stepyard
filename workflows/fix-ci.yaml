@@ -86,12 +86,7 @@ steps:
   # 4. Commit the fix
   - name: commit
     type: cmd
-    run: |
-      git add -A
-      git diff --cached --quiet || git commit -m "fix(ci): resolve lint failures
-
-Automated fix by Minion Engine (fix-ci workflow)
-Stack: {{ stack.name }}"
+    run: "git add -A && git diff --cached --quiet || git commit -m 'fix(ci): resolve lint failures [{{ stack.name }}]'"
     config:
       fail_on_error: false
 
