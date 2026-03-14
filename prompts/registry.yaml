@@ -1,0 +1,75 @@
+version: 1
+detection_order:
+  - java-spring
+  - java
+  - react
+  - typescript
+  - javascript
+  - python
+  - rust
+
+stacks:
+  _default:
+    tools:
+      lint: "echo 'no linter configured'"
+      test: "echo 'no test runner configured'"
+      build: "echo 'no build configured'"
+      install: "echo 'no installer configured'"
+
+  java:
+    parent: _default
+    file_markers: ["pom.xml", "build.gradle", "build.gradle.kts"]
+    tools:
+      lint: "mvn checkstyle:check"
+      test: "mvn test"
+      build: "mvn package -DskipTests"
+      install: "mvn dependency:resolve"
+
+  java-spring:
+    parent: java
+    file_markers: ["pom.xml", "build.gradle"]
+    content_match:
+      "pom.xml": "spring-boot"
+      "build.gradle": "org.springframework.boot"
+    tools:
+      test: "mvn test -Dspring.profiles.active=test"
+
+  javascript:
+    parent: _default
+    file_markers: ["package.json"]
+    tools:
+      lint: "npx eslint ."
+      test: "npm test"
+      build: "npm run build"
+      install: "npm ci"
+
+  typescript:
+    parent: javascript
+    file_markers: ["tsconfig.json"]
+    tools:
+      lint: "npx eslint . --ext .ts,.tsx"
+
+  react:
+    parent: typescript
+    content_match:
+      "package.json": "react"
+    tools:
+      test: "npx react-scripts test --watchAll=false"
+
+  python:
+    parent: _default
+    file_markers: ["pyproject.toml", "setup.py", "requirements.txt"]
+    tools:
+      lint: "ruff check ."
+      test: "pytest"
+      build: "python -m build"
+      install: "pip install -r requirements.txt"
+
+  rust:
+    parent: _default
+    file_markers: ["Cargo.toml"]
+    tools:
+      lint: "cargo clippy -- -D warnings"
+      test: "cargo test"
+      build: "cargo build --release"
+      install: "cargo fetch"
