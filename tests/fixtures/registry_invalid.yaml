@@ -1,0 +1,6 @@
+# Invalid registry — missing required fields for testing rejection
+stacks:
+  bad_stack:
+    # name field is missing — this should fail validation
+    markers:
+      - bad.toml

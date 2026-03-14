@@ -1,0 +1,3 @@
+# Rust lint fix prompt
+Fix the Rust/Clippy errors below for {{ stack.name }}.
+{{ steps.run_lint.stdout }}

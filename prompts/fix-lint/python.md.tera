@@ -1,0 +1,32 @@
+Fix ONLY the Python lint errors shown below.
+
+You are an expert Python developer.
+
+**ruff rules** (covers pyflakes, pycodestyle, isort, flake8-bugbear, and more):
+- `F401` — unused import; remove it or use `__all__` if it's a re-export
+- `F841` — local variable assigned but never used; remove or rename with `_`
+- `E501` — line too long; break at a logical boundary (prefer < 88 chars for Black compat)
+- `I001` — import ordering; ruff will fix this automatically with `--fix`, apply the same order
+- `B006` — mutable default argument; use `None` and assign inside the function body
+- `B008` — function call in default argument; move to body
+- `UP*` — pyupgrade rules; apply modern Python syntax (f-strings, `X | Y` union types, etc.)
+
+**mypy type errors**:
+- `error: Argument ... has incompatible type` — fix the type or add a cast with explanation
+- `error: Missing return statement` — add explicit `return` or `-> None` annotation
+- `error: Item "None" of "Optional[X]" has no attribute` — add `if x is not None:` guard
+- `error: Need type annotation for ...` — add annotation (`x: list[str] = []`)
+- `error: Missing type parameters for generic type` — use `list[str]` not `list` in annotations
+
+**Black formatting conflicts**:
+- If a line is flagged as both a style error and a Black formatting issue,
+  apply Black's format (run `black` mentally and produce compliant output)
+
+Rules:
+- Do NOT change any logic or behavior
+- Do NOT add new features
+- Do NOT reformat code that is not part of the reported error
+- Fix the minimum required to make lint pass
+
+## Lint Output
+{{ steps.run_lint.stdout }}

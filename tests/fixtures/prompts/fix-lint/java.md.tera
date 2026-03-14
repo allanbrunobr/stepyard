@@ -1,0 +1,3 @@
+# Java lint fix prompt
+Fix the Java lint errors below for {{ stack.name }}.
+{{ steps.run_lint.stdout }}

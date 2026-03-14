@@ -1,0 +1,112 @@
+# ============================================================
+# fix-test.yaml — Generic Test Fix Workflow
+# ============================================================
+#
+# Usage:
+#   minion execute workflows/fix-test.yaml --target <PR_NUMBER>
+#   minion execute workflows/fix-test.yaml --target <PR_NUMBER> --args '{"mode": "integration"}'
+#
+# What it does:
+#   1. Checks out the PR branch
+#   2. Detects the project stack (Rust, Java, React, Python, etc.)
+#   3. Installs dependencies using the stack-specific install command
+#   4. Runs the stack-specific test tool (unit or integration based on args.mode)
+#   5. If tests fail, uses an AI agent with the stack-specific prompt to fix them
+#   6. Repeats test + fix up to 3 times
+#   7. Commits and pushes the fix
+#
+# Args:
+#   mode: "unit" (default) | "integration" — selects which test suite to run
+#
+# Requirements:
+#   - Stack detection and prompt registry configured (registry.yaml)
+#   - Stack tools: {{ stack.tools.install }}, {{ stack.tools.test }}
+#   - Prompt template: {{ prompts.fix-test }} (resolved from registry)
+# ============================================================
+
+name: fix-test
+version: 1
+description: "Auto-detect project stack and fix test failures using stack-specific tools and prompts"
+
+config:
+  global:
+    timeout: 900s
+    working_directory: "."
+
+  agent:
+    command: claude
+    flags: ["-p", "--output-format", "stream-json"]
+    permissions: skip
+    model: claude-sonnet-4-20250514
+
+  cmd:
+    fail_on_error: true
+    timeout: 300s
+    shell: "/bin/zsh"
+
+scopes:
+  test_fix:
+    steps:
+      - name: run_tests
+        type: cmd
+        run: |
+          MODE="{{ args.mode | default(val='unit') }}"
+          if [ "$MODE" = "integration" ]; then
+            {{ stack.tools.test_integration | default(val=stack.tools.test) }} 2>&1
+          else
+            {{ stack.tools.test }} 2>&1
+          fi
+        config:
+          fail_on_error: false
+          timeout: 300s
+
+      - name: check_tests
+        type: gate
+        condition: "{{ steps.run_tests.exit_code == 0 }}"
+        on_pass: break
+        message: "Tests passed"
+
+      - name: fix_tests
+        type: agent
+        prompt: "{{ prompts.fix-test }}"
+        config:
+          timeout: 300s
+
+steps:
+  # 1. Checkout the PR branch
+  - name: checkout
+    type: cmd
+    run: |
+      gh pr checkout {{ target }}
+
+  # 2. Install dependencies using the stack-specific install command
+  - name: install
+    type: cmd
+    run: "{{ stack.tools.install }} 2>&1"
+    config:
+      fail_on_error: false
+      timeout: 300s
+
+  # 3. Run tests + fix loop (up to 3 iterations)
+  - name: test_gate
+    type: repeat
+    scope: test_fix
+    max_iterations: 3
+
+  # 4. Commit the fix
+  - name: commit
+    type: cmd
+    run: |
+      git add -A
+      git diff --cached --quiet || git commit -m "fix(tests): resolve test failures
+
+Automated fix by Minion Engine (fix-test workflow)
+Stack: {{ stack.name }}
+Mode: {{ args.mode | default(val='unit') }}"
+    config:
+      fail_on_error: false
+
+  # 5. Push the fix to the PR branch
+  - name: push
+    type: cmd
+    run: "git push"
