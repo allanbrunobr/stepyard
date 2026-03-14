@@ -55,21 +55,18 @@ impl StepExecutor for RepeatExecutor {
         for i in 0..max_iterations {
             display::iteration(i, max_iterations);
 
-            // Create a temporary mutable child context for this iteration
-            // We need to make the parent context available as Arc
-            // For now, create a standalone context with parent's data
+            // Create a child context inheriting all parent variables (stack, args, etc.)
             let mut child_ctx = Context::new(
                 ctx.get_var("target")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                HashMap::new(),
+                ctx.all_variables(),
             );
             child_ctx.scope_value = Some(scope_value.clone());
             child_ctx.scope_index = i;
-
-            // Copy parent step outputs into child
-            // (simplified — proper implementation would use Arc parent)
+            child_ctx.stack_info = ctx.get_stack_info().cloned();
+            child_ctx.prompts_dir = ctx.prompts_dir.clone();
 
             let mut last_output = StepOutput::Empty;
             let mut should_break = false;

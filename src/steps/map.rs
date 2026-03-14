@@ -370,9 +370,11 @@ fn make_child_ctx(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let mut ctx = Context::new(target, HashMap::new());
+    let mut ctx = Context::new(target, parent.all_variables());
     ctx.scope_value = scope_value;
     ctx.scope_index = index;
+    ctx.stack_info = parent.get_stack_info().cloned();
+    ctx.prompts_dir = parent.prompts_dir.clone();
     ctx
 }
 

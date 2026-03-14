@@ -127,6 +127,16 @@ impl Context {
         }
     }
 
+    /// Get all variables (local + parent chain) merged into a flat HashMap
+    pub fn all_variables(&self) -> HashMap<String, serde_json::Value> {
+        let mut result = HashMap::new();
+        if let Some(ref parent) = self.parent {
+            result = parent.all_variables();
+        }
+        result.extend(self.variables.clone());
+        result
+    }
+
     /// Get the stack_info from this context or any parent
     pub fn get_stack_info(&self) -> Option<&StackInfo> {
         self.stack_info
