@@ -29,8 +29,13 @@ impl StepExecutor for TemplateStepExecutor {
         _config: &StepConfig,
         ctx: &Context,
     ) -> Result<StepOutput, StepError> {
+        let template_name = if let Some(ref prompt) = step.prompt {
+            ctx.render_template(prompt)?
+        } else {
+            step.name.clone()
+        };
         let file_path = PathBuf::from(&self.prompts_dir)
-            .join(format!("{}.md.tera", step.name));
+            .join(format!("{}.md.tera", template_name));
 
         let template_content = tokio::fs::read_to_string(&file_path)
             .await
@@ -58,6 +63,7 @@ mod tests {
     use std::collections::HashMap;
     use crate::workflow::schema::StepType;
     use tokio::fs;
+    use serde_json;
 
     fn make_step(name: &str) -> StepDef {
         StepDef {
@@ -98,6 +104,54 @@ mod tests {
 
         let result = executor.execute(&step, &config, &ctx).await.unwrap();
         assert_eq!(result.text(), "Hello world!");
+    }
+
+    fn make_step_with_prompt(name: &str, prompt: &str) -> StepDef {
+        let mut step = make_step(name);
+        step.prompt = Some(prompt.to_string());
+        step
+    }
+
+    #[tokio::test]
+    async fn prompt_none_falls_back_to_step_name() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let prompts_dir = tmp.path().to_str().unwrap().to_string();
+
+        let template_path = tmp.path().join("greet.md.tera");
+        fs::write(&template_path, "Hi {{ target }}!").await.unwrap();
+
+        let step = make_step("greet"); // prompt: None
+        let executor = TemplateStepExecutor::new(Some(&prompts_dir));
+        let config = StepConfig::default();
+        let ctx = Context::new("world".to_string(), HashMap::new());
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        assert_eq!(result.text(), "Hi world!");
+    }
+
+    #[tokio::test]
+    async fn prompt_some_renders_dynamic_path() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let prompts_dir = tmp.path().to_str().unwrap().to_string();
+
+        // Create subdir/react.md.tera
+        let subdir = tmp.path().join("fix-lint");
+        fs::create_dir_all(&subdir).await.unwrap();
+        fs::write(subdir.join("react.md.tera"), "fix-lint for {{ target }}!")
+            .await
+            .unwrap();
+
+        let mut vars = HashMap::new();
+        vars.insert("stack_name".to_string(), serde_json::json!("react"));
+
+        // step.prompt = "fix-lint/{{ stack_name }}"
+        let step = make_step_with_prompt("unused", "fix-lint/{{ stack_name }}");
+        let executor = TemplateStepExecutor::new(Some(&prompts_dir));
+        let config = StepConfig::default();
+        let ctx = Context::new("myapp".to_string(), vars);
+
+        let result = executor.execute(&step, &config, &ctx).await.unwrap();
+        assert_eq!(result.text(), "fix-lint for myapp!");
     }
 
     #[tokio::test]

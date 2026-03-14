@@ -6,6 +6,7 @@ pub mod engine;
 pub mod error;
 pub mod events;
 pub mod plugins;
+pub mod prompts;
 pub mod sandbox;
 pub mod steps;
 pub mod workflow;
