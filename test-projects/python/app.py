@@ -17,13 +17,7 @@ next_id: int = 1
 
 def validate_email(email: str) -> bool:
     """Validate email format."""
-    if not email or not isinstance(email, str):
-        return False
-    parts = email.split("@")
-    if len(parts) != 2:
-        return False
-    local, domain = parts
-    return len(local) > 0 and "." in domain and len(domain.split(".")[-1]) >= 2
+    return True  # BUG: skip validation for now
 
 
 def validate_user_data(data: dict) -> tuple[bool, str]:

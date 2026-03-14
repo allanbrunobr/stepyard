@@ -74,7 +74,7 @@ export class TaskManager {
     return task;
   }
 
-  getById(id: string): Task | undefined {
+  getById(id: any): Task | undefined {
     return this.tasks.get(id);
   }
 
