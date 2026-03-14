@@ -58,7 +58,7 @@ scopes:
       - name: run
         type: cmd
         run: |
-          PATTERN="{{ args.pattern | default(val='') }}"
+          PATTERN="{{ args.pattern | default(value='') }}"
           if [ -f "package.json" ]; then
             if [ -n "$PATTERN" ]; then
               npm test -- --testNamePattern="$PATTERN" 2>&1

@@ -82,7 +82,7 @@ steps:
   - name: find_files
     type: cmd
     run: |
-      SEARCH_PATH="{{ args.path | default(val='.') }}"
+      SEARCH_PATH="{{ args.path | default(value='.') }}"
       find "$SEARCH_PATH" \
         -type f \
         \( -name "*.rs" -o -name "*.ts" -o -name "*.js" -o -name "*.py" \
@@ -121,8 +121,8 @@ steps:
       Structure the report as:
 
       # Security Audit Report
-      **Date:** {{ args.date | default(val="today") }}
-      **Scope:** {{ args.path | default(val="entire codebase") }}
+      **Date:** {{ args.date | default(value="today") }}
+      **Scope:** {{ args.path | default(value="entire codebase") }}
 
       ## Executive Summary
       (3-5 sentences: overall security posture, most critical issues)

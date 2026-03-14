@@ -133,7 +133,10 @@ impl Engine {
         vars: HashMap<String, serde_json::Value>,
         options: EngineOptions,
     ) -> Self {
-        let mut context = Context::new(target, vars);
+        let mut context = Context::new(target, vars.clone());
+        // Wrap --var parameters into an "args" object so templates can use {{ args.mode }}
+        let args_obj: serde_json::Map<String, serde_json::Value> = vars.into_iter().collect();
+        context.insert_var("args", serde_json::Value::Object(args_obj));
         let config_manager = ConfigManager::new(workflow.config.clone());
         // JSON mode implies quiet (no decorative output)
         let quiet = options.quiet || options.json;

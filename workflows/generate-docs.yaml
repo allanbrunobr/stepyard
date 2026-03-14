@@ -75,7 +75,7 @@ scopes:
       - name: save_doc
         type: cmd
         run: |
-          OUTPUT_DIR="{{ args.output | default(val='docs') }}"
+          OUTPUT_DIR="{{ args.output | default(value='docs') }}"
           # Convert file path to doc path: src/engine/core.rs → docs/engine/core.md
           DOC_PATH="$OUTPUT_DIR/$(echo '{{ scope.value }}' | sed 's|^src/||' | sed 's|\.[^.]*$|.md|')"
           mkdir -p "$(dirname "$DOC_PATH")"
@@ -91,7 +91,7 @@ steps:
   - name: find_sources
     type: cmd
     run: |
-      SEARCH_PATH="{{ args.path | default(val='src') }}"
+      SEARCH_PATH="{{ args.path | default(value='src') }}"
       find "$SEARCH_PATH" \
         -type f \
         \( -name "*.rs" -o -name "*.ts" -o -name "*.js" -o -name "*.py" \
@@ -112,7 +112,7 @@ steps:
   # 3. Create the output directory
   - name: create_output_dir
     type: cmd
-    run: "mkdir -p {{ args.output | default(val='docs') }}"
+    run: "mkdir -p {{ args.output | default(value='docs') }}"
     config:
       fail_on_error: true
 
@@ -143,7 +143,7 @@ steps:
   - name: save_index
     type: cmd
     run: |
-      OUTPUT_DIR="{{ args.output | default(val='docs') }}"
+      OUTPUT_DIR="{{ args.output | default(value='docs') }}"
       echo "{{ steps.generate_index.response }}" > "$OUTPUT_DIR/index.md"
       echo "Index saved to: $OUTPUT_DIR/index.md"
 
@@ -151,7 +151,7 @@ steps:
   - name: summary
     type: cmd
     run: |
-      OUTPUT_DIR="{{ args.output | default(val='docs') }}"
+      OUTPUT_DIR="{{ args.output | default(value='docs') }}"
       FILE_COUNT=$(find "$OUTPUT_DIR" -name "*.md" | wc -l | tr -d ' ')
       echo "============================================================"
       echo " Documentation Generated"

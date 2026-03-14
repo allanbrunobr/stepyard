@@ -50,12 +50,7 @@ scopes:
       - name: run_tests
         type: cmd
         run: |
-          MODE="{{ args.mode | default(val='unit') }}"
-          if [ "$MODE" = "integration" ]; then
-            {{ stack.tools.test_integration | default(val=stack.tools.test) }} 2>&1
-          else
-            {{ stack.tools.test }} 2>&1
-          fi
+          {{ stack.tools.test }} 2>&1
         config:
           fail_on_error: false
           timeout: 300s
