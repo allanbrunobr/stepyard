@@ -655,6 +655,7 @@
   <a href="#cenario-docs">Gerar Documentacao</a>
 
   <div class="nav-group-title">Recursos Avancados</div>
+  <a href="#stack-detection">Stack Detection</a>
   <a href="#typed-outputs">Typed Outputs</a>
   <a href="#session-continuity">Session Continuity</a>
   <a href="#async-steps">Async Steps</a>
@@ -851,15 +852,24 @@
         <p>Se voce nao especificar <code>env:</code> ou <code>volumes:</code>, o engine faz tudo automaticamente: forwarda <code>ANTHROPIC_API_KEY</code>, <code>GH_TOKEN</code>, monta <code>~/.config/gh</code>, <code>~/.ssh</code> e <code>~/.gitconfig</code> (read-only) e <code>~/.claude</code> (read-write, para sessoes do Claude CLI). O <code>gh</code>, <code>claude</code>, <code>git push</code> e API calls funcionam out-of-the-box.</p>
       </div>
 
-      <h3>Build da Imagem de Referencia</h3>
-      <pre><span class="cmt"># Inclui: git, gh, jq, curl, node, npm, cargo, clippy, python3, claude CLI</span>
-<span class="cmd">docker build</span> -f Dockerfile.sandbox -t minion-sandbox:latest .</pre>
+      <h3>Imagem de Referencia &mdash; Auto-Build</h3>
+      <div class="tip ok">
+        <div class="tip-title">Zero configuracao de Docker</div>
+        <p>Na primeira execucao, se a imagem <code>minion-sandbox:latest</code> nao existir, o engine <strong>constroi automaticamente</strong>. O Dockerfile esta embutido no binario &mdash; funciona mesmo instalando via <code>cargo install</code>. Voce nao precisa clonar o repositorio nem rodar <code>docker build</code> manualmente.</p>
+      </div>
+
+      <p>A imagem inclui: <code>git</code>, <code>gh</code>, <code>jq</code>, <code>curl</code>, <code>node 20</code>, <code>npm</code>, <code>cargo</code>, <code>clippy</code>, <code>python3</code>, <code>pip</code>, <code>claude CLI</code>.</p>
+
+      <p class="dim">Se preferir construir manualmente (opcional):</p>
+      <pre><span class="cmd">docker build</span> -f Dockerfile.sandbox -t minion-sandbox:latest .</pre>
     </section>
 
     <!-- ═══════════════ 04 INSTALACAO ═══════════════ -->
     <section id="instalacao">
       <div class="section-label">04 &mdash; Instalacao</div>
-      <h2>Instalacao Rapida</h2>
+      <h2>Instalacao e Configuracao</h2>
+
+      <h3>Passo 1: Instale o Minion Engine</h3>
       <div class="grid-2">
         <div class="card">
           <h4 style="color:var(--cyan)">cargo install (recomendado)</h4>
@@ -877,9 +887,79 @@ allanbrunobr/minion-engine.git</span>
         </div>
       </div>
 
-      <div class="tip">
-        <div class="tip-title">Pre-requisitos</div>
-        <p><strong>Docker Desktop 4.40+</strong> (sandbox e ON por padrao). <code>claude</code> CLI instalado e autenticado (para steps agent). <code>gh</code> CLI (para workflows GitHub). <code>ANTHROPIC_API_KEY</code> (para steps chat).</p>
+      <h3>Passo 2: Pre-requisitos</h3>
+      <table>
+        <thead>
+          <tr><th>Requisito</th><th>Como Configurar</th><th>Auto-detecta?</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="font-weight:700;color:var(--text)">ANTHROPIC_API_KEY</td>
+            <td><code>export ANTHROPIC_API_KEY="sk-ant-..."</code> no <code>~/.zshrc</code> ou <code>~/.bashrc</code></td>
+            <td style="color:var(--red)">Nao &mdash; obrigatorio. O engine exibe erro claro se faltar.</td>
+          </tr>
+          <tr>
+            <td style="font-weight:700;color:var(--text)">Docker Desktop</td>
+            <td>Instalar de <a href="https://www.docker.com/products/docker-desktop/" style="color:var(--accent)">docker.com</a></td>
+            <td style="color:var(--red)">Nao &mdash; obrigatorio para sandbox (padrao).</td>
+          </tr>
+          <tr>
+            <td style="font-weight:700;color:var(--text)">Docker Image</td>
+            <td>Nada! Construida automaticamente na 1a execucao.</td>
+            <td style="color:var(--green)">Sim &mdash; auto-build embutido no binario.</td>
+          </tr>
+          <tr>
+            <td style="font-weight:700;color:var(--text)">GitHub (gh CLI)</td>
+            <td><code>gh auth login</code> (unica vez)</td>
+            <td style="color:var(--green)">Sim &mdash; o engine roda <code>gh auth token</code> e injeta <code>GH_TOKEN</code> no container automaticamente.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="tip ok">
+        <div class="tip-title">Voce NAO precisa exportar GH_TOKEN manualmente</div>
+        <p>Se o <code>gh</code> CLI estiver autenticado (<code>gh auth login</code>), o engine auto-detecta o token e injeta no container Docker. Funciona out-of-the-box.</p>
+      </div>
+
+      <h3>Passo 3: Quick Start &mdash; Do zero ao primeiro workflow</h3>
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot red"></div>
+          <div class="terminal-dot yellow"></div>
+          <div class="terminal-dot green"></div>
+          <div class="terminal-title">Terminal &mdash; Primeiro uso</div>
+        </div>
+        <div class="terminal-body"><span class="cmt"># 1. Instale (unica vez)</span>
+<span class="prompt">$</span> <span class="cmd">cargo install</span> minion-engine
+
+<span class="cmt"># 2. Configure a API key no seu shell (unica vez)</span>
+<span class="prompt">$</span> <span class="cmd">echo</span> <span class="str">'export ANTHROPIC_API_KEY="sk-ant-..."'</span> >> ~/.zshrc
+<span class="prompt">$</span> <span class="cmd">source</span> ~/.zshrc
+
+<span class="cmt"># 3. Autentique no GitHub (unica vez)</span>
+<span class="prompt">$</span> <span class="cmd">gh auth login</span>
+
+<span class="cmt"># 4. Va ate o seu projeto e execute!</span>
+<span class="prompt">$</span> <span class="cmd">cd</span> ~/projects/meu-projeto
+<span class="prompt">$</span> <span class="cmd">minion execute</span> fix-test <span class="flag">--</span> 42
+
+<span class="cmt"># Na primeira vez, voce vera:</span>
+<span class="cyan">&#x21BB;</span> <span class="info">Building Docker image 'minion-sandbox:latest' — first run only, please wait...</span>
+<span class="dim">   ... (3-5 minutos, apenas na primeira vez) ...</span>
+
+<span class="ok">&#10003;</span> <span class="bold">Image built!</span>
+<span class="cyan">&#x1F433;</span> <span class="bold">Sandbox created</span>
+<span class="ok">&#10003;</span> checkout   <span class="dim">2.1s</span>
+<span class="ok">&#10003;</span> install    <span class="dim">8.4s</span>
+<span class="ok">&#10003;</span> test_gate  <span class="dim">12.3s</span>
+<span class="ok">&#10003;</span> commit     <span class="dim">0.4s</span>
+<span class="ok">&#10003;</span> push       <span class="dim">1.2s</span>
+<span class="ok">&#10003;</span> <span class="bold">Done</span> in <span class="cyan">24.4s</span></div>
+      </div>
+
+      <div class="tip warn">
+        <div class="tip-title">Execucoes seguintes sao rapidas</div>
+        <p>O auto-build da imagem Docker acontece <strong>apenas na primeira vez</strong>. Nas execucoes seguintes, o container sobe em ~1s porque a imagem ja esta em cache.</p>
       </div>
     </section>
 
@@ -1124,7 +1204,7 @@ allanbrunobr/minion-engine.git</span>
           <div class="terminal-title">Terminal &mdash; Security Audit</div>
         </div>
         <div class="terminal-body"><span class="prompt">$</span> <span class="cmd">minion execute</span> security-audit \
-  <span class="flag">--args</span> <span class="str">'{"path": "src/api/"}'</span>
+  <span class="flag">--var</span> <span class="str">path=src/api/</span>
 
 <span class="cyan">&#x1F433;</span> <span class="bold">Sandbox created</span> <span class="dim">(node:20, network: api.anthropic.com only)</span>
 
@@ -1278,9 +1358,148 @@ allanbrunobr/minion-engine.git</span>
          RECURSOS AVANCADOS — Features do Roast Sprint
          ═══════════════════════════════════════════════════ -->
 
+    <!-- ═══════════════ 10.5 STACK DETECTION ═══════════════ -->
+    <section id="stack-detection">
+      <div class="section-label">11 &mdash; Recursos Avancados</div>
+      <h2>Prompt Registry &amp; Stack Detection</h2>
+      <p>O engine detecta automaticamente a linguagem/framework do projeto e injeta os comandos corretos de lint, test, build e install nos templates. Um unico workflow funciona para Rust, Python, TypeScript, React, Java, Spring, JavaScript.</p>
+
+      <h3>Como funciona</h3>
+      <div class="flow-steps">
+        <div class="flow-step">
+          <div class="flow-step-num">1</div>
+          <h4>Engine analisa os arquivos do projeto</h4>
+          <p>Procura por <code>Cargo.toml</code>, <code>package.json</code>, <code>tsconfig.json</code>, <code>pom.xml</code>, <code>requirements.txt</code>, etc.</p>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-num green">2</div>
+          <h4>Match de file_markers + content_match</h4>
+          <p>Primeiro verifica se os arquivos existem (<code>file_markers</code>), depois verifica conteudo (<code>content_match</code>) para diferenciar, por exemplo, Java puro de Spring Boot.</p>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-num accent">3</div>
+          <h4>Resolve com fallback chain</h4>
+          <p>Se <code>react</code> nao definir <code>lint</code>, herda de <code>typescript</code> &rarr; <code>javascript</code> &rarr; <code>_default</code>.</p>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-num purple">4</div>
+          <h4>Injeta variaveis <code>{{ stack.* }}</code> nos templates</h4>
+          <p>O workflow usa <code>{{ stack.tools.test }}</code> e o engine resolve para <code>cargo test</code>, <code>pytest</code>, <code>npm test</code>, etc.</p>
+        </div>
+      </div>
+
+      <h3>7 Stacks Suportados</h3>
+      <div class="grid-4">
+        <div class="card" style="padding:16px;text-align:center;">
+          <div style="font-size:24px;margin-bottom:6px;">&#x1F980;</div>
+          <h4 style="color:var(--orange);margin:0 0 4px;font-size:0.85rem">Rust</h4>
+          <p style="font-size:11px;margin:0"><code>cargo test</code></p>
+        </div>
+        <div class="card" style="padding:16px;text-align:center;">
+          <div style="font-size:24px;margin-bottom:6px;">&#x1F40D;</div>
+          <h4 style="color:var(--accent);margin:0 0 4px;font-size:0.85rem">Python</h4>
+          <p style="font-size:11px;margin:0"><code>pytest</code></p>
+        </div>
+        <div class="card" style="padding:16px;text-align:center;">
+          <div style="font-size:24px;margin-bottom:6px;">&#x1F4D8;</div>
+          <h4 style="color:var(--cyan);margin:0 0 4px;font-size:0.85rem">TypeScript</h4>
+          <p style="font-size:11px;margin:0"><code>npm test</code></p>
+        </div>
+        <div class="card" style="padding:16px;text-align:center;">
+          <div style="font-size:24px;margin-bottom:6px;">&#x269B;</div>
+          <h4 style="color:var(--purple);margin:0 0 4px;font-size:0.85rem">React</h4>
+          <p style="font-size:11px;margin:0"><code>react-scripts test</code></p>
+        </div>
+        <div class="card" style="padding:16px;text-align:center;">
+          <div style="font-size:24px;margin-bottom:6px;">&#x2615;</div>
+          <h4 style="color:var(--red);margin:0 0 4px;font-size:0.85rem">Java</h4>
+          <p style="font-size:11px;margin:0"><code>mvn test</code></p>
+        </div>
+        <div class="card" style="padding:16px;text-align:center;">
+          <div style="font-size:24px;margin-bottom:6px;">&#x1F331;</div>
+          <h4 style="color:var(--green);margin:0 0 4px;font-size:0.85rem">Spring</h4>
+          <p style="font-size:11px;margin:0"><code>mvn test -Dspring</code></p>
+        </div>
+        <div class="card" style="padding:16px;text-align:center;">
+          <div style="font-size:24px;margin-bottom:6px;">&#x1F7E1;</div>
+          <h4 style="color:var(--yellow);margin:0 0 4px;font-size:0.85rem">JavaScript</h4>
+          <p style="font-size:11px;margin:0"><code>npm test</code></p>
+        </div>
+        <div class="card" style="padding:16px;text-align:center;">
+          <div style="font-size:24px;margin-bottom:6px;">&#x2699;</div>
+          <h4 style="color:var(--text-dim);margin:0 0 4px;font-size:0.85rem">_default</h4>
+          <p style="font-size:11px;margin:0">fallback</p>
+        </div>
+      </div>
+
+      <h3>Arquivo <code>prompts/registry.yaml</code></h3>
+      <pre><span class="key">version:</span> <span class="val">1</span>
+<span class="key">detection_order:</span>
+  - <span class="val">java-spring</span>    <span class="cmt"># mais especifico primeiro</span>
+  - <span class="val">java</span>
+  - <span class="val">react</span>
+  - <span class="val">typescript</span>
+  - <span class="val">javascript</span>
+  - <span class="val">python</span>
+  - <span class="val">rust</span>
+
+<span class="key">stacks:</span>
+  <span class="key">_default:</span>             <span class="cmt"># fallback para stacks sem config</span>
+    <span class="key">tools:</span>
+      <span class="key">test:</span> <span class="str">"echo 'no test runner configured'"</span>
+
+  <span class="key">rust:</span>
+    <span class="key">parent:</span> <span class="val">_default</span>
+    <span class="key">file_markers:</span> [<span class="str">"Cargo.toml"</span>]
+    <span class="key">tools:</span>
+      <span class="key">lint:</span> <span class="str">"cargo clippy -- -D warnings"</span>
+      <span class="key">test:</span> <span class="str">"cargo test"</span>
+      <span class="key">build:</span> <span class="str">"cargo build --release"</span>
+      <span class="key">install:</span> <span class="str">"cargo fetch"</span>
+
+  <span class="key">python:</span>
+    <span class="key">parent:</span> <span class="val">_default</span>
+    <span class="key">file_markers:</span> [<span class="str">"pyproject.toml"</span>, <span class="str">"setup.py"</span>, <span class="str">"requirements.txt"</span>]
+    <span class="key">tools:</span>
+      <span class="key">test:</span> <span class="str">"pytest"</span>
+      <span class="key">install:</span> <span class="str">"pip install -r requirements.txt"</span>
+
+  <span class="key">java-spring:</span>
+    <span class="key">parent:</span> <span class="val">java</span>          <span class="cmt"># herda de java, nao de _default</span>
+    <span class="key">file_markers:</span> [<span class="str">"pom.xml"</span>]
+    <span class="key">content_match:</span>       <span class="cmt"># verifica CONTEUDO do arquivo</span>
+      <span class="str">"pom.xml"</span>: <span class="str">"spring-boot"</span>
+    <span class="key">tools:</span>
+      <span class="key">test:</span> <span class="str">"mvn test -Dspring.profiles.active=test"</span></pre>
+
+      <h3>Uso nos Workflows</h3>
+      <pre><span class="key">steps:</span>
+  - <span class="key">name:</span> <span class="val">install</span>
+    <span class="key">type:</span> <span class="val">cmd</span>
+    <span class="key">run:</span> <span class="str">"{{ stack.tools.install }}"</span>     <span class="cmt"># pip install / cargo fetch / npm ci</span>
+
+  - <span class="key">name:</span> <span class="val">test_gate</span>
+    <span class="key">type:</span> <span class="val">repeat</span>
+    <span class="key">max_iterations:</span> <span class="val">3</span>
+    <span class="key">scope:</span>
+      <span class="key">steps:</span>
+        - <span class="key">name:</span> <span class="val">run_tests</span>
+          <span class="key">type:</span> <span class="val">cmd</span>
+          <span class="key">run:</span> <span class="str">"{{ stack.tools.test }} 2>&1"</span>  <span class="cmt"># pytest / cargo test / npm test</span>
+          <span class="key">on_fail:</span> <span class="val">continue</span>
+        - <span class="key">name:</span> <span class="val">fix</span>
+          <span class="key">type:</span> <span class="val">agent</span>
+          <span class="key">prompt:</span> <span class="str">"Fix the test failures: {{ run_tests.stderr }}"</span></pre>
+
+      <div class="tip ok">
+        <div class="tip-title">Um workflow, todos os stacks</div>
+        <p>O mesmo <code>fix-test.yaml</code> funciona para Rust, Python, TypeScript, Java, etc. O engine substitui <code>{{ stack.tools.test }}</code> pelo comando correto baseado nos arquivos do projeto. Voce nao precisa criar workflows separados por linguagem.</p>
+      </div>
+    </section>
+
     <!-- ═══════════════ 11 TYPED OUTPUTS ═══════════════ -->
     <section id="typed-outputs">
-      <div class="section-label">11 &mdash; Recursos Avancados</div>
+      <div class="section-label">12 &mdash; Recursos Avancados — Typed Outputs</div>
       <h2>Typed Output Parsing</h2>
       <p>Em vez de tratar tudo como string, declare <code>output_type</code> em qualquer step e o engine parseia automaticamente o resultado.</p>
 
@@ -1730,13 +1949,20 @@ allanbrunobr/minion-engine.git</span>
     <section id="setup">
       <div class="section-label">19 &mdash; Guia Pratico</div>
       <h2>Setup no Seu Projeto</h2>
-      <p>Como adicionar Minion Engine a qualquer projeto existente em 5 passos.</p>
+      <p>Como adicionar Minion Engine a qualquer projeto existente em 4 passos.</p>
 
       <div class="flow-steps">
         <div class="flow-step">
           <div class="flow-step-num">1</div>
-          <h4>Instale o minion</h4>
-          <pre><span class="cmd">cargo install</span> minion-engine  <span class="cmt"># ou brew/binary</span></pre>
+          <h4>Instale e configure (unica vez)</h4>
+          <pre><span class="cmt"># Instalar</span>
+<span class="cmd">cargo install</span> minion-engine
+
+<span class="cmt"># API key (obrigatorio)</span>
+<span class="cmd">echo</span> <span class="str">'export ANTHROPIC_API_KEY="sk-ant-..."'</span> >> ~/.zshrc
+
+<span class="cmt"># GitHub auth (o engine auto-detecta o token)</span>
+<span class="cmd">gh auth login</span></pre>
         </div>
         <div class="flow-step">
           <div class="flow-step-num green">2</div>
@@ -1745,11 +1971,11 @@ allanbrunobr/minion-engine.git</span>
         </div>
         <div class="flow-step">
           <div class="flow-step-num accent">3</div>
-          <h4>Customize lint/test para seu stack</h4>
-          <p>Edite o YAML gerado para usar os comandos corretos do seu projeto.</p>
+          <h4>Customize lint/test para seu stack (opcional com Prompt Registry)</h4>
+          <p>Se seu projeto tiver <code>prompts/registry.yaml</code>, o engine detecta o stack automaticamente e usa os comandos corretos de lint/test via <code>{{ stack.tools.test }}</code>. Caso contrario, customize manualmente:</p>
           <div class="grid-2" style="margin-top:12px">
             <div class="card" style="padding:16px">
-              <h4 style="color:var(--green);font-size:0.85rem;margin:0 0 6px">Node.js</h4>
+              <h4 style="color:var(--green);font-size:0.85rem;margin:0 0 6px">Node.js / TypeScript</h4>
               <pre style="margin:0;font-size:11px"><span class="key">lint_cmd:</span> <span class="str">"npm run lint"</span>
 <span class="key">test_cmd:</span> <span class="str">"npm test"</span></pre>
             </div>
@@ -1764,23 +1990,24 @@ allanbrunobr/minion-engine.git</span>
 <span class="key">test_cmd:</span> <span class="str">"cargo test"</span></pre>
             </div>
             <div class="card" style="padding:16px">
-              <h4 style="color:var(--cyan);font-size:0.85rem;margin:0 0 6px">Go</h4>
-              <pre style="margin:0;font-size:11px"><span class="key">lint_cmd:</span> <span class="str">"golangci-lint run"</span>
-<span class="key">test_cmd:</span> <span class="str">"go test ./..."</span></pre>
+              <h4 style="color:var(--cyan);font-size:0.85rem;margin:0 0 6px">Java / Spring</h4>
+              <pre style="margin:0;font-size:11px"><span class="key">lint_cmd:</span> <span class="str">"./gradlew check"</span>
+<span class="key">test_cmd:</span> <span class="str">"./gradlew test"</span></pre>
             </div>
           </div>
         </div>
         <div class="flow-step">
           <div class="flow-step-num purple">4</div>
-          <h4>Sandbox ja e o padrao!</h4>
-          <p>Nao precisa configurar nada &mdash; o sandbox Docker ja e ativado automaticamente. Para configuracao avancada (imagem, rede, recursos), veja a secao <a href="#sandbox">Docker Sandbox</a>.</p>
-        </div>
-        <div class="flow-step">
-          <div class="flow-step-num green">5</div>
           <h4>Execute!</h4>
+          <p>Sandbox ON por padrao. Docker image auto-construida na 1a vez. GH_TOKEN auto-detectado. Basta rodar:</p>
           <pre><span class="cmd">minion execute</span> code-review <span class="flag">--verbose</span> <span class="flag">--</span> 142
-<span class="cmt"># sandbox ON por padrao — seu projeto esta seguro</span></pre>
+<span class="cmt"># Docker sandbox ON por padrao — seu projeto esta seguro</span></pre>
         </div>
+      </div>
+
+      <div class="tip ok">
+        <div class="tip-title">Tudo automatico</div>
+        <p>Na primeira execucao o engine: (1) constroi a imagem Docker se necessario, (2) detecta o stack do projeto via <code>prompts/registry.yaml</code>, (3) auto-detecta <code>GH_TOKEN</code> do <code>gh auth token</code>, (4) configura credenciais de git dentro do container. Voce so precisa ter <code>ANTHROPIC_API_KEY</code> + Docker + <code>gh auth login</code>.</p>
       </div>
     </section>
 
@@ -1852,7 +2079,7 @@ allanbrunobr/minion-engine.git</span>
           <tr>
             <td><code>minion execute &lt;yaml&gt; [flags] -- [target]</code></td>
             <td>Executa um workflow</td>
-            <td><code>--verbose</code> <code>--quiet</code> <code>--json</code> <code>--dry-run</code> <code>--no-sandbox</code> <code>--resume &lt;step&gt;</code> <code>--var KEY=VAL</code> <code>--args '{}'</code></td>
+            <td><code>--verbose</code> <code>--quiet</code> <code>--json</code> <code>--dry-run</code> <code>--no-sandbox</code> <code>--resume &lt;step&gt;</code> <code>--var KEY=VAL</code> <code>--timeout &lt;secs&gt;</code></td>
           </tr>
           <tr>
             <td><code>minion validate &lt;yaml&gt;</code></td>
@@ -1902,7 +2129,7 @@ allanbrunobr/minion-engine.git</span>
         </div>
         <div class="card">
           <h4 style="color:var(--accent)">--var KEY=VAL</h4>
-          <p>Passa variaveis extras para o workflow. Acessiveis via <code>{{ vars.KEY }}</code> nos templates Tera.</p>
+          <p>Passa variaveis extras para o workflow. Acessiveis via <code>{{ args.KEY }}</code> nos templates Tera. Exemplo: <code>--var mode=unit</code> &rarr; <code>{{ args.mode }}</code>.</p>
         </div>
       </div>
     </section>
@@ -2053,7 +2280,7 @@ allanbrunobr/minion-engine.git</span>
 
       <div class="faq-item">
         <div class="faq-q">Preciso de Docker instalado?</div>
-        <div class="faq-a">Sim, Docker Desktop 4.40+ e necessario pois o sandbox e <strong>ON por padrao</strong>. Sem Docker, use <code>--no-sandbox</code> &mdash; os workflows rodam direto na sua maquina, so nao tem o isolamento do container.</div>
+        <div class="faq-a">Sim, Docker Desktop 4.40+ e necessario pois o sandbox e <strong>ON por padrao</strong>. Na primeira execucao, a imagem <code>minion-sandbox:latest</code> e <strong>construida automaticamente</strong> &mdash; o Dockerfile esta embutido no binario, voce nao precisa fazer nada. Sem Docker, use <code>--no-sandbox</code> &mdash; os workflows rodam direto na sua maquina, so nao tem o isolamento do container.</div>
       </div>
 
       <div class="faq-item">
@@ -2089,6 +2316,21 @@ allanbrunobr/minion-engine.git</span>
       <div class="faq-item">
         <div class="faq-q">Como fazer debug de um workflow?</div>
         <div class="faq-a">Use <code>--dry-run</code> para visualizar sem executar. Use <code>--verbose</code> para ver output completo de cada step. Use <code>minion inspect</code> para ver config resolvida e dependency graph. Use <code>--json</code> para output parseavel em scripts.</div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-q">Preciso configurar GH_TOKEN manualmente?</div>
+        <div class="faq-a"><strong>Nao.</strong> Se voce autenticou o <code>gh</code> CLI com <code>gh auth login</code>, o engine auto-detecta o token rodando <code>gh auth token</code> e injeta no container Docker automaticamente. Voce so precisa exportar <code>GH_TOKEN</code> manualmente se nao tiver o <code>gh</code> CLI instalado.</div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-q">O que e Prompt Registry / Stack Detection?</div>
+        <div class="faq-a">O arquivo <code>prompts/registry.yaml</code> define os stacks do seu projeto (Rust, Python, TypeScript, React, Java, etc.) com <code>file_markers</code> e <code>content_match</code>. O engine detecta o stack automaticamente e injeta variaveis como <code>{{ stack.tools.test }}</code>, <code>{{ stack.tools.lint }}</code> nos templates. Assim um unico workflow funciona para qualquer linguagem.</div>
+      </div>
+
+      <div class="faq-item">
+        <div class="faq-q">O que preciso configurar apenas UMA vez?</div>
+        <div class="faq-a">Tres coisas: (1) <code>cargo install minion-engine</code>, (2) <code>export ANTHROPIC_API_KEY="sk-ant-..."</code> no <code>~/.zshrc</code>, (3) <code>gh auth login</code>. A imagem Docker e construida automaticamente na primeira execucao. Depois disso, basta <code>minion execute workflow.yaml -- target</code>.</div>
       </div>
     </section>
 
