@@ -273,7 +273,11 @@ impl Engine {
             .run_command(
                 "git config --global --add safe.directory /workspace \
                  && git config --global user.name 'Minion Engine' \
-                 && git config --global user.email 'minion@localhost'",
+                 && git config --global user.email 'minion@localhost' \
+                 && if [ -n \"$GH_TOKEN\" ]; then \
+                      git config --global credential.helper '!f() { echo \"password=$GH_TOKEN\"; }; f'; \
+                      git config --global credential.https://github.com.username x-access-token; \
+                    fi",
             )
             .await;
         let git_ms = t2.elapsed().as_millis();
