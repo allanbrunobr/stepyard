@@ -1,11 +1,12 @@
-pub mod cli;
 pub mod claude;
+pub mod cli;
 pub mod config;
 pub mod control_flow;
 pub mod engine;
 pub mod error;
 pub mod events;
 pub mod plugins;
+pub mod prompts;
 pub mod sandbox;
 pub mod steps;
 pub mod workflow;

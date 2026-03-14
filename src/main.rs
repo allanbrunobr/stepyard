@@ -1,14 +1,15 @@
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-mod cli;
 mod claude;
+mod cli;
 mod config;
 mod control_flow;
 mod engine;
 mod error;
 mod events;
 mod plugins;
+mod prompts;
 mod sandbox;
 mod steps;
 mod workflow;
