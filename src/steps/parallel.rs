@@ -10,17 +10,19 @@ use crate::workflow::schema::{ScopeDef, StepDef, StepType};
 
 use super::{
     agent::AgentExecutor, cmd::CmdExecutor, chat::ChatExecutor, gate::GateExecutor,
-    StepExecutor, StepOutput,
+    SandboxAwareExecutor, SharedSandbox, StepExecutor, StepOutput,
 };
 
 pub struct ParallelExecutor {
     scopes: HashMap<String, ScopeDef>,
+    sandbox: SharedSandbox,
 }
 
 impl ParallelExecutor {
-    pub fn new(scopes: &HashMap<String, ScopeDef>) -> Self {
+    pub fn new(scopes: &HashMap<String, ScopeDef>, sandbox: SharedSandbox) -> Self {
         Self {
             scopes: scopes.clone(),
+            sandbox,
         }
     }
 }
@@ -44,9 +46,10 @@ impl StepExecutor for ParallelExecutor {
             let sub = sub_step.clone();
             let scopes = self.scopes.clone();
             let child_ctx = make_child_ctx(ctx);
+            let sandbox_clone = self.sandbox.clone();
 
             set.spawn(async move {
-                let result = dispatch_step(&sub, &StepConfig::default(), &child_ctx, &scopes).await;
+                let result = dispatch_step(&sub, &StepConfig::default(), &child_ctx, &scopes, &sandbox_clone).await;
                 (sub.name.clone(), result)
             });
         }
@@ -104,6 +107,7 @@ async fn dispatch_step(
     _config: &StepConfig,
     ctx: &Context,
     _scopes: &HashMap<String, ScopeDef>,
+    sandbox: &SharedSandbox,
 ) -> Result<StepOutput, StepError> {
     // Build config from step's inline config (convert yaml -> json)
     let values: HashMap<String, serde_json::Value> = step
@@ -114,8 +118,8 @@ async fn dispatch_step(
     let step_config = StepConfig { values };
 
     match step.step_type {
-        StepType::Cmd => CmdExecutor.execute(step, &step_config, ctx).await,
-        StepType::Agent => AgentExecutor.execute(step, &step_config, ctx).await,
+        StepType::Cmd => CmdExecutor.execute_sandboxed(step, &step_config, ctx, sandbox).await,
+        StepType::Agent => AgentExecutor.execute_sandboxed(step, &step_config, ctx, sandbox).await,
         StepType::Gate => GateExecutor.execute(step, &step_config, ctx).await,
         StepType::Chat => ChatExecutor.execute(step, &step_config, ctx).await,
         _ => Err(StepError::Fail(format!(
@@ -187,7 +191,7 @@ mod tests {
                 cmd_step("step_b", "echo beta"),
             ],
         );
-        let executor = ParallelExecutor::new(&scopes);
+        let executor = ParallelExecutor::new(&scopes, None);
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());
 
@@ -210,7 +214,7 @@ mod tests {
                 },
             ],
         );
-        let executor = ParallelExecutor::new(&scopes);
+        let executor = ParallelExecutor::new(&scopes, None);
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());
 

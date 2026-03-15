@@ -10,17 +10,20 @@ use crate::workflow::schema::{ScopeDef, StepDef, StepType};
 
 use super::{
     agent::AgentExecutor, cmd::CmdExecutor, gate::GateExecutor, repeat::RepeatExecutor,
-    chat::ChatExecutor, CmdOutput, IterationOutput, ScopeOutput, StepExecutor, StepOutput,
+    chat::ChatExecutor, CmdOutput, IterationOutput, SandboxAwareExecutor, ScopeOutput,
+    SharedSandbox, StepExecutor, StepOutput,
 };
 
 pub struct CallExecutor {
     scopes: HashMap<String, ScopeDef>,
+    sandbox: SharedSandbox,
 }
 
 impl CallExecutor {
-    pub fn new(scopes: &HashMap<String, ScopeDef>) -> Self {
+    pub fn new(scopes: &HashMap<String, ScopeDef>, sandbox: SharedSandbox) -> Self {
         Self {
             scopes: scopes.clone(),
+            sandbox,
         }
     }
 }
@@ -57,7 +60,7 @@ impl StepExecutor for CallExecutor {
         for scope_step in &scope.steps {
             let step_config = StepConfig::default();
             let result =
-                dispatch_scope_step(scope_step, &step_config, &child_ctx, &self.scopes).await;
+                dispatch_scope_step_sandboxed(scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox).await;
 
             match result {
                 Ok(output) => {
@@ -105,19 +108,20 @@ impl StepExecutor for CallExecutor {
     }
 }
 
-pub(super) async fn dispatch_scope_step(
+pub(super) async fn dispatch_scope_step_sandboxed(
     step: &StepDef,
     config: &StepConfig,
     ctx: &Context,
     scopes: &HashMap<String, ScopeDef>,
+    sandbox: &SharedSandbox,
 ) -> Result<StepOutput, StepError> {
     match step.step_type {
-        StepType::Cmd => CmdExecutor.execute(step, config, ctx).await,
-        StepType::Agent => AgentExecutor.execute(step, config, ctx).await,
+        StepType::Cmd => CmdExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
+        StepType::Agent => AgentExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
         StepType::Gate => GateExecutor.execute(step, config, ctx).await,
         StepType::Chat => ChatExecutor.execute(step, config, ctx).await,
-        StepType::Repeat => RepeatExecutor::new(scopes).execute(step, config, ctx).await,
-        StepType::Call => CallExecutor::new(scopes).execute(step, config, ctx).await,
+        StepType::Repeat => RepeatExecutor::new(scopes, sandbox.clone()).execute(step, config, ctx).await,
+        StepType::Call => CallExecutor::new(scopes, sandbox.clone()).execute(step, config, ctx).await,
         _ => Err(StepError::Fail(format!(
             "Step type '{}' not supported in scope",
             step.step_type
@@ -190,7 +194,7 @@ mod tests {
         scopes.insert("my_scope".to_string(), scope);
 
         let step = call_step("call_test", "my_scope");
-        let executor = CallExecutor::new(&scopes);
+        let executor = CallExecutor::new(&scopes, None);
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());
 
@@ -211,7 +215,7 @@ mod tests {
         scopes.insert("output_scope".to_string(), scope);
 
         let step = call_step("call_out", "output_scope");
-        let executor = CallExecutor::new(&scopes);
+        let executor = CallExecutor::new(&scopes, None);
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());
 
@@ -224,7 +228,7 @@ mod tests {
     async fn call_missing_scope_error() {
         let scopes = HashMap::new();
         let step = call_step("call_bad", "nonexistent");
-        let executor = CallExecutor::new(&scopes);
+        let executor = CallExecutor::new(&scopes, None);
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());
 

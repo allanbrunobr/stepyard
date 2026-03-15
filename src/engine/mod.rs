@@ -706,23 +706,23 @@ impl Engine {
             }
             StepType::Gate => GateExecutor.execute(step_def, &config, &self.context).await,
             StepType::Repeat => {
-                RepeatExecutor::new(&self.workflow.scopes)
+                RepeatExecutor::new(&self.workflow.scopes, self.sandbox.clone())
                     .execute(step_def, &config, &self.context)
                     .await
             }
             StepType::Chat => ChatExecutor.execute(step_def, &config, &self.context).await,
             StepType::Map => {
-                MapExecutor::new(&self.workflow.scopes)
+                MapExecutor::new(&self.workflow.scopes, self.sandbox.clone())
                     .execute(step_def, &config, &self.context)
                     .await
             }
             StepType::Parallel => {
-                ParallelExecutor::new(&self.workflow.scopes)
+                ParallelExecutor::new(&self.workflow.scopes, self.sandbox.clone())
                     .execute(step_def, &config, &self.context)
                     .await
             }
             StepType::Call => {
-                CallExecutor::new(&self.workflow.scopes)
+                CallExecutor::new(&self.workflow.scopes, self.sandbox.clone())
                     .execute(step_def, &config, &self.context)
                     .await
             }

@@ -12,7 +12,8 @@ use crate::error::StepError;
 use crate::workflow::schema::{ScopeDef, StepDef};
 
 use super::{
-    call::dispatch_scope_step, CmdOutput, IterationOutput, ScopeOutput, StepExecutor, StepOutput,
+    call::dispatch_scope_step_sandboxed, CmdOutput, IterationOutput, ScopeOutput, SharedSandbox,
+    StepExecutor, StepOutput,
 };
 
 /// Apply a reduce operation to ScopeOutput iterations (Story 7.2)
@@ -186,12 +187,14 @@ fn apply_collect(scope: ScopeOutput, mode: &str) -> Result<StepOutput, crate::er
 
 pub struct MapExecutor {
     scopes: HashMap<String, ScopeDef>,
+    sandbox: SharedSandbox,
 }
 
 impl MapExecutor {
-    pub fn new(scopes: &HashMap<String, ScopeDef>) -> Self {
+    pub fn new(scopes: &HashMap<String, ScopeDef>, sandbox: SharedSandbox) -> Self {
         Self {
             scopes: scopes.clone(),
+            sandbox,
         }
     }
 }
@@ -252,10 +255,10 @@ impl StepExecutor for MapExecutor {
 
         let scope_output = if parallel_count == 0 {
             // Serial execution
-            serial_execute(items, &scope, ctx, &self.scopes).await?
+            serial_execute(items, &scope, ctx, &self.scopes, &self.sandbox).await?
         } else {
             // Parallel execution with semaphore
-            parallel_execute(items, &scope, ctx, &self.scopes, parallel_count).await?
+            parallel_execute(items, &scope, ctx, &self.scopes, parallel_count, &self.sandbox).await?
         };
 
         // Story 7.2: Apply reduce if configured (takes precedence over collect)
@@ -281,13 +284,14 @@ async fn serial_execute(
     scope: &ScopeDef,
     ctx: &Context,
     scopes: &HashMap<String, ScopeDef>,
+    sandbox: &SharedSandbox,
 ) -> Result<StepOutput, StepError> {
     let mut iterations = Vec::new();
 
     for (i, item) in items.iter().enumerate() {
         let mut child_ctx = make_child_ctx(ctx, Some(serde_json::Value::String(item.clone())), i);
 
-        let iter_output = execute_scope_steps(scope, &mut child_ctx, scopes).await?;
+        let iter_output = execute_scope_steps(scope, &mut child_ctx, scopes, sandbox).await?;
 
         iterations.push(IterationOutput {
             index: i,
@@ -308,6 +312,7 @@ async fn parallel_execute(
     ctx: &Context,
     scopes: &HashMap<String, ScopeDef>,
     parallel_count: usize,
+    sandbox: &SharedSandbox,
 ) -> Result<StepOutput, StepError> {
     let sem = Arc::new(Semaphore::new(parallel_count));
     let mut set: JoinSet<(usize, Result<StepOutput, StepError>)> = JoinSet::new();
@@ -318,10 +323,11 @@ async fn parallel_execute(
         let child_ctx = make_child_ctx(ctx, Some(item_val), i);
         let scope_clone = scope.clone();
         let scopes_clone = scopes.clone();
+        let sandbox_clone = sandbox.clone();
 
         set.spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore closed");
-            let result = execute_scope_steps_owned(scope_clone, child_ctx, scopes_clone).await;
+            let result = execute_scope_steps_owned(scope_clone, child_ctx, scopes_clone, sandbox_clone).await;
             (i, result)
         });
     }
@@ -382,12 +388,13 @@ async fn execute_scope_steps(
     scope: &ScopeDef,
     child_ctx: &mut Context,
     scopes: &HashMap<String, ScopeDef>,
+    sandbox: &SharedSandbox,
 ) -> Result<StepOutput, StepError> {
     let mut last_output = StepOutput::Empty;
 
     for scope_step in &scope.steps {
         let config = StepConfig::default();
-        let result = dispatch_scope_step(scope_step, &config, child_ctx, scopes).await;
+        let result = dispatch_scope_step_sandboxed(scope_step, &config, child_ctx, scopes, sandbox).await;
 
         match result {
             Ok(output) => {
@@ -432,8 +439,9 @@ async fn execute_scope_steps_owned(
     scope: ScopeDef,
     mut child_ctx: Context,
     scopes: HashMap<String, ScopeDef>,
+    sandbox: SharedSandbox,
 ) -> Result<StepOutput, StepError> {
-    execute_scope_steps(&scope, &mut child_ctx, &scopes).await
+    execute_scope_steps(&scope, &mut child_ctx, &scopes, &sandbox).await
 }
 
 #[cfg(test)]
@@ -501,7 +509,7 @@ mod tests {
         scopes.insert("echo_scope".to_string(), echo_scope());
 
         let step = map_step("map_test", "alpha\nbeta\ngamma", "echo_scope", None);
-        let executor = MapExecutor::new(&scopes);
+        let executor = MapExecutor::new(&scopes, None);
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());
 
@@ -522,7 +530,7 @@ mod tests {
         scopes.insert("echo_scope".to_string(), echo_scope());
 
         let step = map_step("map_parallel", "a\nb\nc", "echo_scope", Some(3));
-        let executor = MapExecutor::new(&scopes);
+        let executor = MapExecutor::new(&scopes, None);
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());
 
@@ -573,7 +581,7 @@ mod tests {
             serde_yaml::Value::String("text".to_string()),
         );
         let step = map_step_with_config("map_collect_text", "alpha\nbeta\ngamma", "echo_scope", cfg);
-        let executor = MapExecutor::new(&scopes);
+        let executor = MapExecutor::new(&scopes, None);
 
         // Build StepConfig with collect=text
         let mut config_values = HashMap::new();
@@ -604,7 +612,7 @@ mod tests {
             "echo_scope",
             HashMap::new(),
         );
-        let executor = MapExecutor::new(&scopes);
+        let executor = MapExecutor::new(&scopes, None);
 
         let mut config_values = HashMap::new();
         config_values.insert(
@@ -628,7 +636,7 @@ mod tests {
         scopes.insert("echo_scope".to_string(), echo_scope());
 
         let step = map_step("map_no_collect", "a\nb", "echo_scope", None);
-        let executor = MapExecutor::new(&scopes);
+        let executor = MapExecutor::new(&scopes, None);
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());
 
@@ -643,7 +651,7 @@ mod tests {
         scopes.insert("echo_scope".to_string(), echo_scope());
 
         let step = map_step("map_reduce_concat", "hello\nworld", "echo_scope", None);
-        let executor = MapExecutor::new(&scopes);
+        let executor = MapExecutor::new(&scopes, None);
 
         let mut config_values = HashMap::new();
         config_values.insert(
@@ -673,7 +681,7 @@ mod tests {
         );
 
         let step = map_step("map_reduce_sum", "10\n20\n30", "echo_scope", None);
-        let executor = MapExecutor::new(&scopes);
+        let executor = MapExecutor::new(&scopes, None);
 
         let mut config_values = HashMap::new();
         config_values.insert(
@@ -702,7 +710,7 @@ mod tests {
         );
 
         let step = map_step("map_reduce_filter", "hello\n\nworld", "echo_scope", None);
-        let executor = MapExecutor::new(&scopes);
+        let executor = MapExecutor::new(&scopes, None);
 
         let mut config_values = HashMap::new();
         config_values.insert(
@@ -730,7 +738,7 @@ mod tests {
         scopes.insert("echo_scope".to_string(), echo_scope());
 
         let step = map_step("map_order", "first\nsecond\nthird", "echo_scope", Some(3));
-        let executor = MapExecutor::new(&scopes);
+        let executor = MapExecutor::new(&scopes, None);
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());
 
