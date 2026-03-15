@@ -41,8 +41,11 @@ serde_yaml = "0.9"
 # Template engine
 tera = "1"
 
-# HTTP client (for chat step)
+# HTTP client (for events/subscribers and fallback)
 reqwest = { version = "0.12", features = ["json"] }
+
+# LLM provider abstraction (18+ providers: Anthropic, OpenAI, Ollama, Google, etc.)
+rig-core = "0.32"
 
 # Error handling
 anyhow = "1"
