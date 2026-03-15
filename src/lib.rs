@@ -7,6 +7,7 @@ pub mod error;
 pub mod events;
 pub mod plugins;
 pub mod prompts;
+pub mod retry;
 pub mod sandbox;
 pub mod steps;
 pub mod workflow;

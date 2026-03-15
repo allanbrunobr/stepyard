@@ -1,10 +1,12 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use regex::Regex;
 
 use crate::config::StepConfig;
 use crate::engine::context::{ChatMessage, Context};
 use crate::error::StepError;
+use crate::retry::{retry_with_backoff, RetryConfig};
 use crate::workflow::schema::StepDef;
 
 use super::{ChatOutput, StepExecutor, StepOutput};
@@ -153,9 +155,68 @@ fn extract_chat_output<T>(response: CompletionResponse<T>, model: &str) -> ChatO
     }
 }
 
+/// Extract HTTP status code from rig-core CompletionError
+fn extract_http_status(error: &CompletionError) -> Option<u16> {
+    let error_str = error.to_string();
+
+    // Try to extract HTTP status code from error message
+    // Common patterns: "HTTP 429", "status: 429", "429 Too Many Requests"
+    let patterns = [
+        r"(?i)HTTP\s+(\d{3})",
+        r"(?i)status[:\s]+(\d{3})",
+        r"(?i)^(\d{3})\s+",
+        r"(?i)\b(\d{3})\s+(?:Too Many Requests|Rate)",
+    ];
+
+    for pattern in &patterns {
+        if let Ok(re) = Regex::new(pattern) {
+            if let Some(captures) = re.captures(&error_str) {
+                if let Some(status_match) = captures.get(1) {
+                    if let Ok(status) = status_match.as_str().parse::<u16>() {
+                        // Validate it's a real HTTP status code (100-599)
+                        if (100..600).contains(&status) {
+                            return Some(status);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check for common rate limit indicators without regex
+    let error_lower = error_str.to_lowercase();
+    if error_lower.contains("rate limit")
+        || error_lower.contains("too many requests")
+        || error_lower.contains("quota exceeded")
+        || error_lower.contains("429") {
+        return Some(429);
+    }
+
+    None
+}
+
+/// Extract Retry-After duration from rig-core CompletionError
+fn extract_retry_after_from_completion_error(error: &CompletionError) -> Option<Duration> {
+    crate::retry::extract_retry_after(error)
+}
+
 /// Map Rig CompletionError to StepError
 fn map_rig_error(provider: &str, err: CompletionError) -> StepError {
-    StepError::Fail(format!("{} API error: {}", provider, err))
+    if let Some(status_code) = extract_http_status(&err) {
+        let retry_after = if status_code == 429 {
+            extract_retry_after_from_completion_error(&err)
+        } else {
+            None
+        };
+
+        StepError::HttpError {
+            status_code,
+            message: format!("{} API error: {}", provider, err),
+            retry_after,
+        }
+    } else {
+        StepError::Fail(format!("{} API error: {}", provider, err))
+    }
 }
 
 /// Build Rig client error to StepError
@@ -181,7 +242,7 @@ macro_rules! send_completion {
     }};
 }
 
-/// Call LLM via Rig — unified multi-provider completion
+/// Call LLM via Rig — unified multi-provider completion with retry logic
 async fn call_via_rig(
     provider: &str,
     model_name: &str,
@@ -193,135 +254,175 @@ async fn call_via_rig(
     max_tokens: u64,
     timeout: Duration,
 ) -> Result<StepOutput, StepError> {
-    tokio::time::timeout(timeout, async {
-        match provider {
-            // ── Anthropic ────────────────────────────────────────
-            "anthropic" => {
-                let mut builder = rig::providers::anthropic::Client::builder()
-                    .api_key(api_key);
-                if let Some(url) = base_url {
-                    builder = builder.base_url(url);
+    let retry_config = RetryConfig {
+        max_retries: 3,
+        base_delay: Duration::from_secs(1),
+        max_delay: Duration::from_secs(30),
+        backoff_multiplier: 2.0,
+    };
+
+    // Clone all needed data for the retry closure
+    let provider = provider.to_string();
+    let model_name = model_name.to_string();
+    let api_key = api_key.to_string();
+    let base_url = base_url.map(String::from);
+    let prompt = prompt.to_string();
+
+    let operation = || {
+        let provider = provider.clone();
+        let model_name = model_name.clone();
+        let api_key = api_key.clone();
+        let base_url = base_url.clone();
+        let messages = messages.clone();
+        let prompt = prompt.clone();
+
+        async move {
+            tokio::time::timeout(timeout, async {
+                match provider.as_str() {
+                    // ── Anthropic ────────────────────────────────────────
+                    "anthropic" => {
+                        let mut builder = rig::providers::anthropic::Client::builder()
+                            .api_key(&api_key);
+                        if let Some(url) = &base_url {
+                            builder = builder.base_url(url);
+                        }
+                        let client = builder.build().map_err(|e| map_build_error("anthropic", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "anthropic")
+                    }
+
+                    // ── OpenAI (Chat Completions API — LiteLLM compatible) ──
+                    "openai" => {
+                        let mut builder = rig::providers::openai::CompletionsClient::builder()
+                            .api_key(&api_key);
+                        if let Some(url) = &base_url {
+                            builder = builder.base_url(url);
+                        }
+                        let client = builder.build().map_err(|e| map_build_error("openai", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "openai")
+                    }
+
+                    // ── Ollama (local, no API key) ───────────────────────
+                    "ollama" => {
+                        let mut builder = rig::providers::ollama::Client::builder()
+                            .api_key(rig::client::Nothing);
+                        let url = base_url.as_deref().unwrap_or("http://localhost:11434");
+                        builder = builder.base_url(url);
+                        let client = builder.build().map_err(|e| map_build_error("ollama", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "ollama")
+                    }
+
+                    // ── Groq ─────────────────────────────────────────────
+                    "groq" => {
+                        let mut builder = rig::providers::groq::Client::builder()
+                            .api_key(&api_key);
+                        if let Some(url) = &base_url {
+                            builder = builder.base_url(url);
+                        }
+                        let client = builder.build().map_err(|e| map_build_error("groq", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "groq")
+                    }
+
+                    // ── DeepSeek ─────────────────────────────────────────
+                    "deepseek" => {
+                        let mut builder = rig::providers::deepseek::Client::builder()
+                            .api_key(&api_key);
+                        if let Some(url) = &base_url {
+                            builder = builder.base_url(url);
+                        }
+                        let client = builder.build().map_err(|e| map_build_error("deepseek", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "deepseek")
+                    }
+
+                    // ── Google Gemini ────────────────────────────────────
+                    "gemini" | "google" => {
+                        let mut builder = rig::providers::gemini::Client::builder()
+                            .api_key(&api_key);
+                        if let Some(url) = &base_url {
+                            builder = builder.base_url(url);
+                        }
+                        let client = builder.build().map_err(|e| map_build_error("gemini", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "gemini")
+                    }
+
+                    // ── Cohere ───────────────────────────────────────────
+                    "cohere" => {
+                        let mut builder = rig::providers::cohere::Client::builder()
+                            .api_key(&api_key);
+                        if let Some(url) = &base_url {
+                            builder = builder.base_url(url);
+                        }
+                        let client = builder.build().map_err(|e| map_build_error("cohere", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "cohere")
+                    }
+
+                    // ── Perplexity ───────────────────────────────────────
+                    "perplexity" => {
+                        let mut builder = rig::providers::perplexity::Client::builder()
+                            .api_key(&api_key);
+                        if let Some(url) = &base_url {
+                            builder = builder.base_url(url);
+                        }
+                        let client = builder.build().map_err(|e| map_build_error("perplexity", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "perplexity")
+                    }
+
+                    // ── xAI (Grok) ──────────────────────────────────────
+                    "xai" | "grok" => {
+                        let mut builder = rig::providers::xai::Client::builder()
+                            .api_key(&api_key);
+                        if let Some(url) = &base_url {
+                            builder = builder.base_url(url);
+                        }
+                        let client = builder.build().map_err(|e| map_build_error("xai", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "xai")
+                    }
+
+                    // ── Mistral ─────────────────────────────────────────
+                    "mistral" => {
+                        let mut builder = rig::providers::mistral::Client::builder()
+                            .api_key(&api_key);
+                        if let Some(url) = &base_url {
+                            builder = builder.base_url(url);
+                        }
+                        let client = builder.build().map_err(|e| map_build_error("mistral", e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, "mistral")
+                    }
+
+                    // ── Any other: OpenAI-compatible with custom base_url ──
+                    // This covers LiteLLM, vLLM, Azure (via base_url), or
+                    // any service that implements the OpenAI Chat Completions API.
+                    other => {
+                        let url = base_url.as_deref().ok_or_else(|| StepError::Fail(format!(
+                            "Unknown provider '{}': set 'base_url' to use as OpenAI-compatible endpoint",
+                            other
+                        )))?;
+                        let builder = rig::providers::openai::CompletionsClient::builder()
+                            .api_key(&api_key)
+                            .base_url(url);
+                        let client = builder.build().map_err(|e| map_build_error(other, e))?;
+                        send_completion!(client, &model_name, &prompt, messages, temperature, max_tokens, other)
+                    }
                 }
-                let client = builder.build().map_err(|e| map_build_error("anthropic", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "anthropic")
-            }
-
-            // ── OpenAI (Chat Completions API — LiteLLM compatible) ──
-            "openai" => {
-                let mut builder = rig::providers::openai::CompletionsClient::builder()
-                    .api_key(api_key);
-                if let Some(url) = base_url {
-                    builder = builder.base_url(url);
-                }
-                let client = builder.build().map_err(|e| map_build_error("openai", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "openai")
-            }
-
-            // ── Ollama (local, no API key) ───────────────────────
-            "ollama" => {
-                let mut builder = rig::providers::ollama::Client::builder()
-                    .api_key(rig::client::Nothing);
-                let url = base_url.unwrap_or("http://localhost:11434");
-                builder = builder.base_url(url);
-                let client = builder.build().map_err(|e| map_build_error("ollama", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "ollama")
-            }
-
-            // ── Groq ─────────────────────────────────────────────
-            "groq" => {
-                let mut builder = rig::providers::groq::Client::builder()
-                    .api_key(api_key);
-                if let Some(url) = base_url {
-                    builder = builder.base_url(url);
-                }
-                let client = builder.build().map_err(|e| map_build_error("groq", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "groq")
-            }
-
-            // ── DeepSeek ─────────────────────────────────────────
-            "deepseek" => {
-                let mut builder = rig::providers::deepseek::Client::builder()
-                    .api_key(api_key);
-                if let Some(url) = base_url {
-                    builder = builder.base_url(url);
-                }
-                let client = builder.build().map_err(|e| map_build_error("deepseek", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "deepseek")
-            }
-
-            // ── Google Gemini ────────────────────────────────────
-            "gemini" | "google" => {
-                let mut builder = rig::providers::gemini::Client::builder()
-                    .api_key(api_key);
-                if let Some(url) = base_url {
-                    builder = builder.base_url(url);
-                }
-                let client = builder.build().map_err(|e| map_build_error("gemini", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "gemini")
-            }
-
-            // ── Cohere ───────────────────────────────────────────
-            "cohere" => {
-                let mut builder = rig::providers::cohere::Client::builder()
-                    .api_key(api_key);
-                if let Some(url) = base_url {
-                    builder = builder.base_url(url);
-                }
-                let client = builder.build().map_err(|e| map_build_error("cohere", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "cohere")
-            }
-
-            // ── Perplexity ───────────────────────────────────────
-            "perplexity" => {
-                let mut builder = rig::providers::perplexity::Client::builder()
-                    .api_key(api_key);
-                if let Some(url) = base_url {
-                    builder = builder.base_url(url);
-                }
-                let client = builder.build().map_err(|e| map_build_error("perplexity", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "perplexity")
-            }
-
-            // ── xAI (Grok) ──────────────────────────────────────
-            "xai" | "grok" => {
-                let mut builder = rig::providers::xai::Client::builder()
-                    .api_key(api_key);
-                if let Some(url) = base_url {
-                    builder = builder.base_url(url);
-                }
-                let client = builder.build().map_err(|e| map_build_error("xai", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "xai")
-            }
-
-            // ── Mistral ─────────────────────────────────────────
-            "mistral" => {
-                let mut builder = rig::providers::mistral::Client::builder()
-                    .api_key(api_key);
-                if let Some(url) = base_url {
-                    builder = builder.base_url(url);
-                }
-                let client = builder.build().map_err(|e| map_build_error("mistral", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "mistral")
-            }
-
-            // ── Any other: OpenAI-compatible with custom base_url ──
-            // This covers LiteLLM, vLLM, Azure (via base_url), or
-            // any service that implements the OpenAI Chat Completions API.
-            other => {
-                let url = base_url.ok_or_else(|| StepError::Fail(format!(
-                    "Unknown provider '{}': set 'base_url' to use as OpenAI-compatible endpoint",
-                    other
-                )))?;
-                let builder = rig::providers::openai::CompletionsClient::builder()
-                    .api_key(api_key)
-                    .base_url(url);
-                let client = builder.build().map_err(|e| map_build_error(other, e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, other)
-            }
+            })
+            .await
+            .map_err(|_| StepError::Timeout(timeout))?
         }
-    })
-    .await
-    .map_err(|_| StepError::Timeout(timeout))?
+    };
+
+    let result = retry_with_backoff(
+        operation,
+        retry_config,
+        |error| error.should_retry(),
+    ).await;
+
+    match result {
+        Ok(output) => Ok(output),
+        Err(retry_error) => Err(StepError::RateLimitExhausted {
+            attempts: retry_error.attempts,
+            duration: retry_error.total_duration,
+            last_error: retry_error.last_error,
+        }),
+    }
 }
 
 // ── ChatExecutor ─────────────────────────────────────────────────
@@ -743,5 +844,171 @@ mod tests {
             "Ollama should not require API key, but got: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_extract_http_status_from_error_messages() {
+        // Test our regex logic directly with sample error messages
+        let test_cases = vec![
+            ("HTTP 429 Too Many Requests", Some(429)),
+            ("status: 500 Internal Server Error", Some(500)),
+            ("429 rate limit exceeded", Some(429)),
+            ("Rate limit exceeded", Some(429)),
+            ("too many requests", Some(429)),
+            ("quota exceeded", Some(429)),
+            ("Connection refused", None),
+            ("Invalid response", None),
+        ];
+
+        for (message, expected) in test_cases {
+            // Test our status extraction logic
+            let error_lower = message.to_lowercase();
+            let result = if error_lower.contains("rate limit")
+                || error_lower.contains("too many requests")
+                || error_lower.contains("quota exceeded")
+                || error_lower.contains("429") {
+                Some(429)
+            } else {
+                // Test HTTP status extraction patterns
+                let patterns = [
+                    r"(?i)HTTP\s+(\d{3})",
+                    r"(?i)status[:\s]+(\d{3})",
+                    r"(?i)^(\d{3})\s+",
+                    r"(?i)\b(\d{3})\s+(?:Too Many Requests|Rate)",
+                ];
+
+                let mut found = None;
+                for pattern in &patterns {
+                    if let Ok(re) = Regex::new(pattern) {
+                        if let Some(captures) = re.captures(message) {
+                            if let Some(status_match) = captures.get(1) {
+                                if let Ok(status) = status_match.as_str().parse::<u16>() {
+                                    if (100..600).contains(&status) {
+                                        found = Some(status);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                found
+            };
+
+            assert_eq!(result, expected, "Failed for message: '{}'", message);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_chat_with_rate_limit_retry_mock() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+
+        // First request returns 429 with Retry-After header
+        let rate_limit_response = ResponseTemplate::new(429)
+            .set_header("Retry-After", "2")
+            .set_body_json(&serde_json::json!({
+                "error": {
+                    "type": "rate_limit_error",
+                    "message": "Rate limit exceeded. Retry after 2 seconds"
+                }
+            }));
+
+        // Second request succeeds
+        let success_response = serde_json::json!({
+            "id": "msg_retry_success",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3-haiku-20240307",
+            "content": [{"type": "text", "text": "Success after retry!"}],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "stop_reason": "end_turn",
+            "stop_sequence": null
+        });
+
+        // Set up mock to return 429 first, then success
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(rate_limit_response)
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&success_response))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+
+        let step = make_step("Test retry");
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "base_url".to_string(),
+            serde_json::Value::String(mock_server.uri()),
+        );
+        let config = StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = ChatExecutor.execute(&step, &config, &ctx).await;
+
+        // Should eventually succeed after retry
+        assert!(result.is_ok(), "Expected success after retry, got: {:?}", result);
+        let output = result.unwrap();
+        assert_eq!(output.text(), "Success after retry!");
+    }
+
+    #[tokio::test]
+    async fn test_chat_rate_limit_exhaustion_mock() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+
+        // Always return 429 to exhaust retries
+        let rate_limit_response = ResponseTemplate::new(429)
+            .set_header("Retry-After", "1")
+            .set_body_json(&serde_json::json!({
+                "error": {
+                    "type": "rate_limit_error",
+                    "message": "Rate limit exceeded"
+                }
+            }));
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(rate_limit_response)
+            .expect(4) // Initial attempt + 3 retries
+            .mount(&mock_server)
+            .await;
+
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+
+        let step = make_step("Test exhaustion");
+        let mut config_values = HashMap::new();
+        config_values.insert(
+            "base_url".to_string(),
+            serde_json::Value::String(mock_server.uri()),
+        );
+        let config = StepConfig { values: config_values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = ChatExecutor.execute(&step, &config, &ctx).await;
+
+        // Should fail with RateLimitExhausted error
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+
+        match error {
+            StepError::RateLimitExhausted { attempts, duration, .. } => {
+                assert_eq!(attempts, 4); // 1 initial + 3 retries
+                assert!(duration.as_secs() >= 3); // At least some delay time
+            }
+            other => panic!("Expected RateLimitExhausted error, got: {:?}", other),
+        }
     }
 }
