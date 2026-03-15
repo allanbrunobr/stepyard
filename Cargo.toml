@@ -12,10 +12,10 @@ categories = ["command-line-utilities", "development-tools", "asynchronous"]
 readme = "README.md"
 authors = ["Allan Bruno"]
 exclude = [
-  "workflows/",
-  "prompts/",
-  "Formula/",
-  ".github/",
+  "/workflows/",
+  "/prompts/",
+  "/Formula/",
+  "/.github/",
   "PROMPT.md",
   "EPICS-AND-STORIES.md",
   "ARCHITECTURE-MINION-ENGINE.md",
