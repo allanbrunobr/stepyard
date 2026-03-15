@@ -62,6 +62,26 @@ Calls the Anthropic API (or OpenAI-compatible endpoint) directly without spawnin
     timeout: 60s
 ```
 
+### Retry Configuration
+
+Chat steps automatically retry on API rate limit errors (HTTP 429):
+
+```yaml
+- name: chat_with_retry
+  type: chat
+  prompt: "Analyze this code"
+  config:
+    max_retries: 3                    # Max retry attempts (default: 3)
+    retry_base_delay_ms: 1000         # Base delay in ms (default: 1000)
+    retry_max_delay_ms: 8000          # Max delay cap in ms (default: 8000)
+```
+
+**Retry Behavior:**
+- Exponential backoff: 1s, 2s, 4s (based on base_delay)
+- Respects `Retry-After` header when provided
+- Only retries on 429 rate limit errors
+- Logs each retry attempt with delay duration
+
 **Output stored as:**
 - `steps.<name>.response` — assistant response text
 

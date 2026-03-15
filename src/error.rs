@@ -28,6 +28,9 @@ pub enum StepError {
         message: String,
     },
 
+    #[error("API rate limit retries exhausted: {provider} returned 429 after {attempts} attempts")]
+    RateLimitExhausted { provider: String, attempts: usize },
+
     #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
@@ -68,6 +71,7 @@ impl StepError {
             StepError::Template(_) => "template",
             StepError::Sandbox { .. } => "sandbox",
             StepError::Config { .. } => "config",
+            StepError::RateLimitExhausted { .. } => "rate_limit",
             StepError::Other(_) => "internal",
         }
     }
@@ -106,6 +110,16 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Config error in 'sandbox.image': image not found"
+        );
+
+        let err = StepError::RateLimitExhausted {
+            provider: "anthropic".to_string(),
+            attempts: 3,
+        };
+        assert_eq!(err.category(), "rate_limit");
+        assert_eq!(
+            err.to_string(),
+            "API rate limit retries exhausted: anthropic returned 429 after 3 attempts"
         );
     }
 
