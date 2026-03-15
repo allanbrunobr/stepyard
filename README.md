@@ -1,117 +1,135 @@
 # Minion Engine
 
-AI workflow engine that orchestrates Claude Code CLI through declarative YAML workflows.
+**Automate code review, bug fixing, and PR creation with AI — defined in YAML, executed in Docker.**
 
-## Overview
-
-Minion Engine executes multi-step workflows that combine shell commands, Claude Code AI agent calls, conditional gates, and retry loops. It powers automated workflows like fixing GitHub issues end-to-end (fetch → plan → implement → lint → test → PR).
+Minion Engine is a CLI tool that runs multi-step AI workflows. You define what you want in a YAML file, and it orchestrates everything: shell commands, Claude AI calls, conditional logic, and parallel execution — all inside an isolated Docker sandbox.
 
 ```
-┌──────────────────────────────────────────────┐
-│              minion execute                  │
-│                                              │
-│  YAML Workflow                               │
-│  ┌─────────────────────────────────────┐    │
-│  │  steps:                             │    │
-│  │    cmd  → shell command             │    │
-│  │    agent → Claude Code CLI          │    │
-│  │    gate  → conditional branch       │    │
-│  │    repeat → retry loop              │    │
-│  │    map   → iterate over items       │    │
-│  │    parallel → concurrent steps      │    │
-│  │    call  → invoke a scope           │    │
-│  │    template → render prompt file    │    │
-│  └─────────────────────────────────────┘    │
-│                                              │
-│  Context Store: step outputs, variables      │
-│  Template Engine: Tera ({{ expressions }})   │
-│  Config: 4-layer merge (global/type/pattern/step) │
-└──────────────────────────────────────────────┘
+You write YAML → Minion runs AI workflows → Results appear as PR comments, fixes, reports
 ```
 
-## Prerequisites
+## Why?
 
-- Rust 1.75+ (`rustup` recommended)
-- `claude` CLI installed and authenticated (for agent steps)
-- `gh` CLI authenticated (`gh auth login`) — `GH_TOKEN` is **auto-detected**, no need to export it manually
-- `ANTHROPIC_API_KEY` environment variable set (for `chat` and `map` steps)
-- Docker Desktop 4.40+ (sandbox is ON by default — required unless you use `--no-sandbox`)
+**Without Minion Engine**, reviewing a PR means:
+- Open the PR, read each file manually
+- Switch context between Python, TypeScript, Rust conventions
+- Remember to check for security issues, type safety, error handling
+- Write your findings as a comment
 
-## Build
-
+**With Minion Engine**, one command does it all:
 ```bash
-cargo build --release
-# binary at: ./target/release/minion
+minion execute code-review.yaml -- 42
 ```
-
-## Install
-
-### Via crates.io (recommended)
-
-```bash
-cargo install minion-engine
-minion --version
-```
-
-### Build from source
-
-```bash
-git clone https://github.com/allanbrunobr/minion-engine.git
-cd minion-engine
-cargo install --path .
-```
+In ~40 seconds, every changed file is reviewed with **language-specific criteria** (Python gets Python rules, TypeScript gets TypeScript rules), the project architecture is considered, and a structured report is posted as a PR comment.
 
 ## Quick Start
 
 ```bash
-# 1. Install
+# 1. Install (Rust toolchain required)
 cargo install minion-engine
 
-# 2. Set your Anthropic API key (once)
+# 2. Set your Anthropic API key
 export ANTHROPIC_API_KEY="sk-ant-..."
 
-# 3. Authenticate with GitHub (once) — GH_TOKEN is auto-detected
+# 3. Authenticate with GitHub (GH_TOKEN is auto-detected)
 gh auth login
 
-# 4. Navigate to the project you want to analyze
+# 4. Go to your project and run a workflow
 cd /path/to/your-project
-
-# 5. Create a workflow (or copy one from the minion-engine repo)
-minion init code-review --template code-review
-
-# 6. Run it against a PR (sandbox is ON by default)
-minion execute code-review.yaml --sandbox -- 42
+minion execute code-review.yaml -- 42   # Review PR #42
 ```
 
-> **Important:** `minion` operates on the **current directory**. Always `cd` into the project you want to analyze before running a workflow. In sandbox mode, the current directory is copied into an isolated Docker container where all steps execute.
+That's it. Docker image is **built automatically** on first run. No manual setup needed.
 
-That's it. No manual `GH_TOKEN` export, no shell tricks — credentials are auto-detected.
+## What Can It Do?
+
+| Workflow | What it does |
+|----------|-------------|
+| **code-review** | Review a PR — detects language per file, loads language-specific prompts, posts findings as PR comment |
+| **fix-issue** | Fetch a GitHub issue → plan → implement → lint → test → create PR |
+| **fix-test** | Detect failing tests → analyze → fix → verify — repeat until green |
+| **security-audit** | Scan codebase for OWASP vulnerabilities with AI analysis |
+| **generate-docs** | Generate documentation from source code |
+
+All workflows are YAML files you can customize or create from scratch.
+
+## Prerequisites
+
+| Requirement | How to get it | Notes |
+|-------------|---------------|-------|
+| **Rust toolchain** | [rustup.rs](https://rustup.rs) | For `cargo install` |
+| **ANTHROPIC_API_KEY** | [console.anthropic.com](https://console.anthropic.com) | `export ANTHROPIC_API_KEY="sk-ant-..."` |
+| **Docker Desktop** | [docker.com](https://www.docker.com/products/docker-desktop/) | Sandbox runs workflows in isolation |
+| **gh CLI** | [cli.github.com](https://cli.github.com) | `gh auth login` — GH_TOKEN is **auto-detected** |
+
+> **Docker image auto-build:** The first time you run a workflow, Minion automatically builds the sandbox image (`minion-sandbox:latest`). This takes ~2 minutes once and never needs to be repeated.
+
+## Features
+
+### 🐳 Docker Sandbox (default)
+
+Every workflow runs inside an isolated Docker container. Your project is copied in, the AI works in isolation, and only the results come back. If anything goes wrong, the container is destroyed — zero impact on your project.
 
 ```bash
-# More examples
-minion init my-workflow --template fix-issue     # Create from template
-minion execute my-workflow.yaml --verbose -- 247  # Run with verbose output
-minion execute my-workflow.yaml --no-sandbox -- 1 # Run without Docker sandbox
-minion list                                       # List available workflows
-minion inspect my-workflow.yaml                   # Show dependency graph
-minion validate my-workflow.yaml                  # Validate without running
+minion execute code-review.yaml -- 42        # Sandbox ON (default)
+minion execute code-review.yaml --no-sandbox -- 42  # Run locally instead
 ```
 
-## Usage
+### 🔍 Language-Aware Code Review
+
+The code review workflow detects the language of each changed file and applies **language-specific review criteria**:
+
+- **Python** → checks for bare `except:`, missing type annotations, mutable default arguments
+- **TypeScript** → checks for `any` types, missing `await`, unhandled promise rejections
+- **Rust** → checks for `unwrap()` in production, unnecessary clones, unsafe blocks
+- **Java** → checks for resource leaks, null safety, checked exceptions
+- Falls back to generic review for other languages
+
+### 📐 Architecture Context
+
+If your project has a `CLAUDE.md`, `ARCHITECTURE.md`, or `README.md`, the code review workflow reads it automatically and uses it to evaluate whether changes align with your project's design.
+
+### 🎯 Stack Detection & Prompt Registry
+
+Minion detects your project's tech stack (Rust, Python, TypeScript, React, Java, etc.) from file markers (`Cargo.toml`, `package.json`, `requirements.txt`) and uses it to select the right prompts and tools.
+
+## CLI Reference
 
 ### `minion execute`
 
 ```bash
 minion execute <workflow.yaml> [flags] -- [target]
-
-Flags:
-  --no-sandbox      Disable Docker sandbox (sandbox is ON by default)
-  --verbose         Show all step outputs
-  --quiet           Only show errors
-  --json            Output final result as JSON
-  --var KEY=VALUE   Set a workflow variable (repeatable)
-  --timeout N       Override global timeout in seconds
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--no-sandbox` | Disable Docker sandbox (sandbox is ON by default) |
+| `--verbose` | Show all step outputs |
+| `--quiet` | Only show errors |
+| `--json` | Output result as JSON |
+| `--dry-run` | Show what steps would run without executing |
+| `--var KEY=VALUE` | Set a workflow variable (repeatable) |
+| `--timeout SECONDS` | Override global timeout |
+| `--resume STEP` | Resume from a specific step |
+
+```bash
+# Examples
+minion execute code-review.yaml -- 42              # Review PR #42
+minion execute fix-issue.yaml --verbose -- 247     # Fix issue with verbose output
+minion execute fix-test.yaml -- 7                  # Fix failing tests for PR #7
+minion execute security-audit.yaml                 # Security audit (no target needed)
+minion execute workflow.yaml --var mode=strict -- 5 # Pass variables
+```
+
+### `minion init`
+
+```bash
+minion init <name> [--template <template>]
+```
+
+Creates a new workflow from a built-in template.
+
+Templates: `blank`, `fix-issue`, `code-review`, `security-audit`
 
 ### `minion validate`
 
@@ -119,7 +137,7 @@ Flags:
 minion validate <workflow.yaml>
 ```
 
-Parses and validates the workflow without executing steps.
+Parses and validates a workflow without executing it.
 
 ### `minion list`
 
@@ -127,22 +145,7 @@ Parses and validates the workflow without executing steps.
 minion list
 ```
 
-Lists workflows found in:
-- Current directory
-- `./workflows/`
-- `~/.minion/workflows/`
-
-Shows name, description, and step count for each.
-
-### `minion init`
-
-```bash
-minion init <name> [--template <template>] [--output <dir>]
-```
-
-Creates a new workflow YAML file from a built-in template.
-
-Available templates: `blank`, `fix-issue`, `code-review`, `security-audit`
+Lists workflows found in the current directory, `./workflows/`, and `~/.minion/workflows/`.
 
 ### `minion inspect`
 
@@ -150,12 +153,7 @@ Available templates: `blank`, `fix-issue`, `code-review`, `security-audit`
 minion inspect <workflow.yaml>
 ```
 
-Shows:
-- Validation status
-- Resolved config layers
-- Scopes with step counts
-- Step dependency graph
-- Dry-run summary (step type breakdown)
+Shows config layers, scopes, step dependency graph, and dry-run summary.
 
 ## Workflow YAML Format
 
@@ -167,191 +165,90 @@ description: "What this workflow does"
 config:
   global:
     timeout: 300s
-  agent:
+  chat:
+    provider: anthropic
     model: claude-sonnet-4-20250514
-    permissions: skip
+    api_key_env: ANTHROPIC_API_KEY
   cmd:
     fail_on_error: true
-  patterns:
-    "^lint.*":
-      fail_on_error: false
-
-scopes:
-  retry_loop:
-    steps:
-      - name: run_cmd
-        type: cmd
-        run: "npm test"
-        config:
-          fail_on_error: false
-      - name: check
-        type: gate
-        condition: "{{ steps.run_cmd.exit_code == 0 }}"
-        on_pass: break
-    outputs: "{{ steps.run_cmd.stdout }}"
 
 steps:
-  - name: fetch_data
+  - name: get_info
     type: cmd
     run: "gh issue view {{ target }} --json title,body"
 
   - name: analyze
-    type: agent
+    type: chat
     prompt: |
       Analyze this issue and suggest a fix:
-      {{ steps.fetch_data.stdout }}
+      {{ steps.get_info.stdout }}
 
-  - name: validate
-    type: repeat
-    scope: retry_loop
-    max_iterations: 3
+  - name: report
+    type: cmd
+    run: "echo 'Analysis complete'"
 ```
 
 ## Step Types
 
 | Type | Description |
 |------|-------------|
-| `cmd` | Execute shell command |
+| `cmd` | Execute a shell command |
 | `agent` | Invoke Claude Code CLI |
-| `chat` | Direct Anthropic/OpenAI API call |
-| `gate` | Evaluate condition, control flow |
+| `chat` | Direct Anthropic API call |
+| `gate` | Evaluate a condition, control flow |
 | `repeat` | Run a scope repeatedly (retry loop) |
 | `map` | Run a scope once per item in a list |
 | `parallel` | Run nested steps concurrently |
 | `call` | Invoke a scope once |
-| `template` | Render a prompt template file |
-
-See [docs/STEP-TYPES.md](docs/STEP-TYPES.md) for full documentation.
 
 ## Template Variables
 
 | Variable | Description |
 |----------|-------------|
-| `{{ target }}` | Target argument passed to execute |
+| `{{ target }}` | Target argument passed after `--` |
 | `{{ steps.<name>.stdout }}` | stdout of a cmd step |
 | `{{ steps.<name>.stderr }}` | stderr of a cmd step |
-| `{{ steps.<name>.exit_code }}` | exit code of a cmd step |
-| `{{ steps.<name>.response }}` | response text of an agent/chat step |
-| `{{ scope.value }}` | current iteration value (in repeat/map scopes) |
-| `{{ scope.index }}` | current iteration index (0-based) |
-| `{{ vars.<key> }}` | variable set via `--var KEY=VALUE` |
+| `{{ steps.<name>.exit_code }}` | Exit code of a cmd step |
+| `{{ steps.<name>.response }}` | Response from a chat/agent step |
+| `{{ scope.value }}` | Current item in a map/repeat scope |
+| `{{ scope.index }}` | Current iteration index (0-based) |
+| `{{ args.<key> }}` | Variable set via `--var KEY=VALUE` |
+| `{{ prompts.<name> }}` | Load a prompt from the prompt registry |
 
-## Example: Fix a GitHub Issue
+## Example Output
 
-```bash
-# Sandbox is ON by default — AI runs isolated, your project stays safe
-minion execute fix-issue --verbose -- 247
-
-# Without sandbox (runs directly on your machine)
-minion execute fix-issue --no-sandbox --verbose -- 247
 ```
+▶ code-review
+  🔒 Sandbox mode: FullWorkflow
+  🐳 Creating Docker sandbox container…
+  🔒 Sandbox ready — container 0.7s, copy 7.7s, git 0.3s (total 8.7s)
+  ✓ get_diff (1.2s)
+  ✓ changed_files (1.2s)
+  ✓ check_files (0.0s)
+  ✓ file_reviews (12.9s)
+  ✓ summary (24.5s)
+  ✓ post_comment (1.3s)
+  ✓ report (0.2s)
+  📦 Copying results from sandbox…
+  🗑️  Sandbox destroyed
 
-This will:
-1. Fetch the GitHub issue details
-2. Find relevant source files
-3. Plan the implementation (Claude agent)
-4. Implement the fix (Claude agent)
-5. Lint and auto-fix (repeat up to 3x)
-6. Test and auto-fix (repeat up to 2x)
-7. Create a branch, commit, push, and open a PR
-
-All of this happens inside a Docker container **by default**. Your workspace is copied in, the AI works in isolation, and only the results are copied back. If anything goes wrong, the container is destroyed — zero impact on your project.
-
-## Docker Sandbox
-
-The sandbox is **ON by default** — workflows run inside an isolated Docker container with auto-forwarded credentials.
-
-```bash
-# Build the sandbox image (once)
-docker build -f Dockerfile.sandbox -t minion-sandbox:latest .
-
-# Sandbox is ON by default — just run!
-minion execute code-review -- 142
-minion execute security-audit
-minion execute weekly-report
-
-# To run locally without sandbox:
-minion execute code-review --no-sandbox -- 142
-```
-
-Three sandbox modes:
-
-| Mode | How to activate | What runs in Docker |
-|------|-----------------|---------------------|
-| **FullWorkflow** | Default (use `--no-sandbox` to disable) | Everything (all steps) |
-| **AgentOnly** | `config.agent.sandbox: true` | Only AI agent steps |
-| **Devbox** | `config.sandbox.mode: devbox` | Persistent dev container |
-
-**Credential auto-detection:** `ANTHROPIC_API_KEY` is forwarded from your environment. `GH_TOKEN` is **automatically detected** from `gh auth token` if not explicitly set — no need to export it. Credential directories (`~/.config/gh`, `~/.ssh`) are mounted read-only into the container.
-
-**Pre-flight validation:** Before starting any workflow, `minion` checks that all required tools and credentials are available and gives clear, actionable error messages if anything is missing.
-
-See [docs/DOCKER-SANDBOX.md](docs/DOCKER-SANDBOX.md) for full configuration.
-
-## Running Tests
-
-```bash
-cargo test
+✓ Done — 7 steps in 41.9s
 ```
 
 ## Project Structure
 
 ```
 src/
-  main.rs                  # Entry point
-  lib.rs                   # Module re-exports
-  cli/
-    mod.rs                 # CLI subcommands (execute, validate, list, init, inspect, version)
-    commands.rs            # Command implementations
-    init_templates.rs      # Built-in workflow templates
-    display.rs             # Terminal output helpers
-  engine/
-    mod.rs                 # Engine core — runs workflow steps
-    context.rs             # Context store (step outputs, variables)
-    template.rs            # Tera template rendering
-  workflow/
-    schema.rs              # WorkflowDef, StepDef, StepType
-    parser.rs              # YAML → WorkflowDef
-    validator.rs           # Validation rules
-  steps/
-    cmd.rs                 # Shell command executor
-    agent.rs               # Claude Code CLI executor
-    chat.rs                # Direct API chat executor
-    gate.rs                # Conditional gate executor
-    repeat.rs              # Retry loop executor
-    map.rs                 # Map-over-items executor
-    parallel.rs            # Parallel step executor
-    call.rs                # Scope call executor
-    template_step.rs       # Template rendering executor
-  config/
-    manager.rs             # 4-layer config resolution
-    merge.rs               # YAML/JSON merge helpers
-  control_flow.rs          # ControlFlow enum (skip, fail, break, next)
-  error.rs                 # StepError enum
-workflows/                 # Example workflow YAML files
-tests/
-  integration.rs           # Integration test suite
-  fixtures/                # YAML test fixtures and mock scripts
-docs/
-  YAML-SPEC.md             # Complete YAML format specification
-  STEP-TYPES.md            # Per-step-type documentation
-  CONFIG.md                # 4-layer config system
-  DOCKER-SANDBOX.md        # Running steps in Docker
-  EXAMPLES.md              # Example workflow catalog
-```
-
-## Documentation
-
-- [YAML Specification](docs/YAML-SPEC.md)
-- [Step Types](docs/STEP-TYPES.md)
-- [Configuration System](docs/CONFIG.md)
-- [Docker Sandbox](docs/DOCKER-SANDBOX.md)
-- [Example Workflows](docs/EXAMPLES.md)
-
-## API Docs
-
-```bash
-cargo doc --open
+  cli/          # CLI commands (execute, validate, list, init, inspect)
+  engine/       # Core engine — step execution, context, templates
+  workflow/     # YAML parsing, validation
+  steps/        # Step executors (cmd, agent, chat, gate, repeat, map, parallel)
+  sandbox/      # Docker sandbox management
+  prompts/      # Stack detection and prompt registry
+  config/       # 4-layer config resolution
+  plugins/      # Dynamic plugin system
+workflows/      # Example workflow YAML files
+prompts/        # Language-specific prompt templates
 ```
 
 ## License
