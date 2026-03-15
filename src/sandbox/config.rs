@@ -102,9 +102,14 @@ impl SandboxConfig {
     /// /usr/local/bin/gh) and missing safe.directory entries. The sandbox
     /// configures its own gitconfig after workspace copy.
     pub const AUTO_VOLUMES: &'static [&'static str] = &[
+        // Root mounts (for cmd steps)
         "~/.config/gh:/root/.config/gh:ro",
         "~/.claude:/root/.claude:rw",
         "~/.ssh:/root/.ssh:ro",
+        // Minion user mounts (for agent steps — Claude CLI runs as minion)
+        "~/.config/gh:/home/minion/.config/gh:ro",
+        "~/.claude:/home/minion/.claude:rw",
+        "~/.claude.json:/home/minion/.claude.json:ro",
     ];
 
     pub fn image(&self) -> &str {

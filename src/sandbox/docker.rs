@@ -342,6 +342,34 @@ impl DockerSandbox {
         Ok(SandboxOutput { stdout, stderr, exit_code })
     }
 
+    /// Run a shell command inside the sandbox as a specific user.
+    /// Used for agent steps that need non-root execution (Claude CLI
+    /// refuses `--dangerously-skip-permissions` when running as root).
+    pub async fn run_command_as_user(&self, cmd: &str, user: &str) -> Result<SandboxOutput> {
+        let id = self.container_id.as_ref().context("Container not created")?;
+
+        tracing::debug!(container_id = %id, cmd = %cmd, user = %user, "Sandbox: executing command as user");
+
+        let output = Command::new("docker")
+            .args(["exec", "--user", user, id, "/bin/sh", "-c", cmd])
+            .output()
+            .await
+            .context("docker exec failed")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = output.status.code().unwrap_or(-1);
+
+        tracing::debug!(
+            exit_code,
+            stdout_len = stdout.len(),
+            stderr_len = stderr.len(),
+            "Sandbox: user command completed"
+        );
+
+        Ok(SandboxOutput { stdout, stderr, exit_code })
+    }
+
     /// Copy results from the sandbox back to the host.
     ///
     /// First checks whether any files were actually modified inside the

@@ -280,6 +280,23 @@ impl Engine {
                     fi",
             )
             .await;
+
+        // Configure the minion user for agent steps (Claude CLI runs as non-root).
+        // The `if id minion` guard ensures backward compatibility with older images.
+        let _ = docker
+            .run_command(
+                "if id minion >/dev/null 2>&1; then \
+                   chown -R minion:minion /workspace 2>/dev/null; \
+                   su - minion -c 'git config --global --add safe.directory /workspace \
+                     && git config --global user.name \"Minion Engine\" \
+                     && git config --global user.email \"minion@localhost\"'; \
+                   if [ -n \"$GH_TOKEN\" ]; then \
+                     su - minion -c \"git config --global credential.helper '!f() { echo password=\\$GH_TOKEN; }; f' \
+                       && git config --global credential.https://github.com.username x-access-token\"; \
+                   fi; \
+                 fi",
+            )
+            .await;
         let git_ms = t2.elapsed().as_millis();
 
         let total_ms = t0.elapsed().as_millis();

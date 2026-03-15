@@ -51,4 +51,15 @@ RUN git config --global user.name "Minion Engine" \
     && git config --global init.defaultBranch main \
     && git config --global --add safe.directory '*'
 
+# ── Non-root user for agent steps ──────────────────────────
+# Claude CLI refuses --dangerously-skip-permissions as root.
+# Agent steps run as "minion" via docker exec --user minion.
+RUN useradd -m -u 1000 -s /bin/bash minion \
+    && cp -r /root/.cargo /home/minion/.cargo \
+    && chown -R minion:minion /home/minion/.cargo \
+    && mkdir -p /home/minion/.claude /home/minion/.config/gh \
+    && chown -R minion:minion /home/minion
+
+ENV PATH="/home/minion/.cargo/bin:/root/.cargo/bin:${PATH}"
+
 WORKDIR /workspace
