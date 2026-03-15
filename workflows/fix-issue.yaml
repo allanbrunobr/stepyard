@@ -146,15 +146,19 @@ steps:
     max_iterations: 2
 
   # 6. Create PR (deterministic)
+  - name: extract_issue_id
+    type: cmd
+    run: "echo '{{ target }}' | grep -oE '[0-9]+$'"
+
   - name: create_branch
     type: cmd
-    run: "git checkout -b minion/issue-{{ target }}-$(date +%s)"
+    run: "git checkout -b minion/issue-{{ steps.extract_issue_id.stdout | trim }}-$(date +%s)"
 
   - name: commit
     type: cmd
     run: |
       git add -A
-      git commit -m "fix: resolve issue #{{ target }}
+      git commit -m "fix: resolve issue #{{ steps.extract_issue_id.stdout | trim }}
 
       Implemented by Minion Engine"
 
@@ -166,7 +170,7 @@ steps:
     type: cmd
     run: |
       gh pr create \
-        --title "Minion: Fix #{{ target }}" \
+        --title "Minion: Fix #{{ steps.extract_issue_id.stdout | trim }}" \
         --body "## Plan
       {{ steps.plan.response }}
 
