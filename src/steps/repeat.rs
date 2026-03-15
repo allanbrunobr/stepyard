@@ -10,18 +10,20 @@ use crate::error::StepError;
 use crate::workflow::schema::{ScopeDef, StepDef};
 
 use super::{
-    cmd::CmdExecutor, agent::AgentExecutor, gate::GateExecutor,
-    IterationOutput, ScopeOutput, StepExecutor, StepOutput,
+    call::dispatch_scope_step_sandboxed,
+    IterationOutput, ScopeOutput, SharedSandbox, StepExecutor, StepOutput,
 };
 
 pub struct RepeatExecutor {
     scopes: HashMap<String, ScopeDef>,
+    sandbox: SharedSandbox,
 }
 
 impl RepeatExecutor {
-    pub fn new(scopes: &HashMap<String, ScopeDef>) -> Self {
+    pub fn new(scopes: &HashMap<String, ScopeDef>, sandbox: SharedSandbox) -> Self {
         Self {
             scopes: scopes.clone(),
+            sandbox,
         }
     }
 }
@@ -74,21 +76,9 @@ impl StepExecutor for RepeatExecutor {
             for scope_step in &scope.steps {
                 let step_config = StepConfig::default();
 
-                let result = match scope_step.step_type {
-                    crate::workflow::schema::StepType::Cmd => {
-                        CmdExecutor.execute(scope_step, &step_config, &child_ctx).await
-                    }
-                    crate::workflow::schema::StepType::Agent => {
-                        AgentExecutor.execute(scope_step, &step_config, &child_ctx).await
-                    }
-                    crate::workflow::schema::StepType::Gate => {
-                        GateExecutor.execute(scope_step, &step_config, &child_ctx).await
-                    }
-                    _ => Err(StepError::Fail(format!(
-                        "Step type '{}' not supported in repeat scope",
-                        scope_step.step_type
-                    ))),
-                };
+                let result = dispatch_scope_step_sandboxed(
+                    scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox,
+                ).await;
 
                 match result {
                     Ok(output) => {
@@ -183,7 +173,7 @@ steps:
 "#;
         let wf = parser::parse_str(yaml).unwrap();
         let repeat_step = &wf.steps[0];
-        let executor = RepeatExecutor::new(&wf.scopes);
+        let executor = RepeatExecutor::new(&wf.scopes, None);
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = executor
@@ -221,7 +211,7 @@ steps:
 "#;
         let wf = parser::parse_str(yaml).unwrap();
         let repeat_step = &wf.steps[0];
-        let executor = RepeatExecutor::new(&wf.scopes);
+        let executor = RepeatExecutor::new(&wf.scopes, None);
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = executor
@@ -254,7 +244,7 @@ steps:
 "#;
         let wf = parser::parse_str(yaml).unwrap();
         let repeat_step = &wf.steps[0];
-        let executor = RepeatExecutor::new(&wf.scopes);
+        let executor = RepeatExecutor::new(&wf.scopes, None);
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = executor
@@ -292,7 +282,7 @@ steps:
 "#;
         let wf = parser::parse_str(yaml).unwrap();
         let repeat_step = &wf.steps[0];
-        let executor = RepeatExecutor::new(&wf.scopes);
+        let executor = RepeatExecutor::new(&wf.scopes, None);
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = executor

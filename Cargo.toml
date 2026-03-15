@@ -26,6 +26,10 @@ exclude = [
 name = "minion"
 path = "src/main.rs"
 
+[[example]]
+name = "rust_sample"
+path = "examples/rust_sample.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
