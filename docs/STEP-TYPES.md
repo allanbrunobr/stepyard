@@ -40,6 +40,27 @@ Invokes the `claude` CLI, sends a prompt via stdin, and parses streaming JSON ou
     timeout: 600s
 ```
 
+### Retry Configuration
+
+Agent steps automatically retry on Claude CLI rate limit errors (HTTP 429):
+
+```yaml
+- name: agent_with_retry
+  type: agent
+  prompt: "Your prompt"
+  config:
+    max_retries: 3                    # Max retry attempts (default: 3)
+    retry_base_delay_ms: 1000         # Base delay in milliseconds (default: 1000)
+    retry_max_delay_ms: 8000          # Maximum delay cap in milliseconds (default: 8000)
+```
+
+**Retry behavior:**
+- Detects rate limit errors from Claude CLI stderr output
+- Uses exponential backoff: 1s, 2s, 4s progression
+- Respects `Retry-After` headers when present in error messages
+- Logs retry attempts for monitoring
+- Returns `RateLimitExhausted` error after max retries
+
 **Output stored as:**
 - `steps.<name>.response` — final assistant response text
 - `steps.<name>.session_id` — Claude session ID

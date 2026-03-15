@@ -7,30 +7,13 @@ use crate::engine::context::{ChatMessage, Context};
 use crate::error::StepError;
 use crate::workflow::schema::StepDef;
 
-use super::{ChatOutput, StepExecutor, StepOutput};
+use super::{retry::RetryConfig, ChatOutput, StepExecutor, StepOutput};
 
 // ── Rig imports ──────────────────────────────────────────────────
 use rig::client::CompletionClient;
 use rig::completion::{CompletionError, CompletionModel, CompletionResponse};
 use rig::message::{AssistantContent, Message};
 
-/// Retry configuration for rate limit errors
-#[derive(Debug, Clone)]
-pub struct RetryConfig {
-    max_retries: usize,
-    base_delay_ms: u64,
-    max_delay_ms: u64,
-}
-
-impl Default for RetryConfig {
-    fn default() -> Self {
-        Self {
-            max_retries: 3,
-            base_delay_ms: 1000,  // 1s, 2s, 4s progression
-            max_delay_ms: 8000,   // Cap at 8s
-        }
-    }
-}
 
 /// Check if the error is a 429 rate limit error
 fn is_rate_limit_error(err: &CompletionError) -> bool {
@@ -532,11 +515,7 @@ impl StepExecutor for ChatExecutor {
             .unwrap_or(Duration::from_secs(120));
 
         // Parse retry configuration
-        let retry_config = RetryConfig {
-            max_retries: config.get_u64("max_retries").unwrap_or(3) as usize,
-            base_delay_ms: config.get_u64("retry_base_delay_ms").unwrap_or(1000),
-            max_delay_ms: config.get_u64("retry_max_delay_ms").unwrap_or(8000),
-        };
+        let retry_config = RetryConfig::from_config(config);
 
         // Resolve API key (Ollama doesn't need one)
         let api_key = if provider == "ollama" {
@@ -1134,11 +1113,7 @@ mod tests {
         );
         let config = StepConfig { values: config_values };
 
-        let retry_config = RetryConfig {
-            max_retries: config.get_u64("max_retries").unwrap_or(3) as usize,
-            base_delay_ms: config.get_u64("retry_base_delay_ms").unwrap_or(1000),
-            max_delay_ms: config.get_u64("retry_max_delay_ms").unwrap_or(8000),
-        };
+        let retry_config = RetryConfig::from_config(&config);
 
         assert_eq!(retry_config.max_retries, 5);
         assert_eq!(retry_config.base_delay_ms, 2000);
@@ -1146,11 +1121,7 @@ mod tests {
 
         // Test defaults
         let default_config = StepConfig::default();
-        let default_retry_config = RetryConfig {
-            max_retries: default_config.get_u64("max_retries").unwrap_or(3) as usize,
-            base_delay_ms: default_config.get_u64("retry_base_delay_ms").unwrap_or(1000),
-            max_delay_ms: default_config.get_u64("retry_max_delay_ms").unwrap_or(8000),
-        };
+        let default_retry_config = RetryConfig::from_config(&default_config);
 
         assert_eq!(default_retry_config.max_retries, 3);
         assert_eq!(default_retry_config.base_delay_ms, 1000);

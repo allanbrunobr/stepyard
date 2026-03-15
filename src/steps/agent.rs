@@ -11,7 +11,7 @@ use crate::engine::context::Context;
 use crate::error::StepError;
 use crate::workflow::schema::StepDef;
 
-use super::{AgentOutput, AgentStats, SandboxAwareExecutor, SharedSandbox, StepExecutor, StepOutput};
+use super::{retry::RetryConfig, AgentOutput, AgentStats, SandboxAwareExecutor, SharedSandbox, StepExecutor, StepOutput};
 
 pub struct AgentExecutor;
 
@@ -87,6 +87,64 @@ impl AgentExecutor {
         }
     }
 
+    /// Check if Claude CLI error output indicates a rate limit
+    fn is_claude_cli_rate_limit_error(stderr: &str) -> bool {
+        use super::retry::is_rate_limit_error_generic;
+        is_rate_limit_error_generic(stderr)
+    }
+
+    /// Execute agent on the host with retry logic for rate limits
+    async fn execute_on_host_with_retry(
+        &self,
+        prompt: &str,
+        command: &str,
+        args: &[String],
+        timeout: Duration,
+        retry_config: &RetryConfig,
+    ) -> Result<StepOutput, StepError> {
+        use super::retry::{calculate_backoff_delay, extract_retry_after_generic};
+        use tokio::time::sleep;
+
+        for attempt in 0..=retry_config.max_retries {
+            let result = self.execute_on_host(prompt, command, args, timeout).await;
+
+            match result {
+                Ok(output) => return Ok(output),
+                Err(err) => {
+                    let error_text = err.to_string();
+                    let is_rate_limit = Self::is_claude_cli_rate_limit_error(&error_text);
+
+                    if is_rate_limit && attempt < retry_config.max_retries {
+                        let retry_after = extract_retry_after_generic(&error_text);
+                        let delay = calculate_backoff_delay(attempt, retry_config, retry_after);
+
+                        tracing::warn!(
+                            provider = "claude-cli",
+                            attempt = attempt + 1,
+                            delay_ms = delay.as_millis(),
+                            "Claude CLI rate limit hit, retrying after delay"
+                        );
+
+                        sleep(delay).await;
+                        continue;
+                    }
+
+                    // Either not a rate limit error, or retries exhausted
+                    if is_rate_limit && attempt >= retry_config.max_retries {
+                        return Err(StepError::RateLimitExhausted {
+                            provider: "claude-cli".to_string(),
+                            attempts: retry_config.max_retries + 1
+                        });
+                    }
+
+                    return Err(err);
+                }
+            }
+        }
+
+        unreachable!("Loop should always return or continue")
+    }
+
     /// Execute agent on the host (no sandbox)
     async fn execute_on_host(
         &self,
@@ -151,6 +209,59 @@ impl AgentExecutor {
             session_id,
             stats,
         }))
+    }
+
+    /// Execute agent in sandbox with retry logic for rate limits
+    async fn execute_in_sandbox_with_retry(
+        &self,
+        prompt: &str,
+        command: &str,
+        args: &[String],
+        timeout: Duration,
+        sandbox: &SharedSandbox,
+        retry_config: &RetryConfig,
+    ) -> Result<StepOutput, StepError> {
+        use super::retry::{calculate_backoff_delay, extract_retry_after_generic};
+        use tokio::time::sleep;
+
+        for attempt in 0..=retry_config.max_retries {
+            let result = self.execute_in_sandbox(prompt, command, args, timeout, sandbox).await;
+
+            match result {
+                Ok(output) => return Ok(output),
+                Err(err) => {
+                    let error_text = err.to_string();
+                    let is_rate_limit = Self::is_claude_cli_rate_limit_error(&error_text);
+
+                    if is_rate_limit && attempt < retry_config.max_retries {
+                        let retry_after = extract_retry_after_generic(&error_text);
+                        let delay = calculate_backoff_delay(attempt, retry_config, retry_after);
+
+                        tracing::warn!(
+                            provider = "claude-cli",
+                            attempt = attempt + 1,
+                            delay_ms = delay.as_millis(),
+                            "Claude CLI rate limit hit in sandbox, retrying after delay"
+                        );
+
+                        sleep(delay).await;
+                        continue;
+                    }
+
+                    // Either not a rate limit error, or retries exhausted
+                    if is_rate_limit && attempt >= retry_config.max_retries {
+                        return Err(StepError::RateLimitExhausted {
+                            provider: "claude-cli".to_string(),
+                            attempts: retry_config.max_retries + 1
+                        });
+                    }
+
+                    return Err(err);
+                }
+            }
+        }
+
+        unreachable!("Loop should always return or continue")
     }
 
     /// Execute agent inside a Docker sandbox container
@@ -258,10 +369,13 @@ impl SandboxAwareExecutor for AgentExecutor {
             .unwrap_or(Duration::from_secs(600));
         let args = Self::build_args(config, ctx)?;
 
+        // Parse retry configuration for rate limit handling
+        let retry_config = RetryConfig::from_config(config);
+
         if sandbox.is_some() {
-            self.execute_in_sandbox(&prompt, command, &args, timeout, sandbox).await
+            self.execute_in_sandbox_with_retry(&prompt, command, &args, timeout, sandbox, &retry_config).await
         } else {
-            self.execute_on_host(&prompt, command, &args, timeout).await
+            self.execute_on_host_with_retry(&prompt, command, &args, timeout, &retry_config).await
         }
     }
 }
@@ -413,6 +527,96 @@ mod tests {
         let args = AgentExecutor::build_args(&config, &ctx).unwrap();
         let resume_idx = args.iter().position(|a| a == "--resume").expect("--resume not found");
         assert_eq!(args[resume_idx + 1], "sess-fork-456");
+    }
+
+    #[test]
+    fn claude_cli_rate_limit_error_detection() {
+        assert!(AgentExecutor::is_claude_cli_rate_limit_error("Error: HTTP 429 Too Many Requests"));
+        assert!(AgentExecutor::is_claude_cli_rate_limit_error("rate limit exceeded for your key"));
+        assert!(AgentExecutor::is_claude_cli_rate_limit_error("Too many requests, please slow down"));
+        assert!(AgentExecutor::is_claude_cli_rate_limit_error("Quota exceeded"));
+        assert!(!AgentExecutor::is_claude_cli_rate_limit_error("Connection timeout"));
+        assert!(!AgentExecutor::is_claude_cli_rate_limit_error("Internal server error"));
+    }
+
+    #[tokio::test]
+    async fn agent_retry_configuration_from_step_config() {
+        let mut values = HashMap::new();
+        values.insert("max_retries".to_string(), serde_json::Value::Number(5.into()));
+        values.insert("retry_base_delay_ms".to_string(), serde_json::Value::Number(2000.into()));
+        values.insert("retry_max_delay_ms".to_string(), serde_json::Value::Number(10000.into()));
+        let config = StepConfig { values };
+
+        let retry_config = RetryConfig::from_config(&config);
+        assert_eq!(retry_config.max_retries, 5);
+        assert_eq!(retry_config.base_delay_ms, 2000);
+        assert_eq!(retry_config.max_delay_ms, 10000);
+    }
+
+    #[tokio::test]
+    async fn agent_mock_claude_rate_limited() {
+        // Create a mock script that simulates rate limiting followed by success
+        let mock_script_content = r#"#!/bin/bash
+# Mock Claude CLI that returns rate limit error on first call, success on second
+COUNTER_FILE="/tmp/mock_claude_counter_$$"
+
+if [ ! -f "$COUNTER_FILE" ]; then
+    echo "0" > "$COUNTER_FILE"
+fi
+
+COUNTER=$(<"$COUNTER_FILE")
+COUNTER=$((COUNTER + 1))
+echo "$COUNTER" > "$COUNTER_FILE"
+
+if [ "$COUNTER" -eq "1" ]; then
+    echo "Error: HTTP 429 Too Many Requests - Rate limit exceeded" >&2
+    exit 1
+else
+    # Success response
+    echo '{"type":"result","result":"Task completed after retry","session_id":"mock-retry-session","usage":{"input_tokens":15,"output_tokens":25},"cost_usd":0.001}'
+    rm -f "$COUNTER_FILE"
+    exit 0
+fi
+"#;
+
+        let temp_dir = std::env::temp_dir();
+        let mock_script = temp_dir.join(format!("mock_claude_retry_{}.sh", std::process::id()));
+        std::fs::write(&mock_script, mock_script_content).unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&mock_script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&mock_script, perms).unwrap();
+
+        let step = agent_step("test retry prompt");
+        let mut values = HashMap::new();
+        values.insert(
+            "command".to_string(),
+            serde_json::Value::String(mock_script.to_string_lossy().to_string()),
+        );
+        values.insert("max_retries".to_string(), serde_json::Value::Number(3.into()));
+        values.insert("retry_base_delay_ms".to_string(), serde_json::Value::Number(10.into())); // Fast for testing
+        let config = StepConfig { values };
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let start_time = std::time::Instant::now();
+        let result = AgentExecutor.execute(&step, &config, &ctx).await.unwrap();
+        let elapsed = start_time.elapsed();
+
+        if let StepOutput::Agent(out) = result {
+            assert_eq!(out.response, "Task completed after retry");
+            assert_eq!(out.session_id.as_deref(), Some("mock-retry-session"));
+            assert_eq!(out.input_tokens, 15);
+            assert_eq!(out.output_tokens, 25);
+        } else {
+            panic!("Expected Agent output");
+        }
+
+        // Should have taken at least 10ms (one retry delay)
+        assert!(elapsed >= Duration::from_millis(5), "Should have delayed for retry");
+
+        // Cleanup
+        let _ = std::fs::remove_file(&mock_script);
     }
 
     #[tokio::test]
