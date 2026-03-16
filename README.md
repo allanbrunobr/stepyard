@@ -20,7 +20,23 @@ You write YAML → Minion runs AI workflows → Results appear as PR comments, f
 ```bash
 minion execute code-review.yaml -- 42
 ```
-In ~40 seconds, every changed file is reviewed with **language-specific criteria** (Python gets Python rules, TypeScript gets TypeScript rules), the project architecture is considered, and a structured report is posted as a PR comment.
+Every changed file is reviewed with **language-specific criteria** (Python gets Python rules, TypeScript gets TypeScript rules), the project architecture is considered, and a structured report is posted as a PR comment.
+
+**Typical execution times:**
+
+| Workflow | Time | What affects it |
+|----------|------|-----------------|
+| **code-review** | 2–5 min | Number of changed files, size of diffs |
+| **fix-issue** | 8–15 min | Complexity of the issue, number of lint/test retry loops |
+| **security-audit** | 3–6 min | Number of source files, parallelism level |
+| **generate-docs** | 4–8 min | Number of source files to document |
+
+Execution time depends on several factors:
+- **Docker sandbox setup** (1–5 min on first run per session): creating the container, copying your project files in, and initializing git. Larger projects with more files take longer to copy.
+- **API response time** (10–60s per call): each `chat` or `agent` step makes a round-trip to the Claude API. Longer prompts and larger context windows increase latency.
+- **Retry loops**: workflows like `fix-issue` run lint and test gates in a `repeat` scope — if tests fail, the agent fixes and retries (up to `max_iterations`). Each iteration adds a full agent + cmd cycle.
+- **Parallelism vs rate limits**: `map` steps with `parallel: 5` can trigger API rate limits (429), which currently causes failures. Lower parallelism is more reliable.
+- **First run**: the Docker image build (`minion-sandbox:latest`) adds ~2 minutes the very first time. Subsequent runs use the cached image.
 
 ## Quick Start
 
@@ -221,18 +237,18 @@ steps:
 ▶ code-review
   🔒 Sandbox mode: FullWorkflow
   🐳 Creating Docker sandbox container…
-  🔒 Sandbox ready — container 0.7s, copy 7.7s, git 0.3s (total 8.7s)
-  ✓ get_diff (1.2s)
-  ✓ changed_files (1.2s)
+  🔒 Sandbox ready — container 1.3s, copy 12.4s, git 98.7s (total 112.4s)
+  ✓ get_diff (3.2s)
+  ✓ changed_files (1.8s)
   ✓ check_files (0.0s)
-  ✓ file_reviews (12.9s)
-  ✓ summary (24.5s)
-  ✓ post_comment (1.3s)
-  ✓ report (0.2s)
+  ✓ file_reviews (45.3s)    ← map scope: reviews each file with language-specific criteria
+  ✓ summary (28.1s)          ← chat step: synthesizes all reviews into a report
+  ✓ post_comment (2.1s)
+  ✓ report (0.3s)
   📦 Copying results from sandbox…
   🗑️  Sandbox destroyed
 
-✓ Done — 7 steps in 41.9s
+✓ Done — 7 steps in 193.2s
 ```
 
 ## Project Structure
