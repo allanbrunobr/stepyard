@@ -42,7 +42,7 @@ serde_yaml = "0.9"
 tera = "1"
 
 # HTTP client (for events/subscribers and fallback)
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 
 # LLM provider abstraction (18+ providers: Anthropic, OpenAI, Ollama, Google, etc.)
 rig-core = "0.32"
@@ -69,6 +69,11 @@ rhai = "1"
 
 # Dynamic plugin loading
 libloading = "0.8"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = "thin"
 
 [dev-dependencies]
 wiremock = "0.6"
