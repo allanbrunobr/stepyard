@@ -1,3 +1,0 @@
-commit	score	status	description
-278cf5b	0.800000	keep	baseline
-b790ea7	0.950000	keep	fix all clippy warnings: map_or, manual_strip, matches!, dead_code, collapsible_if, items_after_test
