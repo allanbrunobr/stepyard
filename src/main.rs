@@ -11,6 +11,8 @@ mod events;
 mod plugins;
 mod prompts;
 mod sandbox;
+#[cfg(feature = "slack")]
+mod slack;
 mod steps;
 mod workflow;
 

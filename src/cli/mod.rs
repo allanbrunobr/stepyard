@@ -1,8 +1,11 @@
 mod commands;
 pub mod display;
 pub mod init_templates;
+mod setup;
 
 use clap::{Parser, Subcommand};
+#[cfg(feature = "slack")]
+use clap::Args;
 
 #[derive(Parser)]
 #[command(
@@ -10,10 +13,9 @@ use clap::{Parser, Subcommand};
     about = "AI Workflow Engine — orchestrate Claude Code CLI with YAML workflows",
     version,
     after_help = "\x1b[1mQuick start:\x1b[0m
-  cargo install --path .
-  export ANTHROPIC_API_KEY=\"sk-ant-...\"
-  gh auth login
-  minion execute workflows/code-review.yaml --sandbox -- <PR_NUMBER>
+  cargo install minion-engine
+  minion setup
+  minion execute workflows/code-review.yaml -- 42
 
 \x1b[1mRequirements:\x1b[0m
   • ANTHROPIC_API_KEY   — required for AI steps (chat, map)
@@ -25,7 +27,9 @@ use clap::{Parser, Subcommand};
   minion execute workflows/fix-issue.yaml -- 123         Fix issue #123
   minion execute my-workflow.yaml --no-sandbox -- main   Run without Docker sandbox
   minion list                                            List available workflows
-  minion init my-workflow --template code-review         Create a new workflow"
+  minion init my-workflow --template code-review         Create a new workflow
+  minion setup                                           Interactive setup wizard
+  minion slack start                                     Start Slack bot (requires --features slack)"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -44,8 +48,31 @@ enum Command {
     Init(commands::InitArgs),
     /// Inspect a workflow: show config, scopes, dependency graph and dry-run summary
     Inspect(commands::InspectArgs),
+    /// Interactive setup wizard — configure API keys, Docker, and Slack integration
+    Setup,
+    /// Slack bot integration (requires: cargo install minion-engine --features slack)
+    #[cfg(feature = "slack")]
+    Slack(SlackArgs),
     /// Show version
     Version,
+}
+
+#[cfg(feature = "slack")]
+#[derive(Args)]
+struct SlackArgs {
+    #[command(subcommand)]
+    command: SlackCommand,
+}
+
+#[cfg(feature = "slack")]
+#[derive(Subcommand)]
+enum SlackCommand {
+    /// Start the Slack bot server
+    Start {
+        /// Port to listen on (default: 9000)
+        #[arg(long, short, default_value = "9000")]
+        port: u16,
+    },
 }
 
 impl Cli {
@@ -56,6 +83,11 @@ impl Cli {
             Command::List => commands::list().await,
             Command::Init(args) => commands::init(args).await,
             Command::Inspect(args) => commands::inspect(args).await,
+            Command::Setup => setup::run_setup().await,
+            #[cfg(feature = "slack")]
+            Command::Slack(args) => match args.command {
+                SlackCommand::Start { port } => crate::slack::start_server(port).await,
+            },
             Command::Version => {
                 println!("minion {}", env!("CARGO_PKG_VERSION"));
                 Ok(())

@@ -8,5 +8,7 @@ pub mod events;
 pub mod plugins;
 pub mod prompts;
 pub mod sandbox;
+#[cfg(feature = "slack")]
+pub mod slack;
 pub mod steps;
 pub mod workflow;

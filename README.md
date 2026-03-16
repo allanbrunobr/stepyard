@@ -44,18 +44,28 @@ Execution time depends on several factors:
 # 1. Install (Rust toolchain required)
 cargo install minion-engine
 
-# 2. Set your Anthropic API key
-export ANTHROPIC_API_KEY="sk-ant-..."
+# 2. Interactive setup — checks requirements and configures API keys
+minion setup
 
-# 3. Authenticate with GitHub (GH_TOKEN is auto-detected)
-gh auth login
-
-# 4. Go to your project and run a workflow
+# 3. Go to your project and run a workflow
 cd /path/to/your-project
 minion execute code-review.yaml -- 42   # Review PR #42
 ```
 
 That's it. Docker image is **built automatically** on first run. No manual setup needed.
+
+### Install with Slack Bot
+
+```bash
+# Install with Slack integration
+cargo install minion-engine --features slack
+
+# Run interactive setup (includes Slack configuration)
+minion setup
+
+# Start the bot
+minion slack start
+```
 
 ## What Can It Do?
 
@@ -171,6 +181,22 @@ minion inspect <workflow.yaml>
 
 Shows config layers, scopes, step dependency graph, and dry-run summary.
 
+### `minion setup`
+
+```bash
+minion setup
+```
+
+Interactive setup wizard — checks requirements, configures API keys, and optionally sets up Slack bot credentials. Saves config to `~/.minion/config.toml`.
+
+### `minion slack start` (requires `--features slack`)
+
+```bash
+minion slack start [--port 9000]
+```
+
+Starts the Slack bot server. Reads config from `~/.minion/config.toml` or environment variables.
+
 ## Workflow YAML Format
 
 ```yaml
@@ -251,17 +277,137 @@ steps:
 ✓ Done — 7 steps in 193.2s
 ```
 
+## Slack Bot Integration
+
+Trigger Minion workflows from Slack by mentioning the bot:
+
+```
+@YourBot review pr #42
+@YourBot fix issue https://github.com/org/repo/issues/10
+@YourBot security audit myproject
+@YourBot generate docs myproject
+```
+
+### Step-by-step Setup
+
+#### 1. Create a Slack App
+
+1. Go to **https://api.slack.com/apps** → **Create New App** → **From Scratch**
+2. Name it (e.g., "Minion Engine") and select your workspace
+
+#### 2. Configure Permissions
+
+Go to **OAuth & Permissions** → **Bot Token Scopes** and add:
+
+| Scope | Purpose |
+|-------|---------|
+| `app_mentions:read` | Detect `@YourBot` mentions |
+| `chat:write` | Post replies in channels |
+| `channels:history` | Read channel messages |
+| `channels:read` | List channels |
+
+Click **Install to Workspace** and copy the **Bot User OAuth Token** (`xoxb-...`).
+
+#### 3. Configure Event Subscriptions
+
+Go to **Event Subscriptions** → toggle **ON**.
+
+Under **Subscribe to bot events**, add:
+- `app_mention`
+
+For the **Request URL**, you need a public endpoint. Use **ngrok** for development:
+
+```bash
+# Install ngrok (https://ngrok.com)
+brew install ngrok   # macOS
+# or download from https://ngrok.com/download
+
+# Start a tunnel to port 9000
+ngrok http 9000
+```
+
+Copy the ngrok URL (e.g., `https://abc123.ngrok-free.app`) and set the Request URL to:
+```
+https://abc123.ngrok-free.app/slack/events
+```
+
+Wait for the **"Verified"** checkmark, then click **Save Changes**.
+
+> **Tip:** Use `ngrok http 9000 --domain your-name.ngrok-free.app` for a stable domain (free ngrok accounts get one static domain).
+
+#### 4. Get the Signing Secret
+
+Go to **Basic Information** → **App Credentials** → copy the **Signing Secret**.
+
+#### 5. Install and Configure Minion
+
+```bash
+# Install with Slack support
+cargo install minion-engine --features slack
+
+# Run setup wizard — it will ask for your Slack tokens
+minion setup
+```
+
+The setup wizard saves your config to `~/.minion/config.toml`:
+```toml
+[core]
+anthropic_api_key = "sk-ant-..."
+workflows_dir = "./workflows"
+
+[slack]
+bot_token = "xoxb-..."
+signing_secret = "2d91c..."
+port = 9000
+```
+
+Or set environment variables directly:
+```bash
+export SLACK_BOT_TOKEN="xoxb-..."
+export SLACK_SIGNING_SECRET="2d91c..."
+```
+
+#### 6. Start the Bot
+
+```bash
+# Make sure ngrok is running: ngrok http 9000
+minion slack start
+```
+
+#### 7. Invite the Bot
+
+In your Slack channel:
+```
+/invite @YourBot
+```
+
+Then mention it:
+```
+@YourBot review pr #42
+```
+
+### Supported Commands
+
+| Slack Message | Workflow |
+|---------------|----------|
+| `@bot fix issue #10` or `@bot fix issue <url>` | `fix-issue.yaml` |
+| `@bot review pr #42` or `@bot review pr <url>` | `code-review.yaml` |
+| `@bot security audit <target>` | `security-audit.yaml` |
+| `@bot generate docs <target>` | `generate-docs.yaml` |
+| `@bot fix ci <pr-url>` | `fix-ci.yaml` |
+
 ## Project Structure
 
 ```
 src/
-  cli/          # CLI commands (execute, validate, list, init, inspect)
+  cli/          # CLI commands (execute, validate, list, init, inspect, setup)
   engine/       # Core engine — step execution, context, templates
   workflow/     # YAML parsing, validation
   steps/        # Step executors (cmd, agent, chat, gate, repeat, map, parallel)
   sandbox/      # Docker sandbox management
   prompts/      # Stack detection and prompt registry
   config/       # 4-layer config resolution
+  slack/        # Slack bot integration (optional, --features slack)
   plugins/      # Dynamic plugin system
 workflows/      # Example workflow YAML files
 prompts/        # Language-specific prompt templates
