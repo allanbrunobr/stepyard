@@ -182,6 +182,7 @@ macro_rules! send_completion {
 }
 
 /// Call LLM via Rig — unified multi-provider completion
+#[allow(clippy::too_many_arguments)]
 async fn call_via_rig(
     provider: &str,
     model_name: &str,

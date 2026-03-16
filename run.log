@@ -1,0 +1,19 @@
+=== [1/6] Compilation ===
+=== [2/6] Tests ===
+=== [3/6] Compiler Warnings ===
+=== [4/6] Clippy ===
+=== [5/6] Binary Size ===
+=== [6/6] Workflow Validation ===
+---
+score:              0.800000
+compilation:        OK
+tests_passed:       382
+tests_total:        382
+tests_failed:       0
+warnings:           0
+clippy_warnings:    42
+binary_size_mb:     22.1
+compile_time_ms:    1481
+workflows_valid:    11
+workflows_total:    11
+total_time_s:       1.4

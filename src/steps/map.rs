@@ -419,16 +419,13 @@ async fn execute_scope_steps(
 
     // Apply scope outputs if defined
     if let Some(outputs_template) = &scope.outputs {
-        match child_ctx.render_template(outputs_template) {
-            Ok(rendered) => {
-                return Ok(StepOutput::Cmd(CmdOutput {
-                    stdout: rendered,
-                    stderr: String::new(),
-                    exit_code: 0,
-                    duration: std::time::Duration::ZERO,
-                }));
-            }
-            Err(_) => {}
+        if let Ok(rendered) = child_ctx.render_template(outputs_template) {
+            return Ok(StepOutput::Cmd(CmdOutput {
+                stdout: rendered,
+                stderr: String::new(),
+                exit_code: 0,
+                duration: std::time::Duration::ZERO,
+            }));
         }
     }
 

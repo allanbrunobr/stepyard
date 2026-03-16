@@ -86,6 +86,7 @@ pub struct WorkflowJsonOutput {
     pub total_cost_usd: f64,
 }
 
+#[allow(dead_code)]
 pub struct Engine {
     pub workflow: WorkflowDef,
     pub context: Context,
@@ -111,6 +112,7 @@ pub struct Engine {
     pub stack_info: Option<StackInfo>,
 }
 
+#[allow(dead_code)]
 impl Engine {
     pub async fn new(
         workflow: WorkflowDef,
@@ -1190,10 +1192,7 @@ fn extract_parsed_value(output: &StepOutput, step_def: &StepDef) -> Option<Parse
             ParsedValue::Lines(lines)
         }
         OutputType::Boolean => {
-            let b = match text.to_lowercase().as_str() {
-                "true" | "1" | "yes" => true,
-                _ => false,
-            };
+            let b = matches!(text.to_lowercase().as_str(), "true" | "1" | "yes");
             ParsedValue::Boolean(b)
         }
     };
@@ -1768,6 +1767,7 @@ steps:
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn stack_context_injected_when_registry_exists() {
         let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -1826,6 +1826,7 @@ stacks:
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn stack_context_skipped_when_no_registry() {
         let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 

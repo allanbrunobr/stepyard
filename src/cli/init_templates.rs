@@ -1,5 +1,4 @@
 /// Template definitions for `minion init`
-
 pub struct Template {
     pub name: &'static str,
     pub description: &'static str,

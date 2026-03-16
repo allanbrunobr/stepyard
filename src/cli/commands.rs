@@ -243,7 +243,7 @@ async fn validate_environment(
     let uses_gh = workflow
         .steps
         .iter()
-        .any(|s| s.run.as_deref().map_or(false, |r| r.contains("gh ")));
+        .any(|s| s.run.as_deref().is_some_and(|r| r.contains("gh ")));
     if uses_gh && std::env::var("GH_TOKEN").is_err() && std::env::var("GITHUB_TOKEN").is_err() {
         // Check if gh CLI can produce a token (will be auto-detected later).
         // We use `gh auth token` instead of `gh auth status` because the
@@ -423,9 +423,9 @@ fn extract_failed_step(msg: &str) -> Option<&str> {
 fn workflow_references_stack_vars(workflow: &crate::workflow::schema::WorkflowDef) -> bool {
     let contains_stack = |s: &str| s.contains("{{ stack.") || s.contains("{{stack.");
     let step_has_stack = |step: &crate::workflow::schema::StepDef| {
-        step.run.as_deref().map_or(false, contains_stack)
-            || step.prompt.as_deref().map_or(false, contains_stack)
-            || step.condition.as_deref().map_or(false, contains_stack)
+        step.run.as_deref().is_some_and(contains_stack)
+            || step.prompt.as_deref().is_some_and(contains_stack)
+            || step.condition.as_deref().is_some_and(contains_stack)
     };
 
     if workflow.steps.iter().any(step_has_stack) {
@@ -441,9 +441,9 @@ fn workflow_references_stack_vars(workflow: &crate::workflow::schema::WorkflowDe
 fn workflow_references_prompt_vars(workflow: &crate::workflow::schema::WorkflowDef) -> bool {
     let contains_prompts = |s: &str| s.contains("{{ prompts.") || s.contains("{{prompts.");
     let step_has_prompts = |step: &crate::workflow::schema::StepDef| {
-        step.run.as_deref().map_or(false, contains_prompts)
-            || step.prompt.as_deref().map_or(false, contains_prompts)
-            || step.condition.as_deref().map_or(false, contains_prompts)
+        step.run.as_deref().is_some_and(contains_prompts)
+            || step.prompt.as_deref().is_some_and(contains_prompts)
+            || step.condition.as_deref().is_some_and(contains_prompts)
     };
 
     if workflow.steps.iter().any(step_has_prompts) {
@@ -556,10 +556,10 @@ pub async fn list() -> anyhow::Result<()> {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
-                    if !found.contains(&path) {
-                        found.push(path);
-                    }
+                if path.extension().is_some_and(|e| e == "yaml" || e == "yml")
+                    && !found.contains(&path)
+                {
+                    found.push(path);
                 }
             }
         }

@@ -143,6 +143,7 @@ fn validate_step(
 ///   - Applies default values for missing optional fields (mutates the steps)
 ///
 /// Returns a list of validation error messages (empty means all ok).
+#[allow(dead_code)]
 pub fn validate_plugin_configs(
     steps: &[StepDef],
     registry: &PluginRegistry,

@@ -35,6 +35,7 @@ impl EventBus {
 
     /// Subscribe to the broadcast channel and receive a `Receiver` handle.
     /// Multiple handles can be created; each will receive every future event.
+    #[allow(dead_code)]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.sender.subscribe()
     }

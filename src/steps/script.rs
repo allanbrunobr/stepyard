@@ -85,13 +85,11 @@ fn build_ctx_snapshot(ctx: &Context) -> HashMap<String, serde_json::Value> {
     let mut flat: HashMap<String, serde_json::Value> = HashMap::new();
 
     // Extract steps map: "step_name.field" => value
-    if let Some(steps_val) = tera_ctx.get("steps") {
-        if let serde_json::Value::Object(steps_map) = steps_val {
-            for (step_name, step_val) in steps_map {
-                if let serde_json::Value::Object(fields) = step_val {
-                    for (field, field_val) in fields {
-                        flat.insert(format!("{}.{}", step_name, field), field_val.clone());
-                    }
+    if let Some(serde_json::Value::Object(steps_map)) = tera_ctx.get("steps") {
+        for (step_name, step_val) in steps_map {
+            if let serde_json::Value::Object(fields) = step_val {
+                for (field, field_val) in fields {
+                    flat.insert(format!("{}.{}", step_name, field), field_val.clone());
                 }
             }
         }

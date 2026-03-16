@@ -69,14 +69,14 @@ pub fn preprocess_template(template: &str, ctx: &Context) -> Result<PreprocessRe
                 let expr = &remaining[..end];
                 let trimmed = expr.trim();
 
-                let processed = if trimmed.ends_with('?') {
+                let processed = if let Some(stripped) = trimmed.strip_suffix('?') {
                     // Safe accessor: strip ?, transform from() calls (missing = empty), then apply default filter
-                    let inner = trimmed[..trimmed.len() - 1].trim();
+                    let inner = stripped.trim();
                     let transformed = transform_from_calls(inner, ctx, true, &mut injected)?;
                     format!("{{{{ {} | default(value=\"\") }}}}", transformed)
-                } else if trimmed.ends_with('!') {
+                } else if let Some(stripped) = trimmed.strip_suffix('!') {
                     // Strict accessor: strip !, transform from() calls (missing = error), then check existence
-                    let inner = trimmed[..trimmed.len() - 1].trim();
+                    let inner = stripped.trim();
                     let transformed = transform_from_calls(inner, ctx, false, &mut injected)?;
                     if !ctx.var_exists(&transformed) {
                         return Err(StepError::Fail(format!(

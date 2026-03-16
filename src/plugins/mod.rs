@@ -13,6 +13,7 @@ use crate::workflow::schema::StepDef;
 
 /// Schema describing a plugin's configuration requirements
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct PluginConfigSchema {
     /// Fields that must be present in the step config
     pub required_fields: Vec<String>,
@@ -21,6 +22,7 @@ pub struct PluginConfigSchema {
 }
 
 /// Trait that all plugins must implement
+#[allow(dead_code)]
 #[async_trait]
 pub trait PluginStep: Send + Sync {
     /// Unique name identifying this plugin (used as step type in YAML)

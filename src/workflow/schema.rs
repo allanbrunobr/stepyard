@@ -112,6 +112,7 @@ pub struct StepDef {
     pub config: HashMap<String, serde_yaml::Value>,
 
     // scope output
+    #[allow(dead_code)]
     pub outputs: Option<String>,
 
     // output parsing

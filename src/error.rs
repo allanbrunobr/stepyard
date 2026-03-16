@@ -3,6 +3,7 @@ use thiserror::Error;
 use crate::control_flow::ControlFlow;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum StepError {
     #[error("Step failed: {0}")]
     Fail(String),
@@ -32,6 +33,7 @@ pub enum StepError {
     Other(#[from] anyhow::Error),
 }
 
+#[allow(dead_code)]
 impl StepError {
     /// Create a sandbox error with image context
     pub fn sandbox(message: impl Into<String>, image: impl Into<String>) -> Self {

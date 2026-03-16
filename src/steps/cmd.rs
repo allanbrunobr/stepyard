@@ -80,7 +80,7 @@ impl SandboxAwareExecutor for CmdExecutor {
                 }
             }
             // Also include ~/.cargo/bin for Rust tools
-            if let Some(home) = std::env::var("HOME").ok() {
+            if let Ok(home) = std::env::var("HOME") {
                 let cargo_bin = format!("{}/.cargo/bin", home);
                 if !full_path.contains(&cargo_bin) {
                     full_path = format!("{}:{}", cargo_bin, full_path);

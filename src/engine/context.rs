@@ -87,6 +87,7 @@ impl Context {
     }
 
     /// Get session ID (searches parent chain)
+    #[allow(dead_code)]
     pub fn get_session(&self) -> Option<&str> {
         self.session_id
             .as_deref()
@@ -106,6 +107,7 @@ impl Context {
     }
 
     /// Create a child context for a scope
+    #[allow(dead_code)]
     pub fn child(
         parent: Arc<Context>,
         scope_value: Option<serde_json::Value>,
@@ -195,7 +197,7 @@ impl Context {
             .expect("chat_sessions lock poisoned");
         let history = guard
             .entry(session.to_string())
-            .or_insert_with(ChatHistory::default);
+            .or_default();
         history.messages.extend(messages);
     }
 
@@ -259,6 +261,64 @@ impl Context {
 
         tera.render("__tmpl__", &tera_ctx)
             .map_err(|e| crate::error::StepError::Template(format!("{e}")))
+    }
+}
+
+fn collect_steps_with_parsed(ctx: &Context, map: &mut HashMap<String, serde_json::Value>) {
+    if let Some(parent) = &ctx.parent {
+        collect_steps_with_parsed(parent, map);
+    }
+    for (name, output) in &ctx.steps {
+        let parsed = ctx.parsed_outputs.get(name);
+        map.insert(
+            name.clone(),
+            step_output_to_value_with_parsed(output, parsed),
+        );
+    }
+}
+
+fn step_output_to_value_with_parsed(
+    output: &StepOutput,
+    parsed: Option<&ParsedValue>,
+) -> serde_json::Value {
+    let mut val = serde_json::to_value(output).unwrap_or(serde_json::Value::Null);
+
+    if let serde_json::Value::Object(ref mut map) = val {
+        // Add "output" key for template access (typed output parsing)
+        let output_val = match parsed {
+            Some(ParsedValue::Json(j)) => j.clone(),
+            Some(ParsedValue::Lines(lines)) => serde_json::json!(lines),
+            Some(ParsedValue::Integer(n)) => serde_json::json!(n),
+            Some(ParsedValue::Boolean(b)) => serde_json::json!(b),
+            Some(ParsedValue::Text(t)) => serde_json::Value::String(t.clone()),
+            None => serde_json::Value::String(output.text().to_string()),
+        };
+        map.insert("output".to_string(), output_val);
+
+        // Story 2.3: ensure session_id is always a string (empty if not an agent output)
+        let sid = match map.get("session_id") {
+            Some(serde_json::Value::String(s)) => serde_json::Value::String(s.clone()),
+            _ => serde_json::Value::String(String::new()),
+        };
+        map.insert("session_id".to_string(), sid);
+    }
+
+    val
+}
+
+fn check_json_path(val: &serde_json::Value, path: &[&str]) -> bool {
+    if path.is_empty() {
+        return true;
+    }
+    match val {
+        serde_json::Value::Object(map) => {
+            if let Some(next) = map.get(path[0]) {
+                check_json_path(next, &path[1..])
+            } else {
+                false
+            }
+        }
+        _ => false,
     }
 }
 
@@ -480,63 +540,5 @@ mod tests {
             .render_template(r#"{{ from("nonexistent").output? }}"#)
             .unwrap();
         assert_eq!(result, "");
-    }
-}
-
-fn collect_steps_with_parsed(ctx: &Context, map: &mut HashMap<String, serde_json::Value>) {
-    if let Some(parent) = &ctx.parent {
-        collect_steps_with_parsed(parent, map);
-    }
-    for (name, output) in &ctx.steps {
-        let parsed = ctx.parsed_outputs.get(name);
-        map.insert(
-            name.clone(),
-            step_output_to_value_with_parsed(output, parsed),
-        );
-    }
-}
-
-fn step_output_to_value_with_parsed(
-    output: &StepOutput,
-    parsed: Option<&ParsedValue>,
-) -> serde_json::Value {
-    let mut val = serde_json::to_value(output).unwrap_or(serde_json::Value::Null);
-
-    if let serde_json::Value::Object(ref mut map) = val {
-        // Add "output" key for template access (typed output parsing)
-        let output_val = match parsed {
-            Some(ParsedValue::Json(j)) => j.clone(),
-            Some(ParsedValue::Lines(lines)) => serde_json::json!(lines),
-            Some(ParsedValue::Integer(n)) => serde_json::json!(n),
-            Some(ParsedValue::Boolean(b)) => serde_json::json!(b),
-            Some(ParsedValue::Text(t)) => serde_json::Value::String(t.clone()),
-            None => serde_json::Value::String(output.text().to_string()),
-        };
-        map.insert("output".to_string(), output_val);
-
-        // Story 2.3: ensure session_id is always a string (empty if not an agent output)
-        let sid = match map.get("session_id") {
-            Some(serde_json::Value::String(s)) => serde_json::Value::String(s.clone()),
-            _ => serde_json::Value::String(String::new()),
-        };
-        map.insert("session_id".to_string(), sid);
-    }
-
-    val
-}
-
-fn check_json_path(val: &serde_json::Value, path: &[&str]) -> bool {
-    if path.is_empty() {
-        return true;
-    }
-    match val {
-        serde_json::Value::Object(map) => {
-            if let Some(next) = map.get(path[0]) {
-                check_json_path(next, &path[1..])
-            } else {
-                false
-            }
-        }
-        _ => false,
     }
 }

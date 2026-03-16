@@ -2,6 +2,7 @@ use crate::steps::StepOutput;
 
 /// Control flow exceptions (like Roast's skip!/break!/fail!)
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ControlFlow {
     /// Skip the current step without error
     Skip { message: String },
