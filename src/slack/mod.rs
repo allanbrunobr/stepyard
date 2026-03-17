@@ -65,14 +65,49 @@ struct WorkflowMatch {
     workflow: String,
     target: String,
     description: String,
+    /// GitHub repo (owner/repo) extracted from URL — enables multi-repo support
+    repo: Option<String>,
 }
 
-/// Extract the trailing number from a GitHub URL (e.g. ".../pull/12" → "12")
-fn extract_github_number(input: &str) -> String {
-    if let Some(caps) = regex::Regex::new(r"/(\d+)/?$").unwrap().captures(input) {
-        return caps[1].to_string();
+/// Parse a GitHub URL into (owner/repo, number).
+/// Examples:
+///   "https://github.com/acme/backend/pull/12" → Some(("acme/backend", "12"))
+///   "https://github.com/acme/backend/issues/7" → Some(("acme/backend", "7"))
+///   "https://github.com/acme/backend" → Some(("acme/backend", ""))
+///   "42" → None (just a number, no repo info)
+struct GitHubRef {
+    repo: Option<String>,
+    number: String,
+}
+
+fn extract_github_info(input: &str) -> GitHubRef {
+    // Match: https://github.com/owner/repo/pull/N or /issues/N
+    let url_re = regex::Regex::new(
+        r"https?://github\.com/([^/]+/[^/]+)/(?:pull|issues)/(\d+)"
+    ).unwrap();
+    if let Some(caps) = url_re.captures(input) {
+        return GitHubRef {
+            repo: Some(caps[1].to_string()),
+            number: caps[2].to_string(),
+        };
     }
-    input.to_string()
+
+    // Match: https://github.com/owner/repo (no PR/issue number — for security-audit, generate-docs)
+    let repo_re = regex::Regex::new(
+        r"https?://github\.com/([^/]+/[^/\s]+)"
+    ).unwrap();
+    if let Some(caps) = repo_re.captures(input) {
+        return GitHubRef {
+            repo: Some(caps[1].to_string()),
+            number: String::new(),
+        };
+    }
+
+    // Fallback: just a number or plain string
+    GitHubRef {
+        repo: None,
+        number: input.to_string(),
+    }
 }
 
 fn route_message(text: &str) -> Option<WorkflowMatch> {
@@ -96,9 +131,11 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         .unwrap()
         .captures(&clean)
     {
+        let info = extract_github_info(&caps[1]);
         return Some(WorkflowMatch {
             workflow: "fix-issue.yaml".to_string(),
-            target: extract_github_number(&caps[1]),
+            target: info.number,
+            repo: info.repo,
             description: "Fix GitHub issue".to_string(),
         });
     }
@@ -108,45 +145,53 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         .unwrap()
         .captures(&clean)
     {
+        let info = extract_github_info(&caps[1]);
         return Some(WorkflowMatch {
             workflow: "code-review.yaml".to_string(),
-            target: extract_github_number(&caps[1]),
+            target: info.number,
+            repo: info.repo,
             description: "Code review".to_string(),
         });
     }
 
-    // security audit <repo-or-path>
+    // security audit <repo-or-path-or-url>
     if let Some(caps) = regex::Regex::new(r"security\s+audit\s+(\S+)")
         .unwrap()
         .captures(&clean)
     {
+        let info = extract_github_info(&caps[1]);
         return Some(WorkflowMatch {
             workflow: "security-audit.yaml".to_string(),
-            target: caps[1].to_string(),
+            target: if info.number.is_empty() { ".".to_string() } else { info.number },
+            repo: info.repo,
             description: "Security audit".to_string(),
         });
     }
 
-    // generate docs <repo-or-path>
+    // generate docs <repo-or-path-or-url>
     if let Some(caps) = regex::Regex::new(r"generate\s+docs?\s+(\S+)")
         .unwrap()
         .captures(&clean)
     {
+        let info = extract_github_info(&caps[1]);
         return Some(WorkflowMatch {
             workflow: "generate-docs.yaml".to_string(),
-            target: caps[1].to_string(),
+            target: if info.number.is_empty() { ".".to_string() } else { info.number },
+            repo: info.repo,
             description: "Generate documentation".to_string(),
         });
     }
 
-    // fix ci <pr-url>
+    // fix ci <pr-url-or-number>
     if let Some(caps) = regex::Regex::new(r"fix\s+ci\s+(\S+)")
         .unwrap()
         .captures(&clean)
     {
+        let info = extract_github_info(&caps[1]);
         return Some(WorkflowMatch {
             workflow: "fix-ci.yaml".to_string(),
-            target: caps[1].to_string(),
+            target: info.number,
+            repo: info.repo,
             description: "Fix CI failures".to_string(),
         });
     }
@@ -221,13 +266,14 @@ async fn post_message(state: &AppState, msg: &SlackMessage) {
 async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, wf: WorkflowMatch) {
     let workflow_path = format!("{}/{}", state.workflows_dir, wf.workflow);
 
+    let repo_label = wf.repo.as_deref().unwrap_or("(local CWD)");
     post_message(
         &state,
         &SlackMessage {
             channel: channel.clone(),
             text: format!(
-                "🚀 Starting *{}* — `{}`\nTarget: `{}`\nWorkflow: `{}`",
-                wf.description, wf.workflow, wf.target, workflow_path
+                "🚀 Starting *{}* — `{}`\nRepo: `{}`\nTarget: `{}`\nWorkflow: `{}`",
+                wf.description, wf.workflow, repo_label, wf.target, workflow_path
             ),
             thread_ts: Some(thread_ts.clone()),
         },
@@ -239,6 +285,7 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
     info!(
         workflow = %wf.workflow,
         target = %wf.target,
+        repo = ?wf.repo,
         bin = %minion_bin,
         "Launching workflow"
     );
@@ -249,10 +296,17 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
         env::var("PATH").unwrap_or_default()
     );
 
+    // Build command args: add --repo if we extracted owner/repo from URL
+    let mut cmd_args = vec!["execute".to_string(), workflow_path.clone()];
+    if let Some(ref repo) = wf.repo {
+        cmd_args.extend(["--repo".to_string(), repo.clone()]);
+    }
+    cmd_args.extend(["--".to_string(), wf.target.clone()]);
+
     let result = Command::new(&minion_bin)
-        .args(["execute", &workflow_path, "--", &wf.target])
-        .env("PATH", &enhanced_path)
+        .args(&cmd_args)
         .envs(std::env::vars())
+        .env("PATH", &enhanced_path) // Must come AFTER envs() to override the inherited PATH
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -365,11 +419,12 @@ async fn slack_events(
                                 &SlackMessage {
                                     channel,
                                     text: "🤔 I didn't understand that command. Try:\n\
-                                        • `@minion fix issue #10`\n\
-                                        • `@minion review pr #42`\n\
-                                        • `@minion security audit <repo>`\n\
-                                        • `@minion generate docs <repo>`\n\
-                                        • `@minion fix ci <pr-url>`"
+                                        • `@minion fix issue https://github.com/owner/repo/issues/10`\n\
+                                        • `@minion review pr https://github.com/owner/repo/pull/42`\n\
+                                        • `@minion security audit https://github.com/owner/repo`\n\
+                                        • `@minion generate docs https://github.com/owner/repo`\n\
+                                        • `@minion fix ci https://github.com/owner/repo/pull/8`\n\
+                                        \nYou can also use just numbers (e.g. `fix issue #10`) if the bot is running inside the repo."
                                         .to_string(),
                                     thread_ts: Some(ts),
                                 },

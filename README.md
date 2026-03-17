@@ -1,5 +1,7 @@
 # Minion Engine
 
+![Minion Engine High-Level Architecture](docs/architecture-high-level.jpg)
+
 **Automate code review, bug fixing, and PR creation with AI — defined in YAML, executed in Docker.**
 
 Minion Engine is a CLI tool that runs multi-step AI workflows. You define what you want in a YAML file, and it orchestrates everything: shell commands, Claude AI calls, conditional logic, and parallel execution — all inside an isolated Docker sandbox.
@@ -94,6 +96,8 @@ All workflows are YAML files you can customize or create from scratch.
 
 ### 🐳 Docker Sandbox (default)
 
+![Secure Docker Sandbox Workflow](docs/architecture-docker-sandbox.jpg)
+
 Every workflow runs inside an isolated Docker container. Your project is copied in, the AI works in isolation, and only the results come back. If anything goes wrong, the container is destroyed — zero impact on your project.
 
 ```bash
@@ -181,6 +185,34 @@ minion inspect <workflow.yaml>
 
 Shows config layers, scopes, step dependency graph, and dry-run summary.
 
+### `minion config`
+
+Manage default configuration (model, provider, timeouts).
+
+```bash
+minion config show          # Show current effective configuration (embedded + user + project merged)
+minion config init          # Create or edit user-level defaults (~/.minion/defaults.yaml)
+minion config set KEY VALUE # Set a config value (dot notation)
+minion config path          # Show where config files are located
+```
+
+```bash
+# Examples
+minion config set chat.model claude-opus-4-20250514    # Change the default AI model
+minion config set chat.temperature 0.5             # Adjust creativity
+minion config set global.timeout 600s              # Increase timeout
+minion config set agent.model claude-sonnet-4-20250514   # Change agent model
+```
+
+**Config priority** (lowest → highest):
+1. **Embedded defaults** — compiled into the binary, always available
+2. **User-level** — `~/.minion/defaults.yaml` (created with `minion config init`)
+3. **Project-level** — `.minion/config.yaml` in your project root
+4. **Workflow YAML** — `config:` section in each workflow file
+5. **Step inline** — `config:` on individual steps
+
+New users get sensible defaults automatically via `cargo install` — no config files needed.
+
 ### `minion setup`
 
 ```bash
@@ -204,15 +236,13 @@ name: my-workflow
 version: 1
 description: "What this workflow does"
 
+# Config is optional — sensible defaults are embedded in the binary.
+# Only specify overrides for what's different from defaults.
 config:
   global:
-    timeout: 300s
+    timeout: 600s           # Override default 300s
   chat:
-    provider: anthropic
-    model: claude-sonnet-4-20250514
-    api_key_env: ANTHROPIC_API_KEY
-  cmd:
-    fail_on_error: true
+    temperature: 0.1        # Override default 0.2
 
 steps:
   - name: get_info
@@ -406,7 +436,7 @@ src/
   steps/        # Step executors (cmd, agent, chat, gate, repeat, map, parallel)
   sandbox/      # Docker sandbox management
   prompts/      # Stack detection and prompt registry
-  config/       # 4-layer config resolution
+  config/       # 5-layer config resolution (embedded → user → project → workflow → step)
   slack/        # Slack bot integration (optional, --features slack)
   plugins/      # Dynamic plugin system
 workflows/      # Example workflow YAML files

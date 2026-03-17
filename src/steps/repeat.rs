@@ -1,22 +1,25 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::cli::display;
 use crate::config::StepConfig;
+use crate::config::manager::ConfigManager;
 use crate::control_flow::ControlFlow;
 use crate::engine::context::Context;
 use crate::error::StepError;
 use crate::workflow::schema::{ScopeDef, StepDef};
 
 use super::{
-    call::dispatch_scope_step_sandboxed,
+    call::{dispatch_scope_step_sandboxed, resolve_scope_step_config},
     IterationOutput, ScopeOutput, SharedSandbox, StepExecutor, StepOutput,
 };
 
 pub struct RepeatExecutor {
     scopes: HashMap<String, ScopeDef>,
     sandbox: SharedSandbox,
+    config_manager: Option<Arc<ConfigManager>>,
 }
 
 impl RepeatExecutor {
@@ -24,7 +27,13 @@ impl RepeatExecutor {
         Self {
             scopes: scopes.clone(),
             sandbox,
+            config_manager: None,
         }
+    }
+
+    pub fn with_config_manager(mut self, cm: Option<Arc<ConfigManager>>) -> Self {
+        self.config_manager = cm;
+        self
     }
 }
 
@@ -74,10 +83,10 @@ impl StepExecutor for RepeatExecutor {
             let mut should_break = false;
 
             for scope_step in &scope.steps {
-                let step_config = StepConfig::default();
+                let step_config = resolve_scope_step_config(&self.config_manager, scope_step);
 
                 let result = dispatch_scope_step_sandboxed(
-                    scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox,
+                    scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox, &self.config_manager,
                 ).await;
 
                 match result {

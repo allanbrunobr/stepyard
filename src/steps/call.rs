@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::config::StepConfig;
+use crate::config::manager::ConfigManager;
 use crate::control_flow::ControlFlow;
 use crate::engine::context::Context;
 use crate::error::StepError;
@@ -17,6 +19,7 @@ use super::{
 pub struct CallExecutor {
     scopes: HashMap<String, ScopeDef>,
     sandbox: SharedSandbox,
+    config_manager: Option<Arc<ConfigManager>>,
 }
 
 impl CallExecutor {
@@ -24,7 +27,13 @@ impl CallExecutor {
         Self {
             scopes: scopes.clone(),
             sandbox,
+            config_manager: None,
         }
+    }
+
+    pub fn with_config_manager(mut self, cm: Option<Arc<ConfigManager>>) -> Self {
+        self.config_manager = cm;
+        self
     }
 }
 
@@ -58,9 +67,9 @@ impl StepExecutor for CallExecutor {
         let mut last_output = StepOutput::Empty;
 
         for scope_step in &scope.steps {
-            let step_config = StepConfig::default();
+            let step_config = resolve_scope_step_config(&self.config_manager, scope_step);
             let result =
-                dispatch_scope_step_sandboxed(scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox).await;
+                dispatch_scope_step_sandboxed(scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox, &self.config_manager).await;
 
             match result {
                 Ok(output) => {
@@ -108,20 +117,44 @@ impl StepExecutor for CallExecutor {
     }
 }
 
+/// Resolve config for a scope step using the workflow's ConfigManager (if available).
+/// Falls back to StepConfig::default() when no ConfigManager is provided (e.g. in tests).
+pub(super) fn resolve_scope_step_config(
+    config_manager: &Option<Arc<ConfigManager>>,
+    step: &StepDef,
+) -> StepConfig {
+    if let Some(cm) = config_manager {
+        cm.resolve(&step.name, &step.step_type, &step.config)
+    } else {
+        // Fallback: at least convert step's inline config
+        let values: HashMap<String, serde_json::Value> = step
+            .config
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
+            .collect();
+        StepConfig { values }
+    }
+}
+
 pub(super) async fn dispatch_scope_step_sandboxed(
     step: &StepDef,
     config: &StepConfig,
     ctx: &Context,
     scopes: &HashMap<String, ScopeDef>,
     sandbox: &SharedSandbox,
+    config_manager: &Option<Arc<ConfigManager>>,
 ) -> Result<StepOutput, StepError> {
     match step.step_type {
         StepType::Cmd => CmdExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
         StepType::Agent => AgentExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
         StepType::Gate => GateExecutor.execute(step, config, ctx).await,
         StepType::Chat => ChatExecutor.execute(step, config, ctx).await,
-        StepType::Repeat => RepeatExecutor::new(scopes, sandbox.clone()).execute(step, config, ctx).await,
-        StepType::Call => CallExecutor::new(scopes, sandbox.clone()).execute(step, config, ctx).await,
+        StepType::Repeat => RepeatExecutor::new(scopes, sandbox.clone())
+            .with_config_manager(config_manager.clone())
+            .execute(step, config, ctx).await,
+        StepType::Call => CallExecutor::new(scopes, sandbox.clone())
+            .with_config_manager(config_manager.clone())
+            .execute(step, config, ctx).await,
         _ => Err(StepError::Fail(format!(
             "Step type '{}' not supported in scope",
             step.step_type

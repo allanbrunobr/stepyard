@@ -20,22 +20,14 @@ name: generate-docs
 version: 1
 description: "Generate documentation for source files using AI"
 
+# Only overrides — defaults inherited from ~/.minion/defaults.yaml
 config:
   global:
     timeout: 600s
-    working_directory: "."
-
   chat:
-    provider: anthropic
-    model: claude-sonnet-4-20250514
-    api_key_env: ANTHROPIC_API_KEY
     temperature: 0.3
-    max_tokens: 4096
-
   cmd:
     fail_on_error: false
-    timeout: 60s
-    shell: "/bin/zsh"
 
 scopes:
   # ── Document a single source file ──────────────────────

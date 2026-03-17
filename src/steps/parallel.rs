@@ -1,21 +1,25 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::task::JoinSet;
 
 use crate::config::StepConfig;
+use crate::config::manager::ConfigManager;
 use crate::engine::context::Context;
 use crate::error::StepError;
 use crate::workflow::schema::{ScopeDef, StepDef, StepType};
 
 use super::{
     agent::AgentExecutor, cmd::CmdExecutor, chat::ChatExecutor, gate::GateExecutor,
+    call::resolve_scope_step_config,
     SandboxAwareExecutor, SharedSandbox, StepExecutor, StepOutput,
 };
 
 pub struct ParallelExecutor {
     scopes: HashMap<String, ScopeDef>,
     sandbox: SharedSandbox,
+    config_manager: Option<Arc<ConfigManager>>,
 }
 
 impl ParallelExecutor {
@@ -23,7 +27,13 @@ impl ParallelExecutor {
         Self {
             scopes: scopes.clone(),
             sandbox,
+            config_manager: None,
         }
+    }
+
+    pub fn with_config_manager(mut self, cm: Option<Arc<ConfigManager>>) -> Self {
+        self.config_manager = cm;
+        self
     }
 }
 
@@ -47,9 +57,11 @@ impl StepExecutor for ParallelExecutor {
             let scopes = self.scopes.clone();
             let child_ctx = make_child_ctx(ctx);
             let sandbox_clone = self.sandbox.clone();
+            let cm_clone = self.config_manager.clone();
 
             set.spawn(async move {
-                let result = dispatch_step(&sub, &StepConfig::default(), &child_ctx, &scopes, &sandbox_clone).await;
+                let step_config = resolve_scope_step_config(&cm_clone, &sub);
+                let result = dispatch_step(&sub, &step_config, &child_ctx, &scopes, &sandbox_clone).await;
                 (sub.name.clone(), result)
             });
         }

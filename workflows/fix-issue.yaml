@@ -2,18 +2,8 @@ name: fix-github-issue
 version: 1
 description: "Fetch a GitHub issue, plan, implement, validate, and create a PR"
 
-config:
-  global:
-    timeout: 300s
-  agent:
-    command: claude
-    flags: ["-p", "--output-format", "stream-json"]
-    permissions: skip
-    model: claude-sonnet-4-20250514
-  cmd:
-    fail_on_error: true
-    timeout: 60s
-    shell: "/bin/zsh"
+# Inherits all defaults from ~/.minion/defaults.yaml
+# No overrides needed — uses default model, timeout, etc.
 
 scopes:
   lint_fix:
@@ -179,7 +169,7 @@ steps:
 
   - name: create_pr
     type: cmd
-    run: "gh pr create --title 'Minion: Fix #{{ steps.extract_issue_id.stdout | trim }}' --body-file /tmp/pr_body.md"
+    run: "gh pr create --head \"$(git branch --show-current)\" --title 'Minion: Fix #{{ steps.extract_issue_id.stdout | trim }}' --body-file /tmp/pr_body.md"
 
   - name: result
     type: cmd

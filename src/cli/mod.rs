@@ -3,9 +3,7 @@ pub mod display;
 pub mod init_templates;
 mod setup;
 
-use clap::{Parser, Subcommand};
-#[cfg(feature = "slack")]
-use clap::Args;
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
@@ -50,11 +48,36 @@ enum Command {
     Inspect(commands::InspectArgs),
     /// Interactive setup wizard — configure API keys, Docker, and Slack integration
     Setup,
+    /// Manage default configuration (model, provider, timeouts)
+    Config(ConfigArgs),
     /// Slack bot integration (requires: cargo install minion-engine --features slack)
     #[cfg(feature = "slack")]
     Slack(SlackArgs),
     /// Show version
     Version,
+}
+
+#[derive(Args)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    command: ConfigCommand,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Show current effective configuration (embedded + user + project merged)
+    Show,
+    /// Create or edit user-level defaults (~/.minion/defaults.yaml)
+    Init,
+    /// Set a config value. Example: minion config set chat.model claude-opus-4-20250514
+    Set {
+        /// Config key in dot notation (e.g., chat.model, agent.model, global.timeout)
+        key: String,
+        /// Value to set
+        value: String,
+    },
+    /// Show where config files are located and which ones exist
+    Path,
 }
 
 #[cfg(feature = "slack")]
@@ -84,6 +107,12 @@ impl Cli {
             Command::Init(args) => commands::init(args).await,
             Command::Inspect(args) => commands::inspect(args).await,
             Command::Setup => setup::run_setup().await,
+            Command::Config(args) => match args.command {
+                ConfigCommand::Show => commands::config_show().await,
+                ConfigCommand::Init => commands::config_init().await,
+                ConfigCommand::Set { key, value } => commands::config_set(&key, &value).await,
+                ConfigCommand::Path => commands::config_path().await,
+            },
             #[cfg(feature = "slack")]
             Command::Slack(args) => match args.command {
                 SlackCommand::Start { port } => crate::slack::start_server(port).await,

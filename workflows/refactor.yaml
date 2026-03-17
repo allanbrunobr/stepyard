@@ -24,34 +24,17 @@ name: refactor
 version: 1
 description: "Plan and execute a refactoring with lint + test validation gates"
 
+# Only overrides — defaults inherited from ~/.minion/defaults.yaml
 config:
-  global:
-    timeout: 300s
-    working_directory: "."
-
   agent:
-    command: claude
-    flags: ["-p", "--output-format", "stream-json"]
-    permissions: skip
-    model: claude-sonnet-4-20250514
     system_prompt_append: |
       You are refactoring existing code. Follow these rules strictly:
       - Do NOT add new features
       - Do NOT change behavior — only internal structure
       - Do NOT modify test expectations unless tests are clearly wrong
       - Do NOT run lint or tests yourself — the engine will do that
-
-  chat:
-    provider: anthropic
-    model: claude-sonnet-4-20250514
-    api_key_env: ANTHROPIC_API_KEY
-    temperature: 0.2
-    max_tokens: 4096
-
   cmd:
     fail_on_error: false
-    timeout: 60s
-    shell: "/bin/zsh"
 
 scopes:
   # ── Lint fix loop ─────────────────────────────────────

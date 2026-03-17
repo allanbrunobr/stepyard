@@ -6,13 +6,15 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::config::StepConfig;
+use crate::config::manager::ConfigManager;
 use crate::control_flow::ControlFlow;
 use crate::engine::context::Context;
 use crate::error::StepError;
 use crate::workflow::schema::{ScopeDef, StepDef};
 
 use super::{
-    call::dispatch_scope_step_sandboxed, CmdOutput, IterationOutput, ScopeOutput, SharedSandbox,
+    call::{dispatch_scope_step_sandboxed, resolve_scope_step_config},
+    CmdOutput, IterationOutput, ScopeOutput, SharedSandbox,
     StepExecutor, StepOutput,
 };
 
@@ -188,6 +190,7 @@ fn apply_collect(scope: ScopeOutput, mode: &str) -> Result<StepOutput, crate::er
 pub struct MapExecutor {
     scopes: HashMap<String, ScopeDef>,
     sandbox: SharedSandbox,
+    config_manager: Option<Arc<ConfigManager>>,
 }
 
 impl MapExecutor {
@@ -195,7 +198,13 @@ impl MapExecutor {
         Self {
             scopes: scopes.clone(),
             sandbox,
+            config_manager: None,
         }
+    }
+
+    pub fn with_config_manager(mut self, cm: Option<Arc<ConfigManager>>) -> Self {
+        self.config_manager = cm;
+        self
     }
 }
 
@@ -255,10 +264,10 @@ impl StepExecutor for MapExecutor {
 
         let scope_output = if parallel_count == 0 {
             // Serial execution
-            serial_execute(items, &scope, ctx, &self.scopes, &self.sandbox).await?
+            serial_execute(items, &scope, ctx, &self.scopes, &self.sandbox, &self.config_manager).await?
         } else {
             // Parallel execution with semaphore
-            parallel_execute(items, &scope, ctx, &self.scopes, parallel_count, &self.sandbox).await?
+            parallel_execute(items, &scope, ctx, &self.scopes, parallel_count, &self.sandbox, &self.config_manager).await?
         };
 
         // Story 7.2: Apply reduce if configured (takes precedence over collect)
@@ -285,13 +294,14 @@ async fn serial_execute(
     ctx: &Context,
     scopes: &HashMap<String, ScopeDef>,
     sandbox: &SharedSandbox,
+    config_manager: &Option<Arc<ConfigManager>>,
 ) -> Result<StepOutput, StepError> {
     let mut iterations = Vec::new();
 
     for (i, item) in items.iter().enumerate() {
         let mut child_ctx = make_child_ctx(ctx, Some(serde_json::Value::String(item.clone())), i);
 
-        let iter_output = execute_scope_steps(scope, &mut child_ctx, scopes, sandbox).await?;
+        let iter_output = execute_scope_steps(scope, &mut child_ctx, scopes, sandbox, config_manager).await?;
 
         iterations.push(IterationOutput {
             index: i,
@@ -313,6 +323,7 @@ async fn parallel_execute(
     scopes: &HashMap<String, ScopeDef>,
     parallel_count: usize,
     sandbox: &SharedSandbox,
+    config_manager: &Option<Arc<ConfigManager>>,
 ) -> Result<StepOutput, StepError> {
     let sem = Arc::new(Semaphore::new(parallel_count));
     let mut set: JoinSet<(usize, Result<StepOutput, StepError>)> = JoinSet::new();
@@ -324,10 +335,11 @@ async fn parallel_execute(
         let scope_clone = scope.clone();
         let scopes_clone = scopes.clone();
         let sandbox_clone = sandbox.clone();
+        let cm_clone = config_manager.clone();
 
         set.spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore closed");
-            let result = execute_scope_steps_owned(scope_clone, child_ctx, scopes_clone, sandbox_clone).await;
+            let result = execute_scope_steps_owned(scope_clone, child_ctx, scopes_clone, sandbox_clone, cm_clone).await;
             (i, result)
         });
     }
@@ -389,12 +401,13 @@ async fn execute_scope_steps(
     child_ctx: &mut Context,
     scopes: &HashMap<String, ScopeDef>,
     sandbox: &SharedSandbox,
+    config_manager: &Option<Arc<ConfigManager>>,
 ) -> Result<StepOutput, StepError> {
     let mut last_output = StepOutput::Empty;
 
     for scope_step in &scope.steps {
-        let config = StepConfig::default();
-        let result = dispatch_scope_step_sandboxed(scope_step, &config, child_ctx, scopes, sandbox).await;
+        let config = resolve_scope_step_config(config_manager, scope_step);
+        let result = dispatch_scope_step_sandboxed(scope_step, &config, child_ctx, scopes, sandbox, config_manager).await;
 
         match result {
             Ok(output) => {
@@ -437,8 +450,9 @@ async fn execute_scope_steps_owned(
     mut child_ctx: Context,
     scopes: HashMap<String, ScopeDef>,
     sandbox: SharedSandbox,
+    config_manager: Option<Arc<ConfigManager>>,
 ) -> Result<StepOutput, StepError> {
-    execute_scope_steps(&scope, &mut child_ctx, &scopes, &sandbox).await
+    execute_scope_steps(&scope, &mut child_ctx, &scopes, &sandbox, &config_manager).await
 }
 
 #[cfg(test)]

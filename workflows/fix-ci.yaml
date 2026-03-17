@@ -25,21 +25,12 @@ name: fix-ci
 version: 1
 description: "Auto-detect project stack and fix CI lint failures using stack-specific tools and prompts"
 
+# Only overrides — defaults inherited from ~/.minion/defaults.yaml
 config:
   global:
     timeout: 600s
-    working_directory: "."
-
-  agent:
-    command: claude
-    flags: ["-p", "--output-format", "stream-json"]
-    permissions: skip
-    model: claude-sonnet-4-20250514
-
   cmd:
-    fail_on_error: true
     timeout: 120s
-    shell: "/bin/zsh"
 
 scopes:
   lint_fix:

@@ -53,6 +53,8 @@ pub struct EngineOptions {
     pub resume_from: Option<String>,
     /// Sandbox mode resolved from CLI + config
     pub sandbox_mode: SandboxMode,
+    /// GitHub repo (OWNER/REPO) to clone inside Docker instead of copying CWD
+    pub repo: Option<String>,
 }
 
 /// Per-step execution record collected for JSON output
@@ -90,7 +92,7 @@ pub struct WorkflowJsonOutput {
 pub struct Engine {
     pub workflow: WorkflowDef,
     pub context: Context,
-    config_manager: ConfigManager,
+    config_manager: Arc<ConfigManager>,
     pub verbose: bool,
     pub quiet: bool,
     pub json: bool,
@@ -110,6 +112,8 @@ pub struct Engine {
     pub event_bus: EventBus,
     /// Detected stack info (populated at init if prompts/registry.yaml exists)
     pub stack_info: Option<StackInfo>,
+    /// GitHub repo (OWNER/REPO) — when set, sandbox clones this repo instead of copying CWD
+    repo: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -139,7 +143,7 @@ impl Engine {
         // Wrap --var parameters into an "args" object so templates can use {{ args.mode }}
         let args_obj: serde_json::Map<String, serde_json::Value> = vars.into_iter().collect();
         context.insert_var("args", serde_json::Value::Object(args_obj));
-        let config_manager = ConfigManager::new(workflow.config.clone());
+        let config_manager = Arc::new(ConfigManager::new(workflow.config.clone()));
         // JSON mode implies quiet (no decorative output)
         let quiet = options.quiet || options.json;
 
@@ -214,6 +218,7 @@ impl Engine {
             plugin_registry: Arc::new(Mutex::new(registry)),
             event_bus,
             stack_info,
+            repo: options.repo,
         }
     }
 
@@ -252,10 +257,33 @@ impl Engine {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| ".".to_string());
 
-        let mut docker = DockerSandbox::new(sandbox_config, &workspace);
+        let is_repo_mode = self.repo.is_some();
+
+        // In repo mode, use a minimal temp dir as workspace (the real repo
+        // will be cloned inside the container). Otherwise, use the host CWD.
+        let effective_workspace = if is_repo_mode {
+            let tmp = std::env::temp_dir().join("minion-repo-workspace");
+            std::fs::create_dir_all(&tmp).ok();
+            // Initialize a bare git repo so the sandbox doesn't complain
+            let _ = std::process::Command::new("git")
+                .args(["init", "--bare"])
+                .current_dir(&tmp)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            tmp.to_string_lossy().to_string()
+        } else {
+            workspace.clone()
+        };
+
+        let mut docker = DockerSandbox::new(sandbox_config, &effective_workspace);
 
         if !self.quiet {
-            println!("  {} Creating Docker sandbox container…", "🐳".cyan());
+            if let Some(ref repo) = self.repo {
+                println!("  {} Creating Docker sandbox (repo: {})…", "🐳".cyan(), repo);
+            } else {
+                println!("  {} Creating Docker sandbox container…", "🐳".cyan());
+            }
         }
 
         let t0 = Instant::now();
@@ -263,7 +291,27 @@ impl Engine {
         let create_ms = t0.elapsed().as_millis();
 
         let t1 = Instant::now();
-        docker.copy_workspace(&workspace).await?;
+        if is_repo_mode {
+            // Clone the GitHub repo inside the container instead of copying CWD
+            let repo = self.repo.as_ref().unwrap();
+            let clone_output = docker
+                .run_command(&format!(
+                    "cd /workspace && rm -rf * .* 2>/dev/null; \
+                     git clone --depth=50 https://x-access-token:$GH_TOKEN@github.com/{repo}.git ."
+                ))
+                .await?;
+
+            if clone_output.exit_code != 0 {
+                bail!(
+                    "Failed to clone repo '{}' inside sandbox: {}",
+                    repo,
+                    clone_output.stderr
+                );
+            }
+            tracing::info!(repo = %repo, "Cloned repository inside sandbox");
+        } else {
+            docker.copy_workspace(&workspace).await?;
+        }
         let copy_ms = t1.elapsed().as_millis();
 
         // Configure Git safe.directory inside the container so that
@@ -304,10 +352,12 @@ impl Engine {
         let total_ms = t0.elapsed().as_millis();
 
         if !self.quiet {
+            let mode_label = if is_repo_mode { "clone" } else { "copy" };
             println!(
-                "  {} Sandbox ready — container {:.1}s, copy {:.1}s, git {:.1}s (total {:.1}s)",
+                "  {} Sandbox ready — container {:.1}s, {} {:.1}s, git {:.1}s (total {:.1}s)",
                 "🔒".green(),
                 create_ms as f64 / 1000.0,
+                mode_label,
                 copy_ms as f64 / 1000.0,
                 git_ms as f64 / 1000.0,
                 total_ms as f64 / 1000.0,
@@ -319,6 +369,7 @@ impl Engine {
             copy_ms,
             git_ms,
             total_ms,
+            repo_mode = is_repo_mode,
             "Sandbox setup complete"
         );
 
@@ -327,21 +378,33 @@ impl Engine {
     }
 
     /// Copy results from sandbox back to host, then destroy the container.
+    /// In repo mode (--repo), skip copy_results since there's no host workspace
+    /// to write back to — all side-effects (pushes, PR comments) happen inside the container.
     async fn sandbox_down(&mut self) -> Result<()> {
         if let Some(sb) = self.sandbox.take() {
             let mut docker = sb.lock().await;
+            let is_repo_mode = self.repo.is_some();
 
-            let workspace = std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string());
+            let copy_back_ms = if is_repo_mode {
+                // In repo mode, no host directory to copy back to.
+                // All side-effects (git push, gh pr create/comment) happened inside the container.
+                if !self.quiet {
+                    println!("  {} Repo mode — skipping copy-back (all changes pushed from container)", "📦".cyan());
+                }
+                0u128
+            } else {
+                let workspace = std::env::current_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| ".".to_string());
 
-            if !self.quiet {
-                println!("  {} Copying results from sandbox…", "📦".cyan());
-            }
+                if !self.quiet {
+                    println!("  {} Copying results from sandbox…", "📦".cyan());
+                }
 
-            let t0 = Instant::now();
-            docker.copy_results(&workspace).await?;
-            let copy_back_ms = t0.elapsed().as_millis();
+                let t0 = Instant::now();
+                docker.copy_results(&workspace).await?;
+                t0.elapsed().as_millis()
+            };
 
             let t1 = Instant::now();
             docker.destroy().await?;
@@ -356,7 +419,7 @@ impl Engine {
                 );
             }
 
-            tracing::info!(copy_back_ms, destroy_ms, "Sandbox teardown complete");
+            tracing::info!(copy_back_ms, destroy_ms, repo_mode = is_repo_mode, "Sandbox teardown complete");
         }
         Ok(())
     }
@@ -709,22 +772,26 @@ impl Engine {
             StepType::Gate => GateExecutor.execute(step_def, &config, &self.context).await,
             StepType::Repeat => {
                 RepeatExecutor::new(&self.workflow.scopes, self.sandbox.clone())
+                    .with_config_manager(Some(Arc::clone(&self.config_manager)))
                     .execute(step_def, &config, &self.context)
                     .await
             }
             StepType::Chat => ChatExecutor.execute(step_def, &config, &self.context).await,
             StepType::Map => {
                 MapExecutor::new(&self.workflow.scopes, self.sandbox.clone())
+                    .with_config_manager(Some(Arc::clone(&self.config_manager)))
                     .execute(step_def, &config, &self.context)
                     .await
             }
             StepType::Parallel => {
                 ParallelExecutor::new(&self.workflow.scopes, self.sandbox.clone())
+                    .with_config_manager(Some(Arc::clone(&self.config_manager)))
                     .execute(step_def, &config, &self.context)
                     .await
             }
             StepType::Call => {
                 CallExecutor::new(&self.workflow.scopes, self.sandbox.clone())
+                    .with_config_manager(Some(Arc::clone(&self.config_manager)))
                     .execute(step_def, &config, &self.context)
                     .await
             }

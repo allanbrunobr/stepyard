@@ -55,6 +55,12 @@ pub struct ExecuteArgs {
     /// Override global timeout in seconds
     #[arg(long)]
     pub timeout: Option<u64>,
+
+    /// GitHub repository (OWNER/REPO) to clone inside the Docker sandbox.
+    /// When set, the sandbox clones this repo instead of copying the host CWD.
+    /// Example: --repo allanbrunobr/minion-engine
+    #[arg(long, value_name = "OWNER/REPO")]
+    pub repo: Option<String>,
 }
 
 #[derive(Args)]
@@ -90,8 +96,12 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
         bail!("Workflow file not found: {}", workflow_path.display());
     }
 
-    let workflow = parser::parse_file(workflow_path)
+    let mut workflow = parser::parse_file(workflow_path)
         .with_context(|| format!("Failed to parse {}", workflow_path.display()))?;
+
+    // Apply centralized defaults (~/.minion/defaults.yaml, .minion/config.yaml)
+    // Defaults are lowest priority — workflow config overrides them.
+    workflow.config = crate::config::apply_defaults(&workflow.config);
 
     let errors = validator::validate(&workflow);
     if !errors.is_empty() {
@@ -155,6 +165,7 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
         dry_run: args.dry_run,
         resume_from: args.resume.clone(),
         sandbox_mode,
+        repo: args.repo.clone(),
     };
 
     let mut engine = Engine::with_options(workflow.clone(), target, vars, opts).await;
@@ -762,6 +773,228 @@ pub async fn inspect(args: InspectArgs) -> anyhow::Result<()> {
     } else {
         println!("  Validation  : \x1b[32mok\x1b[0m");
     }
+
+    Ok(())
+}
+
+// ── Config subcommands ───────────────────────────────────────────────────────
+
+/// Default content for a new ~/.minion/defaults.yaml
+const USER_DEFAULTS_TEMPLATE: &str = r#"# ============================================================
+# Minion Engine — User Default Configuration
+# ============================================================
+#
+# This file overrides the built-in defaults for ALL workflows.
+# Edit the values below to customize your setup.
+#
+# Priority (lowest → highest):
+#   Built-in defaults (compiled in binary)
+#   This file (~/.minion/defaults.yaml)     ← you are here
+#   .minion/config.yaml (project-level)
+#   workflow.yaml config:
+#   step inline config:
+# ============================================================
+
+# Global settings
+global:
+  timeout: 300s
+
+# AI Agent (Claude Code CLI) settings
+agent:
+  command: claude
+  model: claude-sonnet-4-20250514
+  flags:
+    - "-p"
+    - "--output-format"
+    - "stream-json"
+  permissions: skip
+
+# Chat API (Anthropic) settings
+chat:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  api_key_env: ANTHROPIC_API_KEY
+  temperature: 0.2
+  max_tokens: 4096
+
+# Shell command settings
+cmd:
+  fail_on_error: true
+  timeout: 60s
+"#;
+
+pub async fn config_show() -> anyhow::Result<()> {
+    let defaults = crate::config::defaults::load_defaults();
+
+    println!("\x1b[1m=== Effective Configuration ===\x1b[0m");
+    println!("(merged: embedded + user + project)\n");
+
+    let print_section = |name: &str, map: &std::collections::HashMap<String, serde_yaml::Value>| {
+        if !map.is_empty() {
+            println!("\x1b[1m{name}:\x1b[0m");
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort();
+            for k in keys {
+                let v = &map[k];
+                // Format value nicely
+                let display = match v {
+                    serde_yaml::Value::String(s) => s.clone(),
+                    serde_yaml::Value::Bool(b) => b.to_string(),
+                    serde_yaml::Value::Number(n) => n.to_string(),
+                    other => format!("{other:?}"),
+                };
+                println!("  {k}: {display}");
+            }
+            println!();
+        }
+    };
+
+    print_section("global", &defaults.global);
+    print_section("agent", &defaults.agent);
+    print_section("chat", &defaults.chat);
+    print_section("cmd", &defaults.cmd);
+    print_section("gate", &defaults.gate);
+
+    if !defaults.patterns.is_empty() {
+        println!("\x1b[1mpatterns:\x1b[0m");
+        for (pattern, values) in &defaults.patterns {
+            println!("  {pattern}:");
+            for (k, v) in values {
+                println!("    {k}: {v:?}");
+            }
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+pub async fn config_path() -> anyhow::Result<()> {
+    println!("\x1b[1m=== Configuration File Locations ===\x1b[0m\n");
+
+    // 1. Embedded
+    println!("  \x1b[32m✓\x1b[0m Built-in defaults (compiled in binary) — always active");
+
+    // 2. User-level
+    if let Some(home) = dirs::home_dir() {
+        let path = home.join(".minion").join("defaults.yaml");
+        if path.exists() {
+            println!("  \x1b[32m✓\x1b[0m {} — active", path.display());
+        } else {
+            println!("  \x1b[90m○\x1b[0m {} — not created", path.display());
+            println!("    Run `minion config init` to create it");
+        }
+    }
+
+    // 3. Project-level
+    if let Ok(cwd) = std::env::current_dir() {
+        let path = cwd.join(".minion").join("config.yaml");
+        if path.exists() {
+            println!("  \x1b[32m✓\x1b[0m {} — active", path.display());
+        } else {
+            println!("  \x1b[90m○\x1b[0m {} — not created", path.display());
+        }
+    }
+
+    println!();
+    println!("\x1b[1mPriority order\x1b[0m (lowest → highest):");
+    println!("  embedded → ~/.minion/defaults.yaml → .minion/config.yaml → workflow YAML → step inline");
+
+    Ok(())
+}
+
+pub async fn config_init() -> anyhow::Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let dir = home.join(".minion");
+    let path = dir.join("defaults.yaml");
+
+    if path.exists() {
+        println!("\x1b[33m!\x1b[0m Config file already exists: {}", path.display());
+        println!("  Edit it directly: {}", path.display());
+        println!("  Or delete it and run `minion config init` again.");
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create {}", dir.display()))?;
+
+    std::fs::write(&path, USER_DEFAULTS_TEMPLATE)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+
+    println!("\x1b[32m✓\x1b[0m Created: {}", path.display());
+    println!();
+    println!("Edit this file to change defaults for all workflows.");
+    println!("For example, to switch to Claude Opus:");
+    println!();
+    println!("  chat:");
+    println!("    model: claude-opus-4-20250514");
+    println!("  agent:");
+    println!("    model: claude-opus-4-20250514");
+
+    Ok(())
+}
+
+pub async fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let dir = home.join(".minion");
+    let path = dir.join("defaults.yaml");
+
+    // Parse key: "chat.model" → section="chat", field="model"
+    let parts: Vec<&str> = key.splitn(2, '.').collect();
+    if parts.len() != 2 {
+        bail!(
+            "Invalid key format: '{}'\n\
+             Expected: section.field (e.g., chat.model, agent.model, global.timeout)\n\
+             \n\
+             Valid sections: global, agent, chat, cmd, gate",
+            key
+        );
+    }
+    let (section, field) = (parts[0], parts[1]);
+
+    // Validate section
+    let valid_sections = ["global", "agent", "chat", "cmd", "gate"];
+    if !valid_sections.contains(&section) {
+        bail!(
+            "Unknown section: '{}'\nValid sections: {}",
+            section,
+            valid_sections.join(", ")
+        );
+    }
+
+    // Load existing or create new
+    let mut config: serde_yaml::Value = if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        serde_yaml::from_str(&content)?
+    } else {
+        std::fs::create_dir_all(&dir)?;
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    };
+
+    // Set the value
+    let mapping = config
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("Config file is not a YAML mapping"))?;
+
+    let section_key = serde_yaml::Value::String(section.to_string());
+    let section_map = mapping
+        .entry(section_key)
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+
+    let section_mapping = section_map
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("Section '{}' is not a YAML mapping", section))?;
+
+    section_mapping.insert(
+        serde_yaml::Value::String(field.to_string()),
+        serde_yaml::Value::String(value.to_string()),
+    );
+
+    // Write back
+    let yaml_str = serde_yaml::to_string(&config)?;
+    std::fs::write(&path, &yaml_str)?;
+
+    println!("\x1b[32m✓\x1b[0m Set {}.{} = {} in {}", section, field, value, path.display());
 
     Ok(())
 }

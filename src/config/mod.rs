@@ -1,6 +1,8 @@
+pub mod defaults;
 pub mod manager;
 pub mod merge;
 
+pub use defaults::apply_defaults;
 pub use manager::ConfigManager;
 
 use std::collections::HashMap;

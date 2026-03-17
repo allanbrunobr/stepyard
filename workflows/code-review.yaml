@@ -26,28 +26,10 @@ name: code-review
 version: 1
 description: "Review a PR or branch diff with AI — produces a structured findings report"
 
+# Only overrides — defaults inherited from ~/.minion/defaults.yaml
 config:
-  global:
-    timeout: 300s
-    working_directory: "."
-
-  agent:
-    command: claude
-    flags: ["-p", "--output-format", "stream-json"]
-    permissions: skip
-    model: claude-sonnet-4-20250514
-
-  chat:
-    provider: anthropic
-    model: claude-sonnet-4-20250514
-    api_key_env: ANTHROPIC_API_KEY
-    temperature: 0.2
-    max_tokens: 4096
-
   cmd:
     fail_on_error: false
-    timeout: 60s
-    shell: "/bin/zsh"
 
 prompts_dir: ./prompts
 
@@ -99,7 +81,16 @@ scopes:
 
       - name: file_diff
         type: cmd
-        run: "git diff {{ target }}...HEAD -- {{ scope.value }} 2>/dev/null || git diff HEAD~1 -- {{ scope.value }}"
+        run: |
+          FILE="{{ scope.value }}"
+          if echo "{{ target }}" | grep -qE '^[0-9]+$'; then
+            gh pr diff {{ target }} 2>/dev/null | awk -v file="$FILE" '
+              /^diff --git/ { found = ($0 ~ "a/" file " "); if (printing && !found) exit }
+              found { printing=1; print }
+            '
+          else
+            git diff {{ target }}...HEAD -- "$FILE"
+          fi
 
       - name: review
         type: chat
