@@ -48,7 +48,7 @@ serde_yaml = "0.9"
 tera = "1"
 
 # HTTP client (for events/subscribers and fallback)
-reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # LLM provider abstraction (18+ providers: Anthropic, OpenAI, Ollama, Google, etc.)
 rig-core = "0.32"
@@ -86,6 +86,10 @@ hex = { version = "0.4.3", optional = true }
 strip = true
 opt-level = "z"
 lto = "thin"
+
+[[example]]
+name = "rust_sample"
+path = "examples/examples/main.rs"
 
 [dev-dependencies]
 wiremock = "0.6"

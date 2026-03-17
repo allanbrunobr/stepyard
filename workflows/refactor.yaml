@@ -59,7 +59,15 @@ scopes:
     steps:
       - name: lint
         type: cmd
-        run: "npm run lint 2>&1 || cargo clippy 2>&1"
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            cargo clippy 2>&1
+          elif [ -f "package.json" ]; then
+            npm run lint 2>&1
+          else
+            echo "ERROR: No linter found (no package.json or Cargo.toml)"
+            exit 1
+          fi
 
       - name: check_lint
         type: gate
@@ -80,7 +88,15 @@ scopes:
     steps:
       - name: test
         type: cmd
-        run: "npm test 2>&1 || cargo test 2>&1"
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            cargo test 2>&1
+          elif [ -f "package.json" ]; then
+            npm test 2>&1
+          else
+            echo "ERROR: No test runner found (no package.json or Cargo.toml)"
+            exit 1
+          fi
         config:
           timeout: 300s
 

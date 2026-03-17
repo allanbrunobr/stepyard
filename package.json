@@ -1,0 +1,12 @@
+{
+  "name": "minion-engine",
+  "version": "0.5.0",
+  "description": "Rust project - use 'cargo test' instead of 'npm test'",
+  "scripts": {
+    "test": "echo 'This is a Rust project. Use: cargo test' && exit 1",
+    "lint": "echo 'This is a Rust project. Use: cargo clippy' && exit 1",
+    "build": "echo 'This is a Rust project. Use: cargo build' && exit 1"
+  },
+  "private": true,
+  "devDependencies": {}
+}
