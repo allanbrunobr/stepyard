@@ -10,8 +10,8 @@ use crate::error::StepError;
 use crate::workflow::schema::{ScopeDef, StepDef};
 
 use super::{
-    call::dispatch_scope_step_sandboxed,
-    IterationOutput, ScopeOutput, SharedSandbox, StepExecutor, StepOutput,
+    call::dispatch_scope_step_sandboxed, IterationOutput, ScopeOutput, SharedSandbox, StepExecutor,
+    StepOutput,
 };
 
 pub struct RepeatExecutor {
@@ -77,8 +77,13 @@ impl StepExecutor for RepeatExecutor {
                 let step_config = StepConfig::default();
 
                 let result = dispatch_scope_step_sandboxed(
-                    scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox,
-                ).await;
+                    scope_step,
+                    &step_config,
+                    &child_ctx,
+                    &self.scopes,
+                    &self.sandbox,
+                )
+                .await;
 
                 match result {
                     Ok(output) => {
@@ -118,8 +123,7 @@ impl StepExecutor for RepeatExecutor {
             };
 
             // Pass output as scope_value for next iteration
-            scope_value =
-                serde_json::Value::String(iter_output.text().to_string());
+            scope_value = serde_json::Value::String(iter_output.text().to_string());
 
             iterations.push(IterationOutput {
                 index: i,
@@ -220,7 +224,11 @@ steps:
             .unwrap();
 
         if let StepOutput::Scope(scope_out) = result {
-            assert_eq!(scope_out.iterations.len(), 1, "Should break after 1 iteration");
+            assert_eq!(
+                scope_out.iterations.len(),
+                1,
+                "Should break after 1 iteration"
+            );
         } else {
             panic!("Expected Scope output");
         }

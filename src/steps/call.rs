@@ -9,8 +9,8 @@ use crate::error::StepError;
 use crate::workflow::schema::{ScopeDef, StepDef, StepType};
 
 use super::{
-    agent::AgentExecutor, cmd::CmdExecutor, gate::GateExecutor, repeat::RepeatExecutor,
-    chat::ChatExecutor, CmdOutput, IterationOutput, SandboxAwareExecutor, ScopeOutput,
+    agent::AgentExecutor, chat::ChatExecutor, cmd::CmdExecutor, gate::GateExecutor,
+    repeat::RepeatExecutor, CmdOutput, IterationOutput, SandboxAwareExecutor, ScopeOutput,
     SharedSandbox, StepExecutor, StepOutput,
 };
 
@@ -59,8 +59,14 @@ impl StepExecutor for CallExecutor {
 
         for scope_step in &scope.steps {
             let step_config = StepConfig::default();
-            let result =
-                dispatch_scope_step_sandboxed(scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox).await;
+            let result = dispatch_scope_step_sandboxed(
+                scope_step,
+                &step_config,
+                &child_ctx,
+                &self.scopes,
+                &self.sandbox,
+            )
+            .await;
 
             match result {
                 Ok(output) => {
@@ -116,12 +122,28 @@ pub(super) async fn dispatch_scope_step_sandboxed(
     sandbox: &SharedSandbox,
 ) -> Result<StepOutput, StepError> {
     match step.step_type {
-        StepType::Cmd => CmdExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
-        StepType::Agent => AgentExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
+        StepType::Cmd => {
+            CmdExecutor
+                .execute_sandboxed(step, config, ctx, sandbox)
+                .await
+        }
+        StepType::Agent => {
+            AgentExecutor
+                .execute_sandboxed(step, config, ctx, sandbox)
+                .await
+        }
         StepType::Gate => GateExecutor.execute(step, config, ctx).await,
         StepType::Chat => ChatExecutor.execute(step, config, ctx).await,
-        StepType::Repeat => RepeatExecutor::new(scopes, sandbox.clone()).execute(step, config, ctx).await,
-        StepType::Call => CallExecutor::new(scopes, sandbox.clone()).execute(step, config, ctx).await,
+        StepType::Repeat => {
+            RepeatExecutor::new(scopes, sandbox.clone())
+                .execute(step, config, ctx)
+                .await
+        }
+        StepType::Call => {
+            CallExecutor::new(scopes, sandbox.clone())
+                .execute(step, config, ctx)
+                .await
+        }
         _ => Err(StepError::Fail(format!(
             "Step type '{}' not supported in scope",
             step.step_type
@@ -132,8 +154,8 @@ pub(super) async fn dispatch_scope_step_sandboxed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::workflow::schema::{ScopeDef, StepType};
+    use std::collections::HashMap;
 
     fn cmd_step(name: &str, run: &str) -> StepDef {
         StepDef {
@@ -206,9 +228,7 @@ mod tests {
     #[tokio::test]
     async fn call_with_explicit_outputs() {
         let scope = ScopeDef {
-            steps: vec![
-                cmd_step("step1", "echo hello"),
-            ],
+            steps: vec![cmd_step("step1", "echo hello")],
             outputs: Some("rendered: {{ steps.step1.stdout }}".to_string()),
         };
         let mut scopes = HashMap::new();

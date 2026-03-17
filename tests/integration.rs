@@ -3,23 +3,36 @@ use std::collections::HashMap;
 use minion_engine::{engine::Engine, workflow::parser, workflow::validator};
 
 /// Helper to run a YAML workflow string to completion with quiet output
-async fn run_workflow(yaml: &str, target: &str) -> anyhow::Result<minion_engine::steps::StepOutput> {
+async fn run_workflow(
+    yaml: &str,
+    target: &str,
+) -> anyhow::Result<minion_engine::steps::StepOutput> {
     let wf = parser::parse_str(yaml)?;
     let errors = validator::validate(&wf);
-    assert!(errors.is_empty(), "Workflow validation errors: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "Workflow validation errors: {:?}",
+        errors
+    );
     let mut engine = Engine::new(wf, target.to_string(), HashMap::new(), false, true).await;
     engine.run().await
 }
 
 #[tokio::test]
 async fn simple_test_workflow_runs_without_errors() {
-    let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/workflows/simple-test.yaml"));
+    let path = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/workflows/simple-test.yaml"
+    ));
     let wf = parser::parse_file(path).expect("simple-test.yaml should parse");
     let errors = validator::validate(&wf);
     assert!(errors.is_empty(), "Validation errors: {:?}", errors);
 
     let mut engine = Engine::new(wf, "test_target".to_string(), HashMap::new(), false, true).await;
-    let result = engine.run().await.expect("simple-test workflow should succeed");
+    let result = engine
+        .run()
+        .await
+        .expect("simple-test workflow should succeed");
     // Last step is ls -la — output should be non-empty
     assert!(!result.text().is_empty());
 }
@@ -113,10 +126,17 @@ steps:
 
 #[tokio::test]
 async fn fix_issue_yaml_is_valid() {
-    let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/workflows/fix-issue.yaml"));
+    let path = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/workflows/fix-issue.yaml"
+    ));
     let wf = parser::parse_file(path).expect("fix-issue.yaml should parse");
     let errors = validator::validate(&wf);
-    assert!(errors.is_empty(), "fix-issue.yaml validation errors: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "fix-issue.yaml validation errors: {:?}",
+        errors
+    );
 }
 
 // ─── Story 3.6 additional integration tests ──────────────────────────────────
@@ -146,7 +166,10 @@ steps:
     let result = engine.run().await;
     assert!(result.is_err(), "workflow should fail when gate blocks");
     let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("gate blocked"), "error should mention gate message, got: {msg}");
+    assert!(
+        msg.contains("gate blocked"),
+        "error should mention gate message, got: {msg}"
+    );
 }
 
 /// Gate break with on_fail=skip: subsequent steps are skipped, workflow continues
@@ -228,7 +251,9 @@ steps:
         "validation should catch unknown scope reference"
     );
     assert!(
-        errors.iter().any(|e| e.contains("not found") || e.contains("scope")),
+        errors
+            .iter()
+            .any(|e| e.contains("not found") || e.contains("scope")),
         "error should mention missing scope, got: {:?}",
         errors
     );
@@ -337,19 +362,27 @@ steps:
     run: "echo third"
 "#;
     let result = run_workflow(yaml, "").await.unwrap();
-    assert_eq!(result.text().trim(), "third", "last step output is returned");
+    assert_eq!(
+        result.text().trim(),
+        "third",
+        "last step output is returned"
+    );
 }
 
 /// All workflow fixtures in the fixtures/ directory are valid
 #[tokio::test]
 async fn all_yaml_fixtures_are_valid() {
-    let fixtures_dir =
-        std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
+    let fixtures_dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
     if let Ok(entries) = std::fs::read_dir(fixtures_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "yaml" || e == "yml")
-                && !path.file_name().unwrap().to_str().unwrap().starts_with("registry")
+                && !path
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("registry")
             {
                 let wf = parser::parse_file(&path)
                     .unwrap_or_else(|e| panic!("{} should parse: {e}", path.display()));

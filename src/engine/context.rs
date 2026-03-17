@@ -195,9 +195,7 @@ impl Context {
             .chat_sessions
             .lock()
             .expect("chat_sessions lock poisoned");
-        let history = guard
-            .entry(session.to_string())
-            .or_default();
+        let history = guard.entry(session.to_string()).or_default();
         history.messages.extend(messages);
     }
 

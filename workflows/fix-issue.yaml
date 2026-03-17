@@ -20,7 +20,7 @@ scopes:
     steps:
       - name: lint
         type: cmd
-        run: "npm run lint 2>&1"
+        run: "npm run lint 2>&1 || cargo clippy 2>&1"
         config:
           fail_on_error: false
 
@@ -42,7 +42,7 @@ scopes:
     steps:
       - name: test
         type: cmd
-        run: "npm test 2>&1"
+        run: "npm test 2>&1 || cargo test 2>&1"
         config:
           fail_on_error: false
           timeout: 300s

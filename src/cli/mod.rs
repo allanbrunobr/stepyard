@@ -3,9 +3,9 @@ pub mod display;
 pub mod init_templates;
 mod setup;
 
-use clap::{Parser, Subcommand};
 #[cfg(feature = "slack")]
 use clap::Args;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(

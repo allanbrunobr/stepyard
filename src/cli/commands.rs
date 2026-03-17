@@ -466,7 +466,10 @@ async fn collect_missing_prompts(
     let mut checked = std::collections::HashSet::new();
 
     // Collect all prompt function names referenced in a text string
-    fn extract_prompt_names(text: &str, checked: &mut std::collections::HashSet<String>) -> Vec<String> {
+    fn extract_prompt_names(
+        text: &str,
+        checked: &mut std::collections::HashSet<String>,
+    ) -> Vec<String> {
         let mut names = Vec::new();
         let mut s = text;
         while let Some(pos) = s.find("prompts.") {
@@ -506,12 +509,8 @@ async fn collect_missing_prompts(
 
     // Resolve each prompt name asynchronously
     for fn_name in &all_names {
-        match crate::prompts::resolver::PromptResolver::resolve(
-            fn_name,
-            stack_info,
-            prompts_dir,
-        )
-        .await
+        match crate::prompts::resolver::PromptResolver::resolve(fn_name, stack_info, prompts_dir)
+            .await
         {
             Ok(_) => {}
             Err(e) => missing.push(format!("{e}")),

@@ -11,7 +11,9 @@ use crate::engine::context::Context;
 use crate::error::StepError;
 use crate::workflow::schema::StepDef;
 
-use super::{AgentOutput, AgentStats, SandboxAwareExecutor, SharedSandbox, StepExecutor, StepOutput};
+use super::{
+    AgentOutput, AgentStats, SandboxAwareExecutor, SharedSandbox, StepExecutor, StepOutput,
+};
 
 pub struct AgentExecutor;
 
@@ -51,18 +53,27 @@ impl AgentExecutor {
     }
 
     /// Parse stream-json output from Claude CLI
-    fn parse_stream_json(line: &str, response: &mut String, session_id: &mut Option<String>, stats: &mut AgentStats) {
+    fn parse_stream_json(
+        line: &str,
+        response: &mut String,
+        session_id: &mut Option<String>,
+        stats: &mut AgentStats,
+    ) {
         if let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) {
             match msg.get("type").and_then(|t| t.as_str()) {
                 Some("result") => {
                     if let Some(r) = msg.get("result").and_then(|r| r.as_str()) {
                         *response = r.to_string();
                     }
-                    *session_id =
-                        msg.get("session_id").and_then(|s| s.as_str()).map(String::from);
+                    *session_id = msg
+                        .get("session_id")
+                        .and_then(|s| s.as_str())
+                        .map(String::from);
                     if let Some(usage) = msg.get("usage") {
-                        stats.input_tokens =
-                            usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                        stats.input_tokens = usage
+                            .get("input_tokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
                         stats.output_tokens = usage
                             .get("output_tokens")
                             .and_then(|v| v.as_u64())
@@ -105,9 +116,10 @@ impl AgentExecutor {
 
         // Send prompt via stdin
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
-                StepError::Fail(format!("Failed to write prompt to stdin: {e}"))
-            })?;
+            stdin
+                .write_all(prompt.as_bytes())
+                .await
+                .map_err(|e| StepError::Fail(format!("Failed to write prompt to stdin: {e}")))?;
             drop(stdin);
         }
 
@@ -133,9 +145,10 @@ impl AgentExecutor {
             return Err(StepError::Timeout(timeout));
         }
 
-        let status = child.wait().await.map_err(|e| {
-            StepError::Fail(format!("Failed to wait for claude process: {e}"))
-        })?;
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| StepError::Fail(format!("Failed to wait for claude process: {e}")))?;
 
         if !status.success() && response.is_empty() {
             return Err(StepError::Fail(format!(
@@ -181,10 +194,13 @@ impl AgentExecutor {
         );
 
         let sb_guard = sb.lock().await;
-        let sb_output = tokio::time::timeout(timeout, sb_guard.run_command_as_user(&sandbox_cmd, "minion"))
-            .await
-            .map_err(|_| StepError::Timeout(timeout))?
-            .map_err(|e| StepError::Fail(format!("Sandbox agent execution failed: {e}")))?;
+        let sb_output = tokio::time::timeout(
+            timeout,
+            sb_guard.run_command_as_user(&sandbox_cmd, "minion"),
+        )
+        .await
+        .map_err(|_| StepError::Timeout(timeout))?
+        .map_err(|e| StepError::Fail(format!("Sandbox agent execution failed: {e}")))?;
 
         // Parse the stream-json output (line by line)
         let mut response = String::new();
@@ -259,7 +275,8 @@ impl SandboxAwareExecutor for AgentExecutor {
         let args = Self::build_args(config, ctx)?;
 
         if sandbox.is_some() {
-            self.execute_in_sandbox(&prompt, command, &args, timeout, sandbox).await
+            self.execute_in_sandbox(&prompt, command, &args, timeout, sandbox)
+                .await
         } else {
             self.execute_on_host(&prompt, command, &args, timeout).await
         }
@@ -299,7 +316,10 @@ mod tests {
 
     #[tokio::test]
     async fn agent_mock_claude() {
-        let mock_script = format!("{}/tests/fixtures/mock_claude.sh", env!("CARGO_MANIFEST_DIR"));
+        let mock_script = format!(
+            "{}/tests/fixtures/mock_claude.sh",
+            env!("CARGO_MANIFEST_DIR")
+        );
 
         // Make executable (in case git checkout lost exec bit)
         use std::os::unix::fs::PermissionsExt;
@@ -331,7 +351,10 @@ mod tests {
     async fn resume_missing_step_returns_error() {
         let step = agent_step("test prompt");
         let mut values = HashMap::new();
-        values.insert("resume".to_string(), serde_json::Value::String("nonexistent".to_string()));
+        values.insert(
+            "resume".to_string(),
+            serde_json::Value::String("nonexistent".to_string()),
+        );
         let config = StepConfig { values };
         let ctx = Context::new(String::new(), HashMap::new());
 
@@ -360,11 +383,17 @@ mod tests {
         );
 
         let mut values = HashMap::new();
-        values.insert("resume".to_string(), serde_json::Value::String("analyze".to_string()));
+        values.insert(
+            "resume".to_string(),
+            serde_json::Value::String("analyze".to_string()),
+        );
         let config = StepConfig { values };
 
         let args = AgentExecutor::build_args(&config, &ctx).unwrap();
-        let resume_idx = args.iter().position(|a| a == "--resume").expect("--resume not found");
+        let resume_idx = args
+            .iter()
+            .position(|a| a == "--resume")
+            .expect("--resume not found");
         assert_eq!(args[resume_idx + 1], "sess-123");
     }
 
@@ -411,13 +440,19 @@ mod tests {
         let config = StepConfig { values };
 
         let args = AgentExecutor::build_args(&config, &ctx).unwrap();
-        let resume_idx = args.iter().position(|a| a == "--resume").expect("--resume not found");
+        let resume_idx = args
+            .iter()
+            .position(|a| a == "--resume")
+            .expect("--resume not found");
         assert_eq!(args[resume_idx + 1], "sess-fork-456");
     }
 
     #[tokio::test]
     async fn agent_sandbox_aware_no_sandbox_uses_host() {
-        let mock_script = format!("{}/tests/fixtures/mock_claude.sh", env!("CARGO_MANIFEST_DIR"));
+        let mock_script = format!(
+            "{}/tests/fixtures/mock_claude.sh",
+            env!("CARGO_MANIFEST_DIR")
+        );
 
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&mock_script).unwrap().permissions();

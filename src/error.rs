@@ -18,16 +18,10 @@ pub enum StepError {
     Template(String),
 
     #[error("Sandbox error: {message} (image: {image})")]
-    Sandbox {
-        message: String,
-        image: String,
-    },
+    Sandbox { message: String, image: String },
 
     #[error("Config error in '{field}': {message}")]
-    Config {
-        field: String,
-        message: String,
-    },
+    Config { field: String, message: String },
 
     #[error("{0}")]
     Other(#[from] anyhow::Error),

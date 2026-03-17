@@ -269,7 +269,10 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
             };
 
             if output.status.success() {
-                ("✅", format!("Workflow completed successfully!\n```\n{}\n```", combined))
+                (
+                    "✅",
+                    format!("Workflow completed successfully!\n```\n{}\n```", combined),
+                )
             } else {
                 let err_tail = if stderr.len() > 1000 {
                     format!("...{}", &stderr[stderr.len() - 1000..])
@@ -294,7 +297,10 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
         &state,
         &SlackMessage {
             channel,
-            text: format!("{} *{}* finished\n{}", status_emoji, wf.description, summary),
+            text: format!(
+                "{} *{}* finished\n{}",
+                status_emoji, wf.description, summary
+            ),
             thread_ts: Some(thread_ts),
         },
     )
@@ -339,8 +345,7 @@ async fn slack_events(
             }
 
             if event.event_type == "app_mention" {
-                if let (Some(text), Some(channel), Some(ts)) =
-                    (event.text, event.channel, event.ts)
+                if let (Some(text), Some(channel), Some(ts)) = (event.text, event.channel, event.ts)
                 {
                     info!(
                         user = ?event.user,
@@ -400,7 +405,8 @@ fn load_slack_config() -> (String, String, String) {
 
     let (file_token, file_secret, file_dir) = if config_path.exists() {
         let content = std::fs::read_to_string(&config_path).unwrap_or_default();
-        let parsed: toml::Value = toml::from_str(&content).unwrap_or(toml::Value::Table(Default::default()));
+        let parsed: toml::Value =
+            toml::from_str(&content).unwrap_or(toml::Value::Table(Default::default()));
         let slack = parsed.get("slack");
         (
             slack

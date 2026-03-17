@@ -110,8 +110,12 @@ mod tests {
     fn resume_skips_previous_steps() {
         // Simulate a resume: steps before the resume point get outputs from state
         let mut state = WorkflowState::new("my-workflow");
-        state.steps.insert("fetch".to_string(), cmd_output("issue data"));
-        state.steps.insert("plan".to_string(), cmd_output("the plan"));
+        state
+            .steps
+            .insert("fetch".to_string(), cmd_output("issue data"));
+        state
+            .steps
+            .insert("plan".to_string(), cmd_output("the plan"));
 
         let resume_from = "implement";
         let step_names = ["fetch", "plan", "implement", "test"];
@@ -137,7 +141,10 @@ mod tests {
 
         // Skipped steps get outputs from state
         for name in &skipped {
-            assert!(state.steps.contains_key(*name), "State must have output for {name}");
+            assert!(
+                state.steps.contains_key(*name),
+                "State must have output for {name}"
+            );
         }
     }
 }

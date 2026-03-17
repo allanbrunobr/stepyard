@@ -56,14 +56,12 @@ fn apply_reduce(
                 duration: std::time::Duration::ZERO,
             }))
         }
-        "count" => {
-            Ok(StepOutput::Cmd(CmdOutput {
-                stdout: iterations.len().to_string(),
-                stderr: String::new(),
-                exit_code: 0,
-                duration: std::time::Duration::ZERO,
-            }))
-        }
+        "count" => Ok(StepOutput::Cmd(CmdOutput {
+            stdout: iterations.len().to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::ZERO,
+        })),
         "min" => {
             let min_val = iterations
                 .iter()
@@ -118,8 +116,7 @@ fn apply_reduce(
                 let simplified_tmpl = tmpl
                     .replace("{{item.output}}", "{{ item_output }}")
                     .replace("{{ item.output }}", "{{ item_output }}");
-                let child_ctx =
-                    crate::engine::context::Context::new(String::new(), vars);
+                let child_ctx = crate::engine::context::Context::new(String::new(), vars);
                 let rendered = child_ctx
                     .render_template(&simplified_tmpl)
                     .unwrap_or_default();
@@ -169,8 +166,9 @@ fn apply_collect(scope: ScopeOutput, mode: &str) -> Result<StepOutput, crate::er
                 .iter()
                 .map(|it| serde_json::Value::String(it.output.text().to_string()))
                 .collect();
-            let json = serde_json::to_string(&arr)
-                .map_err(|e| crate::error::StepError::Fail(format!("collect serialize error: {e}")))?;
+            let json = serde_json::to_string(&arr).map_err(|e| {
+                crate::error::StepError::Fail(format!("collect serialize error: {e}"))
+            })?;
             Ok(StepOutput::Cmd(CmdOutput {
                 stdout: json,
                 stderr: String::new(),
@@ -258,7 +256,15 @@ impl StepExecutor for MapExecutor {
             serial_execute(items, &scope, ctx, &self.scopes, &self.sandbox).await?
         } else {
             // Parallel execution with semaphore
-            parallel_execute(items, &scope, ctx, &self.scopes, parallel_count, &self.sandbox).await?
+            parallel_execute(
+                items,
+                &scope,
+                ctx,
+                &self.scopes,
+                parallel_count,
+                &self.sandbox,
+            )
+            .await?
         };
 
         // Story 7.2: Apply reduce if configured (takes precedence over collect)
@@ -327,7 +333,9 @@ async fn parallel_execute(
 
         set.spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore closed");
-            let result = execute_scope_steps_owned(scope_clone, child_ctx, scopes_clone, sandbox_clone).await;
+            let result =
+                execute_scope_steps_owned(scope_clone, child_ctx, scopes_clone, sandbox_clone)
+                    .await;
             (i, result)
         });
     }
@@ -394,7 +402,8 @@ async fn execute_scope_steps(
 
     for scope_step in &scope.steps {
         let config = StepConfig::default();
-        let result = dispatch_scope_step_sandboxed(scope_step, &config, child_ctx, scopes, sandbox).await;
+        let result =
+            dispatch_scope_step_sandboxed(scope_step, &config, child_ctx, scopes, sandbox).await;
 
         match result {
             Ok(output) => {
@@ -444,8 +453,8 @@ async fn execute_scope_steps_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::workflow::schema::{ScopeDef, StepType};
+    use std::collections::HashMap;
 
     fn cmd_step(name: &str, run: &str) -> StepDef {
         StepDef {
@@ -577,7 +586,8 @@ mod tests {
             "collect".to_string(),
             serde_yaml::Value::String("text".to_string()),
         );
-        let step = map_step_with_config("map_collect_text", "alpha\nbeta\ngamma", "echo_scope", cfg);
+        let step =
+            map_step_with_config("map_collect_text", "alpha\nbeta\ngamma", "echo_scope", cfg);
         let executor = MapExecutor::new(&scopes, None);
 
         // Build StepConfig with collect=text
@@ -586,7 +596,9 @@ mod tests {
             "collect".to_string(),
             serde_json::Value::String("text".to_string()),
         );
-        let config = crate::config::StepConfig { values: config_values };
+        let config = crate::config::StepConfig {
+            values: config_values,
+        };
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = executor.execute(&step, &config, &ctx).await.unwrap();
@@ -603,12 +615,7 @@ mod tests {
         let mut scopes = HashMap::new();
         scopes.insert("echo_scope".to_string(), echo_scope());
 
-        let step = map_step_with_config(
-            "map_collect_all",
-            "x\ny\nz",
-            "echo_scope",
-            HashMap::new(),
-        );
+        let step = map_step_with_config("map_collect_all", "x\ny\nz", "echo_scope", HashMap::new());
         let executor = MapExecutor::new(&scopes, None);
 
         let mut config_values = HashMap::new();
@@ -616,7 +623,9 @@ mod tests {
             "collect".to_string(),
             serde_json::Value::String("all".to_string()),
         );
-        let config = crate::config::StepConfig { values: config_values };
+        let config = crate::config::StepConfig {
+            values: config_values,
+        };
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = executor.execute(&step, &config, &ctx).await.unwrap();
@@ -655,7 +664,9 @@ mod tests {
             "reduce".to_string(),
             serde_json::Value::String("concat".to_string()),
         );
-        let config = crate::config::StepConfig { values: config_values };
+        let config = crate::config::StepConfig {
+            values: config_values,
+        };
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = executor.execute(&step, &config, &ctx).await.unwrap();
@@ -685,7 +696,9 @@ mod tests {
             "reduce".to_string(),
             serde_json::Value::String("sum".to_string()),
         );
-        let config = crate::config::StepConfig { values: config_values };
+        let config = crate::config::StepConfig {
+            values: config_values,
+        };
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = executor.execute(&step, &config, &ctx).await.unwrap();
@@ -718,7 +731,9 @@ mod tests {
             "reduce_condition".to_string(),
             serde_json::Value::String("{{ item.output }}".to_string()),
         );
-        let config = crate::config::StepConfig { values: config_values };
+        let config = crate::config::StepConfig {
+            values: config_values,
+        };
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = executor.execute(&step, &config, &ctx).await.unwrap();

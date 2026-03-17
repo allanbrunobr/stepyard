@@ -117,7 +117,10 @@ stacks:
         assert_eq!(rust_stack.file_markers, vec!["Cargo.toml"]);
         assert!(rust_stack.content_match.is_empty());
         assert_eq!(rust_stack.tools.get("test").unwrap(), "cargo test");
-        assert_eq!(rust_stack.tools.get("lint").unwrap(), "cargo clippy -- -D warnings");
+        assert_eq!(
+            rust_stack.tools.get("lint").unwrap(),
+            "cargo clippy -- -D warnings"
+        );
     }
 
     #[tokio::test]
@@ -144,14 +147,21 @@ stacks:
         assert!(result.is_err());
         let err = result.unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("Registry file not found"), "Expected 'Registry file not found' in: {msg}");
-        assert!(msg.contains("No such file"), "Expected 'No such file' in: {msg}");
+        assert!(
+            msg.contains("Registry file not found"),
+            "Expected 'Registry file not found' in: {msg}"
+        );
+        assert!(
+            msg.contains("No such file"),
+            "Expected 'No such file' in: {msg}"
+        );
     }
 
     #[tokio::test]
     async fn test_invalid_yaml_returns_step_error_config() {
         let mut tmp = NamedTempFile::new().unwrap();
-        tmp.write_all(b"version: 1\nstacks: [this is not valid yaml mapping: {{{").unwrap();
+        tmp.write_all(b"version: 1\nstacks: [this is not valid yaml mapping: {{{")
+            .unwrap();
 
         let result = Registry::from_file(tmp.path()).await;
 

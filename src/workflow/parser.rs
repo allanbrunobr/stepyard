@@ -76,7 +76,10 @@ description: "missing name and steps"
 
     #[test]
     fn parse_fix_issue_yaml() {
-        let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/workflows/fix-issue.yaml"));
+        let path = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/workflows/fix-issue.yaml"
+        ));
         let wf = parse_file(path).expect("fix-issue.yaml should parse without errors");
         assert_eq!(wf.name, "fix-github-issue");
         assert!(wf.scopes.contains_key("lint_fix"), "lint_fix scope missing");

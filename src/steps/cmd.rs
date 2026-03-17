@@ -184,10 +184,7 @@ mod tests {
     async fn cmd_exit_nonzero_with_fail_on_error() {
         let step = empty_step("exit 1");
         let mut values = HashMap::new();
-        values.insert(
-            "fail_on_error".to_string(),
-            serde_json::Value::Bool(true),
-        );
+        values.insert("fail_on_error".to_string(), serde_json::Value::Bool(true));
         let config = StepConfig { values };
         let ctx = Context::new(String::new(), HashMap::new());
 

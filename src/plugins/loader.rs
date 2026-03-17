@@ -30,8 +30,8 @@ impl PluginLoader {
         // SAFETY: We are loading a shared library that is expected to expose
         // a `create_plugin` symbol following the documented ABI.
         unsafe {
-            let lib =
-                Library::new(path).with_context(|| format!("Failed to load library at '{path}'"))?;
+            let lib = Library::new(path)
+                .with_context(|| format!("Failed to load library at '{path}'"))?;
 
             let constructor: libloading::Symbol<unsafe extern "C" fn() -> *mut dyn PluginStep> =
                 lib.get(b"create_plugin\0").with_context(|| {
@@ -59,4 +59,3 @@ impl Default for PluginLoader {
         Self::new()
     }
 }
-

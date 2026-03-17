@@ -48,8 +48,7 @@ impl TruncationStrategy {
                 TruncationStrategy::FirstLast { first, last }
             }
             Some("sliding_window") => {
-                let max_tokens =
-                    config.get_u64("truncation_max_tokens").unwrap_or(50_000) as usize;
+                let max_tokens = config.get_u64("truncation_max_tokens").unwrap_or(50_000) as usize;
                 TruncationStrategy::SlidingWindow { max_tokens }
             }
             _ => TruncationStrategy::None,
@@ -74,9 +73,7 @@ pub fn truncate_messages(
             let start = messages.len().saturating_sub(*n);
             messages[start..].to_vec()
         }
-        TruncationStrategy::First(n) => {
-            messages[..messages.len().min(*n)].to_vec()
-        }
+        TruncationStrategy::First(n) => messages[..messages.len().min(*n)].to_vec(),
         TruncationStrategy::FirstLast { first, last } => {
             let len = messages.len();
             let first_end = (*first).min(len);
@@ -93,8 +90,7 @@ pub fn truncate_messages(
         TruncationStrategy::SlidingWindow { max_tokens } => {
             // Greedily include messages from oldest to newest until token budget exceeded
             // Then drop from the front until we fit
-            let total_tokens: usize =
-                messages.iter().map(|m| estimate_tokens(&m.content)).sum();
+            let total_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
             if total_tokens <= *max_tokens {
                 return messages.to_vec();
             }
@@ -119,9 +115,7 @@ fn to_rig_messages(history: &[ChatMessage]) -> Vec<Message> {
     history
         .iter()
         .map(|m| match m.role.as_str() {
-            "assistant" => {
-                Message::from(AssistantContent::text(&m.content))
-            }
+            "assistant" => Message::from(AssistantContent::text(&m.content)),
             _ => {
                 // user, system, or any other role → treat as user message
                 Message::from(m.content.as_str())
@@ -198,126 +192,214 @@ async fn call_via_rig(
         match provider {
             // ── Anthropic ────────────────────────────────────────
             "anthropic" => {
-                let mut builder = rig::providers::anthropic::Client::builder()
-                    .api_key(api_key);
+                let mut builder = rig::providers::anthropic::Client::builder().api_key(api_key);
                 if let Some(url) = base_url {
                     builder = builder.base_url(url);
                 }
-                let client = builder.build().map_err(|e| map_build_error("anthropic", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "anthropic")
+                let client = builder
+                    .build()
+                    .map_err(|e| map_build_error("anthropic", e))?;
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "anthropic"
+                )
             }
 
             // ── OpenAI (Chat Completions API — LiteLLM compatible) ──
             "openai" => {
-                let mut builder = rig::providers::openai::CompletionsClient::builder()
-                    .api_key(api_key);
+                let mut builder =
+                    rig::providers::openai::CompletionsClient::builder().api_key(api_key);
                 if let Some(url) = base_url {
                     builder = builder.base_url(url);
                 }
                 let client = builder.build().map_err(|e| map_build_error("openai", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "openai")
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "openai"
+                )
             }
 
             // ── Ollama (local, no API key) ───────────────────────
             "ollama" => {
-                let mut builder = rig::providers::ollama::Client::builder()
-                    .api_key(rig::client::Nothing);
+                let mut builder =
+                    rig::providers::ollama::Client::builder().api_key(rig::client::Nothing);
                 let url = base_url.unwrap_or("http://localhost:11434");
                 builder = builder.base_url(url);
                 let client = builder.build().map_err(|e| map_build_error("ollama", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "ollama")
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "ollama"
+                )
             }
 
             // ── Groq ─────────────────────────────────────────────
             "groq" => {
-                let mut builder = rig::providers::groq::Client::builder()
-                    .api_key(api_key);
+                let mut builder = rig::providers::groq::Client::builder().api_key(api_key);
                 if let Some(url) = base_url {
                     builder = builder.base_url(url);
                 }
                 let client = builder.build().map_err(|e| map_build_error("groq", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "groq")
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "groq"
+                )
             }
 
             // ── DeepSeek ─────────────────────────────────────────
             "deepseek" => {
-                let mut builder = rig::providers::deepseek::Client::builder()
-                    .api_key(api_key);
+                let mut builder = rig::providers::deepseek::Client::builder().api_key(api_key);
                 if let Some(url) = base_url {
                     builder = builder.base_url(url);
                 }
-                let client = builder.build().map_err(|e| map_build_error("deepseek", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "deepseek")
+                let client = builder
+                    .build()
+                    .map_err(|e| map_build_error("deepseek", e))?;
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "deepseek"
+                )
             }
 
             // ── Google Gemini ────────────────────────────────────
             "gemini" | "google" => {
-                let mut builder = rig::providers::gemini::Client::builder()
-                    .api_key(api_key);
+                let mut builder = rig::providers::gemini::Client::builder().api_key(api_key);
                 if let Some(url) = base_url {
                     builder = builder.base_url(url);
                 }
                 let client = builder.build().map_err(|e| map_build_error("gemini", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "gemini")
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "gemini"
+                )
             }
 
             // ── Cohere ───────────────────────────────────────────
             "cohere" => {
-                let mut builder = rig::providers::cohere::Client::builder()
-                    .api_key(api_key);
+                let mut builder = rig::providers::cohere::Client::builder().api_key(api_key);
                 if let Some(url) = base_url {
                     builder = builder.base_url(url);
                 }
                 let client = builder.build().map_err(|e| map_build_error("cohere", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "cohere")
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "cohere"
+                )
             }
 
             // ── Perplexity ───────────────────────────────────────
             "perplexity" => {
-                let mut builder = rig::providers::perplexity::Client::builder()
-                    .api_key(api_key);
+                let mut builder = rig::providers::perplexity::Client::builder().api_key(api_key);
                 if let Some(url) = base_url {
                     builder = builder.base_url(url);
                 }
-                let client = builder.build().map_err(|e| map_build_error("perplexity", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "perplexity")
+                let client = builder
+                    .build()
+                    .map_err(|e| map_build_error("perplexity", e))?;
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "perplexity"
+                )
             }
 
             // ── xAI (Grok) ──────────────────────────────────────
             "xai" | "grok" => {
-                let mut builder = rig::providers::xai::Client::builder()
-                    .api_key(api_key);
+                let mut builder = rig::providers::xai::Client::builder().api_key(api_key);
                 if let Some(url) = base_url {
                     builder = builder.base_url(url);
                 }
                 let client = builder.build().map_err(|e| map_build_error("xai", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "xai")
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "xai"
+                )
             }
 
             // ── Mistral ─────────────────────────────────────────
             "mistral" => {
-                let mut builder = rig::providers::mistral::Client::builder()
-                    .api_key(api_key);
+                let mut builder = rig::providers::mistral::Client::builder().api_key(api_key);
                 if let Some(url) = base_url {
                     builder = builder.base_url(url);
                 }
                 let client = builder.build().map_err(|e| map_build_error("mistral", e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, "mistral")
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    "mistral"
+                )
             }
 
             // ── Any other: OpenAI-compatible with custom base_url ──
             // This covers LiteLLM, vLLM, Azure (via base_url), or
             // any service that implements the OpenAI Chat Completions API.
             other => {
-                let url = base_url.ok_or_else(|| StepError::Fail(format!(
+                let url = base_url.ok_or_else(|| {
+                    StepError::Fail(format!(
                     "Unknown provider '{}': set 'base_url' to use as OpenAI-compatible endpoint",
                     other
-                )))?;
+                ))
+                })?;
                 let builder = rig::providers::openai::CompletionsClient::builder()
                     .api_key(api_key)
                     .base_url(url);
                 let client = builder.build().map_err(|e| map_build_error(other, e))?;
-                send_completion!(client, model_name, prompt, messages, temperature, max_tokens, other)
+                send_completion!(
+                    client,
+                    model_name,
+                    prompt,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    other
+                )
             }
         }
     })
@@ -380,17 +462,14 @@ impl StepExecutor for ChatExecutor {
         };
 
         // Resolve base_url: generic > provider-specific > default
-        let base_url: Option<String> = config
-            .get_str("base_url")
-            .map(String::from)
-            .or_else(|| {
-                // Backward compatibility with old per-provider config keys
-                match provider {
-                    "anthropic" => config.get_str("anthropic_base_url").map(String::from),
-                    "openai" => config.get_str("openai_base_url").map(String::from),
-                    _ => None,
-                }
-            });
+        let base_url: Option<String> = config.get_str("base_url").map(String::from).or_else(|| {
+            // Backward compatibility with old per-provider config keys
+            match provider {
+                "anthropic" => config.get_str("anthropic_base_url").map(String::from),
+                "openai" => config.get_str("openai_base_url").map(String::from),
+                _ => None,
+            }
+        });
 
         let prompt_template = step
             .prompt
@@ -429,8 +508,14 @@ impl StepExecutor for ChatExecutor {
             ctx.append_chat_messages(
                 session,
                 vec![
-                    ChatMessage { role: "user".to_string(), content: prompt },
-                    ChatMessage { role: "assistant".to_string(), content: response_text },
+                    ChatMessage {
+                        role: "user".to_string(),
+                        content: prompt,
+                    },
+                    ChatMessage {
+                        role: "assistant".to_string(),
+                        content: response_text,
+                    },
                 ],
             );
         }
@@ -498,25 +583,30 @@ mod tests {
             "api_key_env".to_string(),
             serde_json::Value::String("DEFINITELY_NOT_SET_API_KEY_XYZ123".to_string()),
         );
-        let config = StepConfig { values: config_values };
+        let config = StepConfig {
+            values: config_values,
+        };
         let ctx = Context::new(String::new(), HashMap::new());
         let result = ChatExecutor.execute(&step, &config, &ctx).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("DEFINITELY_NOT_SET_API_KEY_XYZ123"),
-            "Error should mention env var name: {}", err
+            "Error should mention env var name: {}",
+            err
         );
     }
 
     #[tokio::test]
     async fn chat_missing_prompt_field_error() {
-        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+        }
         let step = StepDef {
             name: "test".to_string(),
             step_type: crate::workflow::schema::StepType::Chat,
             run: None,
-            prompt: None,  // missing!
+            prompt: None, // missing!
             condition: None,
             on_pass: None,
             on_fail: None,
@@ -537,15 +627,19 @@ mod tests {
         let result = ChatExecutor.execute(&step, &config, &ctx).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("prompt"), "Error should mention prompt: {}", err);
+        assert!(
+            err.contains("prompt"),
+            "Error should mention prompt: {}",
+            err
+        );
     }
 
     #[tokio::test]
     async fn chat_mock_anthropic_response() {
         // Rig's Anthropic client sends POST to /v1/messages with the same format
         // as the raw API. We mock the endpoint using wiremock.
-        use wiremock::{MockServer, Mock, ResponseTemplate};
         use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let mock_server = MockServer::start().await;
         let response_body = serde_json::json!({
@@ -565,7 +659,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+        }
 
         let step = make_step("Hello");
         let mut config_values = HashMap::new();
@@ -574,7 +670,9 @@ mod tests {
             "base_url".to_string(),
             serde_json::Value::String(mock_server.uri()),
         );
-        let config = StepConfig { values: config_values };
+        let config = StepConfig {
+            values: config_values,
+        };
         let ctx = Context::new(String::new(), HashMap::new());
 
         let result = ChatExecutor.execute(&step, &config, &ctx).await.unwrap();
@@ -591,7 +689,11 @@ mod tests {
     fn make_messages(count: usize) -> Vec<ChatMessage> {
         (0..count)
             .map(|i| ChatMessage {
-                role: if i % 2 == 0 { "user".to_string() } else { "assistant".to_string() },
+                role: if i % 2 == 0 {
+                    "user".to_string()
+                } else {
+                    "assistant".to_string()
+                },
                 content: format!("message {}", i),
             })
             .collect()
@@ -609,8 +711,7 @@ mod tests {
     #[test]
     fn truncation_first_last_keeps_first_and_last() {
         let msgs = make_messages(50);
-        let result =
-            truncate_messages(&msgs, &TruncationStrategy::FirstLast { first: 2, last: 5 });
+        let result = truncate_messages(&msgs, &TruncationStrategy::FirstLast { first: 2, last: 5 });
         assert_eq!(result.len(), 7);
         assert_eq!(result[0].content, "message 0");
         assert_eq!(result[1].content, "message 1");
@@ -638,8 +739,8 @@ mod tests {
 
     #[tokio::test]
     async fn chat_history_stores_messages_and_resends_on_second_call() {
-        use wiremock::{Mock, MockServer, ResponseTemplate};
         use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let mock_server = MockServer::start().await;
         let response_body = serde_json::json!({
@@ -660,7 +761,9 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+        }
 
         let step = make_step("First message");
         let mut config_values = HashMap::new();
@@ -672,7 +775,9 @@ mod tests {
             "session".to_string(),
             serde_json::Value::String("review".to_string()),
         );
-        let config = StepConfig { values: config_values };
+        let config = StepConfig {
+            values: config_values,
+        };
         let ctx = Context::new(String::new(), HashMap::new());
 
         // First call — stores user + assistant messages
@@ -697,22 +802,31 @@ mod tests {
     #[test]
     fn to_rig_messages_converts_correctly() {
         let history = vec![
-            ChatMessage { role: "user".to_string(), content: "Hello".to_string() },
-            ChatMessage { role: "assistant".to_string(), content: "Hi!".to_string() },
-            ChatMessage { role: "user".to_string(), content: "How are you?".to_string() },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "Hi!".to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "How are you?".to_string(),
+            },
         ];
         let rig_msgs = to_rig_messages(&history);
         assert_eq!(rig_msgs.len(), 3);
 
         // Verify user messages
         match &rig_msgs[0] {
-            Message::User { .. } => {},
+            Message::User { .. } => {}
             _ => panic!("Expected User message at index 0"),
         }
 
         // Verify assistant messages
         match &rig_msgs[1] {
-            Message::Assistant { .. } => {},
+            Message::Assistant { .. } => {}
             _ => panic!("Expected Assistant message at index 1"),
         }
     }
@@ -727,7 +841,9 @@ mod tests {
             serde_json::Value::String("ollama".to_string()),
         );
         // No api_key_env set — should not fail at config resolution
-        let config = StepConfig { values: config_values };
+        let config = StepConfig {
+            values: config_values,
+        };
         let ctx = Context::new(String::new(), HashMap::new());
 
         // We can't fully execute without Ollama running, but we verify

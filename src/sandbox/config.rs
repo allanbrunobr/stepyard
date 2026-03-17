@@ -130,7 +130,10 @@ impl SandboxConfig {
     pub fn effective_volumes(&self) -> Vec<String> {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
         let raw = if self.volumes.is_empty() {
-            Self::AUTO_VOLUMES.iter().map(|s| (*s).to_string()).collect::<Vec<_>>()
+            Self::AUTO_VOLUMES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect::<Vec<_>>()
         } else {
             self.volumes.clone()
         };
@@ -147,17 +150,17 @@ impl SandboxConfig {
     /// Return the effective exclude list: explicit config overrides auto-exclude.
     pub fn effective_exclude(&self) -> Vec<String> {
         if self.exclude.is_empty() {
-            Self::AUTO_EXCLUDE.iter().map(|s| (*s).to_string()).collect()
+            Self::AUTO_EXCLUDE
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
         } else {
             self.exclude.clone()
         }
     }
 
     /// Helper: parse a YAML string-list from a mapping key.
-    fn parse_string_list(
-        mapping: &serde_yaml::Mapping,
-        key: &str,
-    ) -> Vec<String> {
+    fn parse_string_list(mapping: &serde_yaml::Mapping, key: &str) -> Vec<String> {
         mapping
             .get(serde_yaml::Value::String(key.into()))
             .and_then(|v| v.as_sequence())
@@ -192,9 +195,10 @@ impl SandboxConfig {
             .map(String::from);
 
         let (allow, deny) = match sandbox.get(serde_yaml::Value::String("network".into())) {
-            Some(serde_yaml::Value::Mapping(net)) => {
-                (Self::parse_string_list(net, "allow"), Self::parse_string_list(net, "deny"))
-            }
+            Some(serde_yaml::Value::Mapping(net)) => (
+                Self::parse_string_list(net, "allow"),
+                Self::parse_string_list(net, "deny"),
+            ),
             _ => (vec![], vec![]),
         };
 
@@ -326,9 +330,7 @@ sandbox:
     #[test]
     fn effective_volumes_filters_nonexistent_paths() {
         let cfg = SandboxConfig {
-            volumes: vec![
-                "/nonexistent/path/abc123:/container/path:ro".to_string(),
-            ],
+            volumes: vec!["/nonexistent/path/abc123:/container/path:ro".to_string()],
             ..Default::default()
         };
         let vols = cfg.effective_volumes();

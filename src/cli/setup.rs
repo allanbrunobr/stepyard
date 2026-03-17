@@ -47,8 +47,7 @@ fn load_config() -> MinionConfig {
 
 fn save_config(config: &MinionConfig) -> anyhow::Result<()> {
     let dir = config_dir();
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("Failed to create {}", dir.display()))?;
     let content = toml::to_string_pretty(config)?;
     std::fs::write(config_path(), content)?;
     Ok(())
@@ -66,7 +65,10 @@ pub async fn run_setup() -> anyhow::Result<()> {
     println!("\x1b[1mStep 1/4 — Checking requirements\x1b[0m");
     println!();
 
-    check_requirement("ANTHROPIC_API_KEY", std::env::var("ANTHROPIC_API_KEY").is_ok());
+    check_requirement(
+        "ANTHROPIC_API_KEY",
+        std::env::var("ANTHROPIC_API_KEY").is_ok(),
+    );
     check_requirement("gh CLI", which("gh"));
     check_requirement("Docker", which("docker"));
     println!();
@@ -121,7 +123,10 @@ pub async fn run_setup() -> anyhow::Result<()> {
     let wf_path = PathBuf::from(&wf_dir);
     if !wf_path.exists() {
         let create = Confirm::new()
-            .with_prompt(format!("  Directory '{}' doesn't exist. Create it?", wf_dir))
+            .with_prompt(format!(
+                "  Directory '{}' doesn't exist. Create it?",
+                wf_dir
+            ))
             .default(true)
             .interact()?;
         if create {
@@ -192,7 +197,10 @@ pub async fn run_setup() -> anyhow::Result<()> {
 
     // ── Summary ──────────────────────────────────────────────────────────
     println!("\x1b[2m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m");
-    println!("\x1b[32m✓ Setup complete!\x1b[0m Config saved to {}", config_path().display());
+    println!(
+        "\x1b[32m✓ Setup complete!\x1b[0m Config saved to {}",
+        config_path().display()
+    );
     println!();
     println!("\x1b[1mNext steps:\x1b[0m");
     println!("  minion list                                    List workflows");

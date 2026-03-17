@@ -51,14 +51,15 @@ impl DockerSandbox {
     /// Writes the Dockerfile to a temp dir and runs `docker build`.
     pub async fn auto_build_image(image: &str) -> Result<()> {
         let tmp = std::env::temp_dir().join("minion-sandbox-build");
-        std::fs::create_dir_all(&tmp)
-            .context("Failed to create temp dir for Docker build")?;
+        std::fs::create_dir_all(&tmp).context("Failed to create temp dir for Docker build")?;
 
         let dockerfile_path = tmp.join("Dockerfile");
         std::fs::write(&dockerfile_path, EMBEDDED_DOCKERFILE)
             .context("Failed to write embedded Dockerfile")?;
 
-        tracing::info!("Building Docker image '{image}' (this may take a few minutes on first run)...");
+        tracing::info!(
+            "Building Docker image '{image}' (this may take a few minutes on first run)..."
+        );
         eprintln!(
             "\n  ⟳ Building Docker image '{}' — first run only, please wait...\n",
             image,
@@ -130,10 +131,7 @@ impl DockerSandbox {
             return;
         }
 
-        let output = Command::new("gh")
-            .args(["auth", "token"])
-            .output()
-            .await;
+        let output = Command::new("gh").args(["auth", "token"]).output().await;
 
         if let Ok(o) = output {
             if o.status.success() {
@@ -256,7 +254,10 @@ impl DockerSandbox {
     /// them.  We suppress these via `--no-xattrs` and `--no-mac-metadata`
     /// flags and only fail on *real* errors (e.g. source directory missing).
     pub async fn copy_workspace(&self, src: &str) -> Result<()> {
-        let id = self.container_id.as_ref().context("Container not created")?;
+        let id = self
+            .container_id
+            .as_ref()
+            .context("Container not created")?;
 
         let effective_exclude = self.config.effective_exclude();
         if effective_exclude.is_empty() {
@@ -307,7 +308,9 @@ impl DockerSandbox {
 
             if !verify.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                bail!("docker cp workspace failed — .git directory not found in container: {stderr}");
+                bail!(
+                    "docker cp workspace failed — .git directory not found in container: {stderr}"
+                );
             }
         }
 
@@ -316,7 +319,10 @@ impl DockerSandbox {
 
     /// Run a shell command inside the sandbox and return the output
     pub async fn run_command(&self, cmd: &str) -> Result<SandboxOutput> {
-        let id = self.container_id.as_ref().context("Container not created")?;
+        let id = self
+            .container_id
+            .as_ref()
+            .context("Container not created")?;
 
         tracing::debug!(container_id = %id, cmd = %cmd, "Sandbox: executing command");
 
@@ -339,14 +345,21 @@ impl DockerSandbox {
             "Sandbox: command completed"
         );
 
-        Ok(SandboxOutput { stdout, stderr, exit_code })
+        Ok(SandboxOutput {
+            stdout,
+            stderr,
+            exit_code,
+        })
     }
 
     /// Run a shell command inside the sandbox as a specific user.
     /// Used for agent steps that need non-root execution (Claude CLI
     /// refuses `--dangerously-skip-permissions` when running as root).
     pub async fn run_command_as_user(&self, cmd: &str, user: &str) -> Result<SandboxOutput> {
-        let id = self.container_id.as_ref().context("Container not created")?;
+        let id = self
+            .container_id
+            .as_ref()
+            .context("Container not created")?;
 
         tracing::debug!(container_id = %id, cmd = %cmd, user = %user, "Sandbox: executing command as user");
 
@@ -367,7 +380,11 @@ impl DockerSandbox {
             "Sandbox: user command completed"
         );
 
-        Ok(SandboxOutput { stdout, stderr, exit_code })
+        Ok(SandboxOutput {
+            stdout,
+            stderr,
+            exit_code,
+        })
     }
 
     /// Copy results from the sandbox back to the host.
@@ -377,12 +394,23 @@ impl DockerSandbox {
     /// copy is skipped entirely — this is the common case for read-only
     /// workflows like code-review.
     pub async fn copy_results(&self, dest: &str) -> Result<()> {
-        let id = self.container_id.as_ref().context("Container not created")?;
+        let id = self
+            .container_id
+            .as_ref()
+            .context("Container not created")?;
 
         // Check if any files were modified inside the container.
         // If nothing changed, skip the (potentially slow) copy-back.
         let check = Command::new("docker")
-            .args(["exec", id, "git", "-C", "/workspace", "status", "--porcelain"])
+            .args([
+                "exec",
+                id,
+                "git",
+                "-C",
+                "/workspace",
+                "status",
+                "--porcelain",
+            ])
             .output()
             .await;
 
@@ -494,7 +522,10 @@ mod tests {
         // Without a container_id, run_command should return an error
         let result = sb.run_command("echo hello").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Container not created"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Container not created"));
 
         // Same for copy_results and copy_workspace
         let r2 = sb.copy_results("/tmp/dest").await;

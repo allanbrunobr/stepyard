@@ -34,18 +34,15 @@ impl StepExecutor for TemplateStepExecutor {
         } else {
             step.name.clone()
         };
-        let file_path = PathBuf::from(&self.prompts_dir)
-            .join(format!("{}.md.tera", template_name));
+        let file_path = PathBuf::from(&self.prompts_dir).join(format!("{}.md.tera", template_name));
 
-        let template_content = tokio::fs::read_to_string(&file_path)
-            .await
-            .map_err(|e| {
-                StepError::Fail(format!(
-                    "Template file not found: '{}': {}",
-                    file_path.display(),
-                    e
-                ))
-            })?;
+        let template_content = tokio::fs::read_to_string(&file_path).await.map_err(|e| {
+            StepError::Fail(format!(
+                "Template file not found: '{}': {}",
+                file_path.display(),
+                e
+            ))
+        })?;
 
         let rendered = ctx.render_template(&template_content)?;
 
@@ -60,10 +57,10 @@ impl StepExecutor for TemplateStepExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::workflow::schema::StepType;
-    use tokio::fs;
     use serde_json;
+    use std::collections::HashMap;
+    use tokio::fs;
 
     fn make_step(name: &str) -> StepDef {
         StepDef {
@@ -95,7 +92,9 @@ mod tests {
 
         // Write a .md.tera file
         let template_path = tmp.path().join("greet.md.tera");
-        fs::write(&template_path, "Hello {{ target }}!").await.unwrap();
+        fs::write(&template_path, "Hello {{ target }}!")
+            .await
+            .unwrap();
 
         let step = make_step("greet");
         let executor = TemplateStepExecutor::new(Some(&prompts_dir));
@@ -166,7 +165,8 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Template file not found") || err.contains("nonexistent"),
-            "Error should describe the missing file: {}", err
+            "Error should describe the missing file: {}",
+            err
         );
     }
 }

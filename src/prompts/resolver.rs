@@ -47,18 +47,14 @@ impl PromptResolver {
 
         // Walk the candidate list and return the first file that exists
         for name in &candidates {
-            let path = prompts_dir
-                .join(function)
-                .join(format!("{}.md.tera", name));
+            let path = prompts_dir.join(function).join(format!("{}.md.tera", name));
             if tokio::fs::metadata(&path).await.is_ok() {
                 return Ok(path);
             }
         }
 
         // Fall back to _default.md.tera
-        let default_path = prompts_dir
-            .join(function)
-            .join("_default.md.tera");
+        let default_path = prompts_dir.join(function).join("_default.md.tera");
         if tokio::fs::metadata(&default_path).await.is_ok() {
             return Ok(default_path);
         }
@@ -90,7 +86,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let prompts_dir = tmp.path();
 
-        fs::create_dir_all(prompts_dir.join("fix-lint")).await.unwrap();
+        fs::create_dir_all(prompts_dir.join("fix-lint"))
+            .await
+            .unwrap();
         let expected = prompts_dir.join("fix-lint").join("react.md.tera");
         fs::write(&expected, "# fix-lint for react").await.unwrap();
 
@@ -106,10 +104,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let prompts_dir = tmp.path();
 
-        fs::create_dir_all(prompts_dir.join("fix-lint")).await.unwrap();
+        fs::create_dir_all(prompts_dir.join("fix-lint"))
+            .await
+            .unwrap();
         // No react.md.tera, but typescript.md.tera exists
         let expected = prompts_dir.join("fix-lint").join("typescript.md.tera");
-        fs::write(&expected, "# fix-lint for typescript").await.unwrap();
+        fs::write(&expected, "# fix-lint for typescript")
+            .await
+            .unwrap();
 
         let stack = make_stack("react", &["typescript", "javascript"]);
         let result = PromptResolver::resolve("fix-lint", &stack, prompts_dir).await;
@@ -123,7 +125,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let prompts_dir = tmp.path();
 
-        fs::create_dir_all(prompts_dir.join("fix-lint")).await.unwrap();
+        fs::create_dir_all(prompts_dir.join("fix-lint"))
+            .await
+            .unwrap();
         let default = prompts_dir.join("fix-lint").join("_default.md.tera");
         fs::write(&default, "# fix-lint default").await.unwrap();
 
