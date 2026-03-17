@@ -100,6 +100,24 @@ All workflows are YAML files you can customize or create from scratch.
 
 Every workflow runs inside an isolated Docker container. Your project is copied in, the AI works in isolation, and only the results come back. If anything goes wrong, the container is destroyed — zero impact on your project.
 
+#### 🔐 Secure API Proxy
+
+API keys **never enter the container**. Minion runs a host-side reverse proxy that intercepts API calls from inside the sandbox and injects authentication headers on-the-fly:
+
+```
+┌─────────────────┐         ┌──────────────────┐         ┌──────────────────┐
+│  Docker Container│         │   Host Proxy     │         │ api.anthropic.com│
+│                 │  HTTP   │  (auto-started)  │  HTTPS  │                  │
+│ ANTHROPIC_BASE_ ├────────►│ Injects x-api-key├────────►│                  │
+│ URL=host:PORT   │         │ from host env    │         │                  │
+└─────────────────┘         └──────────────────┘         └──────────────────┘
+```
+
+- The container only sees `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>`
+- `ANTHROPIC_API_KEY` stays on the host machine — never exposed as a container env var
+- Proxy starts automatically with the workflow and stops when it completes
+- Zero configuration required — works out of the box with `cargo install`
+
 ```bash
 minion execute code-review.yaml -- 42        # Sandbox ON (default)
 minion execute code-review.yaml --no-sandbox -- 42  # Run locally instead

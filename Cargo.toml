@@ -1,6 +1,6 @@
 [package]
 name = "minion-engine"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "AI workflow engine that orchestrates Claude Code CLI — automate code review, refactoring, and PR creation with YAML workflows"
 license = "MIT"
