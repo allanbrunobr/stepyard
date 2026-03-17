@@ -1,6 +1,6 @@
 # Minion Engine
 
-![Minion Engine High-Level Architecture](docs/architecture-high-level.jpg)
+![Minion Engine High-Level Architecture](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-high-level.jpg)
 
 **Automate code review, bug fixing, and PR creation with AI — defined in YAML, executed in Docker.**
 
@@ -96,7 +96,7 @@ All workflows are YAML files you can customize or create from scratch.
 
 ### 🐳 Docker Sandbox (default)
 
-![Secure Docker Sandbox Workflow](docs/architecture-docker-sandbox.jpg)
+![Secure Docker Sandbox Workflow](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-docker-sandbox.jpg)
 
 Every workflow runs inside an isolated Docker container. Your project is copied in, the AI works in isolation, and only the results come back. If anything goes wrong, the container is destroyed — zero impact on your project.
 
@@ -309,7 +309,7 @@ steps:
 
 ## Slack Bot Integration
 
-![Slack Bot Interaction Flow](docs/architecture-slack-bot.jpg)
+![Slack Bot Interaction Flow](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-slack-bot.jpg)
 
 Trigger Minion workflows from Slack by mentioning the bot:
 
