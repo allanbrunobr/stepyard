@@ -11,6 +11,28 @@ use crate::workflow::validator;
 
 use super::init_templates;
 
+/// Resolve a workflow path with fallback chain:
+/// 1. As-is (if the file exists — developer running from repo or absolute path)
+/// 2. `~/.minion/workflows/<filename>` (cargo install users)
+fn resolve_workflow_path(path: &PathBuf) -> anyhow::Result<PathBuf> {
+    // If the file exists as specified, use it
+    if path.exists() {
+        return Ok(path.clone());
+    }
+
+    // Try ~/.minion/workflows/<filename>
+    if let Some(filename) = path.file_name() {
+        if let Some(home) = dirs::home_dir() {
+            let home_path = home.join(".minion").join("workflows").join(filename);
+            if home_path.exists() {
+                return Ok(home_path);
+            }
+        }
+    }
+
+    bail!("Workflow file not found: {}\n  Hint: run `minion slack start` once to extract built-in workflows to ~/.minion/workflows/", path.display())
+}
+
 #[derive(Args)]
 pub struct ExecuteArgs {
     /// Path to the workflow YAML file
@@ -90,13 +112,9 @@ pub struct InspectArgs {
 }
 
 pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
-    let workflow_path = &args.workflow;
+    let workflow_path = resolve_workflow_path(&args.workflow)?;
 
-    if !workflow_path.exists() {
-        bail!("Workflow file not found: {}", workflow_path.display());
-    }
-
-    let mut workflow = parser::parse_file(workflow_path)
+    let mut workflow = parser::parse_file(&workflow_path)
         .with_context(|| format!("Failed to parse {}", workflow_path.display()))?;
 
     // Apply centralized defaults (~/.minion/defaults.yaml, .minion/config.yaml)
@@ -533,12 +551,10 @@ async fn collect_missing_prompts(
 }
 
 pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
-    if !args.workflow.exists() {
-        bail!("Workflow file not found: {}", args.workflow.display());
-    }
+    let workflow_path = resolve_workflow_path(&args.workflow)?;
 
-    let workflow = parser::parse_file(&args.workflow)
-        .with_context(|| format!("Failed to parse {}", args.workflow.display()))?;
+    let workflow = parser::parse_file(&workflow_path)
+        .with_context(|| format!("Failed to parse {}", workflow_path.display()))?;
 
     let errors = validator::validate(&workflow);
     if errors.is_empty() {
@@ -651,12 +667,10 @@ pub async fn init(args: InitArgs) -> anyhow::Result<()> {
 }
 
 pub async fn inspect(args: InspectArgs) -> anyhow::Result<()> {
-    if !args.workflow.exists() {
-        bail!("Workflow file not found: {}", args.workflow.display());
-    }
+    let workflow_path = resolve_workflow_path(&args.workflow)?;
 
-    let workflow = parser::parse_file(&args.workflow)
-        .with_context(|| format!("Failed to parse {}", args.workflow.display()))?;
+    let workflow = parser::parse_file(&workflow_path)
+        .with_context(|| format!("Failed to parse {}", workflow_path.display()))?;
 
     // ── Header ──────────────────────────────────────────────────────────────
     println!("\x1b[1m=== Workflow: {} ===\x1b[0m", workflow.name);

@@ -489,9 +489,55 @@ fn load_slack_config() -> (String, String, String) {
     let workflows_dir = env::var("MINION_WORKFLOWS_DIR")
         .ok()
         .or(file_dir)
-        .unwrap_or_else(|| "./workflows".to_string());
+        .unwrap_or_else(|| resolve_workflows_dir());
 
     (token, secret, workflows_dir)
+}
+
+/// Embedded workflow files — compiled into the binary so `cargo install` users
+/// have working workflows without cloning the repo.
+const EMBEDDED_WORKFLOWS: &[(&str, &str)] = &[
+    ("code-review.yaml", include_str!("../../workflows/code-review.yaml")),
+    ("fix-ci.yaml", include_str!("../../workflows/fix-ci.yaml")),
+    ("fix-issue.yaml", include_str!("../../workflows/fix-issue.yaml")),
+    ("fix-test.yaml", include_str!("../../workflows/fix-test.yaml")),
+    ("flaky-test-fix.yaml", include_str!("../../workflows/flaky-test-fix.yaml")),
+    ("generate-docs.yaml", include_str!("../../workflows/generate-docs.yaml")),
+    ("refactor.yaml", include_str!("../../workflows/refactor.yaml")),
+    ("security-audit.yaml", include_str!("../../workflows/security-audit.yaml")),
+    ("weekly-report.yaml", include_str!("../../workflows/weekly-report.yaml")),
+];
+
+/// Resolve workflows directory with fallback chain:
+/// 1. `./workflows` (if exists — developer running from repo)
+/// 2. `~/.minion/workflows/` (extract embedded if needed — cargo install users)
+fn resolve_workflows_dir() -> String {
+    // If local ./workflows exists, use it (developer mode)
+    if std::path::Path::new("./workflows").is_dir() {
+        return "./workflows".to_string();
+    }
+
+    // Otherwise, extract embedded workflows to ~/.minion/workflows/
+    let home_dir = dirs::home_dir().expect("Cannot determine home directory");
+    let workflows_path = home_dir.join(".minion").join("workflows");
+
+    if !workflows_path.exists() {
+        std::fs::create_dir_all(&workflows_path)
+            .expect("Failed to create ~/.minion/workflows/");
+
+        for (name, content) in EMBEDDED_WORKFLOWS {
+            let file_path = workflows_path.join(name);
+            std::fs::write(&file_path, content)
+                .unwrap_or_else(|e| panic!("Failed to write {}: {}", name, e));
+        }
+        info!(
+            path = %workflows_path.display(),
+            count = EMBEDDED_WORKFLOWS.len(),
+            "Extracted embedded workflows to ~/.minion/workflows/"
+        );
+    }
+
+    workflows_path.to_string_lossy().to_string()
 }
 
 /// Start the Slack bot server on the given port.

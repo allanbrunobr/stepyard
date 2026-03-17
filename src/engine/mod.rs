@@ -29,6 +29,7 @@ use crate::prompts::{
 };
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::docker::DockerSandbox;
+use crate::sandbox::proxy::ApiProxy;
 use crate::sandbox::SandboxMode;
 use crate::steps::*;
 use crate::steps::{
@@ -114,6 +115,8 @@ pub struct Engine {
     pub stack_info: Option<StackInfo>,
     /// GitHub repo (OWNER/REPO) — when set, sandbox clones this repo instead of copying CWD
     repo: Option<String>,
+    /// Secure API proxy — holds secrets on the host, container only gets the proxy URL
+    api_proxy: Option<ApiProxy>,
 }
 
 #[allow(dead_code)]
@@ -219,6 +222,7 @@ impl Engine {
             event_bus,
             stack_info,
             repo: options.repo,
+            api_proxy: None,
         }
     }
 
@@ -277,6 +281,26 @@ impl Engine {
         };
 
         let mut docker = DockerSandbox::new(sandbox_config, &effective_workspace);
+
+        // ── Start API proxy to keep secrets on the host ─────────────
+        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+            match ApiProxy::start(api_key).await {
+                Ok(proxy) => {
+                    docker.set_proxy(proxy.port());
+                    if !self.quiet {
+                        println!(
+                            "  {} API proxy started on port {} — secrets stay on host",
+                            "🔐".green(),
+                            proxy.port()
+                        );
+                    }
+                    self.api_proxy = Some(proxy);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to start API proxy — falling back to env vars");
+                }
+            }
+        }
 
         if !self.quiet {
             if let Some(ref repo) = self.repo {
@@ -421,6 +445,12 @@ impl Engine {
 
             tracing::info!(copy_back_ms, destroy_ms, repo_mode = is_repo_mode, "Sandbox teardown complete");
         }
+
+        // Stop the API proxy (if running)
+        if let Some(proxy) = self.api_proxy.take() {
+            proxy.stop().await;
+        }
+
         Ok(())
     }
 

@@ -17,9 +17,11 @@
 /// **Requirements**: Docker Desktop 4.40+ must be installed and running.
 pub mod config;
 pub mod docker;
+pub mod proxy;
 
 pub use config::{SandboxConfig, SandboxMode};
 pub use docker::DockerSandbox;
+pub use proxy::ApiProxy;
 
 use anyhow::{bail, Result};
 

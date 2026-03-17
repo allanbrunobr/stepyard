@@ -16,6 +16,8 @@ pub struct DockerSandbox {
     config: SandboxConfig,
     /// Host workspace path to mount
     workspace_path: String,
+    /// When set, proxy port for ANTHROPIC_BASE_URL (secrets stay on host)
+    proxy_port: Option<u16>,
 }
 
 /// Result of running a command inside the sandbox
@@ -32,7 +34,14 @@ impl DockerSandbox {
             container_id: None,
             config,
             workspace_path: workspace_path.into(),
+            proxy_port: None,
         }
+    }
+
+    /// Enable the API proxy: the container will use ANTHROPIC_BASE_URL
+    /// instead of receiving the raw API key.
+    pub fn set_proxy(&mut self, port: u16) {
+        self.proxy_port = Some(port);
     }
 
     /// Check if a Docker image exists locally.
@@ -176,11 +185,31 @@ impl DockerSandbox {
         Self::auto_detect_gh_token().await;
 
         // ── Environment variables ───────────────────────────────────
-        // Forward host env vars into the container so that CLI tools
-        // (gh, claude, git) and API clients can authenticate.
-        for key in self.config.effective_env() {
-            if let Ok(val) = std::env::var(&key) {
-                args.extend(["-e".to_string(), format!("{key}={val}")]);
+        // When proxy is active, exclude secrets from the container env
+        // and inject ANTHROPIC_BASE_URL pointing to the host proxy instead.
+        if let Some(proxy_port) = self.proxy_port {
+            for key in self.config.effective_env_with_proxy() {
+                if let Ok(val) = std::env::var(&key) {
+                    args.extend(["-e".to_string(), format!("{key}={val}")]);
+                }
+            }
+            // Point Claude CLI and API clients to the host proxy
+            args.extend([
+                "-e".to_string(),
+                format!("ANTHROPIC_BASE_URL=http://host.docker.internal:{proxy_port}"),
+            ]);
+            // Ensure host.docker.internal resolves (required on Linux)
+            args.extend([
+                "--add-host".to_string(),
+                "host.docker.internal:host-gateway".to_string(),
+            ]);
+            tracing::info!(proxy_port, "Container will use API proxy — ANTHROPIC_API_KEY not injected");
+        } else {
+            // No proxy — forward all env vars directly (legacy behavior)
+            for key in self.config.effective_env() {
+                if let Ok(val) = std::env::var(&key) {
+                    args.extend(["-e".to_string(), format!("{key}={val}")]);
+                }
             }
         }
         // Always set HOME so credential files are found at the expected path

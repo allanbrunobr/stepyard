@@ -116,6 +116,9 @@ impl SandboxConfig {
         self.image.as_deref().unwrap_or(Self::DEFAULT_IMAGE)
     }
 
+    /// Secrets that are proxied and should NOT be passed as env vars into the container.
+    pub const PROXIED_SECRETS: &'static [&'static str] = &["ANTHROPIC_API_KEY"];
+
     /// Return the effective env-var list: explicit config overrides auto-env.
     pub fn effective_env(&self) -> Vec<String> {
         if self.env.is_empty() {
@@ -123,6 +126,15 @@ impl SandboxConfig {
         } else {
             self.env.clone()
         }
+    }
+
+    /// Return env vars to forward when the API proxy is active.
+    /// Excludes secrets that are handled by the proxy (e.g. ANTHROPIC_API_KEY).
+    pub fn effective_env_with_proxy(&self) -> Vec<String> {
+        self.effective_env()
+            .into_iter()
+            .filter(|k| !Self::PROXIED_SECRETS.contains(&k.as_str()))
+            .collect()
     }
 
     /// Return the effective volume list: explicit config overrides auto-volumes.
