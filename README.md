@@ -104,14 +104,7 @@ Every workflow runs inside an isolated Docker container. Your project is copied 
 
 API keys **never enter the container**. Minion runs a host-side reverse proxy that intercepts API calls from inside the sandbox and injects authentication headers on-the-fly:
 
-```
-┌─────────────────┐         ┌──────────────────┐         ┌──────────────────┐
-│  Docker Container│         │   Host Proxy     │         │ api.anthropic.com│
-│                 │  HTTP   │  (auto-started)  │  HTTPS  │                  │
-│ ANTHROPIC_BASE_ ├────────►│ Injects x-api-key├────────►│                  │
-│ URL=host:PORT   │         │ from host env    │         │                  │
-└─────────────────┘         └──────────────────┘         └──────────────────┘
-```
+![Secure API Proxy Mechanism](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-api-proxy.jpg)
 
 - The container only sees `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>`
 - `ANTHROPIC_API_KEY` stays on the host machine — never exposed as a container env var
