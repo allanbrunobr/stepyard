@@ -2,15 +2,25 @@
 
 ![Minion Engine High-Level Architecture](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-high-level.jpg)
 
-**Automate code review, bug fixing, and PR creation with AI — defined in YAML, executed in Docker.**
+**Run AI workflows in Docker. Define steps in YAML. No surprises.**
 
-Minion Engine is a CLI tool that runs multi-step AI workflows. You define what you want in a YAML file, and it orchestrates everything: shell commands, Claude AI calls, conditional logic, and parallel execution — all inside an isolated Docker sandbox.
+```bash
+cargo install minion-engine
+minion execute code-review.yaml -- 42
+```
 
-```
-You write YAML → Minion runs AI workflows → Results appear as PR comments, fixes, reports
-```
+> Reviews every changed file in PR #42, detects each file's language, applies language-specific
+> rules, and posts a structured report as a PR comment — in 2–5 min.
+
+---
 
 ## Why?
+
+Every AI coding tool eventually surprises you. It refactors the wrong file, invents a dependency, or drifts mid-task. The root cause is always the same: the agent decides what to do next.
+
+Minion Engine inverts that. **You define the steps. The agent executes them.**
+
+Workflows are YAML files. Each step is explicit: run a command, call the AI, check a condition, retry until tests pass. The agent never improvises — it follows the script.
 
 **Without Minion Engine**, reviewing a PR means:
 - Open the PR, read each file manually
@@ -26,19 +36,23 @@ Every changed file is reviewed with **language-specific criteria** (Python gets 
 
 **Typical execution times:**
 
-| Workflow | Time | What affects it |
-|----------|------|-----------------|
-| **code-review** | 2–5 min | Number of changed files, size of diffs |
-| **fix-issue** | 8–15 min | Complexity of the issue, number of lint/test retry loops |
-| **security-audit** | 3–6 min | Number of source files, parallelism level |
-| **generate-docs** | 4–8 min | Number of source files to document |
+| Workflow | Time |
+|----------|------|
+| `code-review` | 2–5 min |
+| `fix-issue` | 8–15 min |
+| `security-audit` | 3–6 min |
+| `generate-docs` | 4–8 min |
 
-Execution time depends on several factors:
-- **Docker sandbox setup** (1–5 min on first run per session): creating the container, copying your project files in, and initializing git. Larger projects with more files take longer to copy.
-- **API response time** (10–60s per call): each `chat` or `agent` step makes a round-trip to the Claude API. Longer prompts and larger context windows increase latency.
-- **Retry loops**: workflows like `fix-issue` run lint and test gates in a `repeat` scope — if tests fail, the agent fixes and retries (up to `max_iterations`). Each iteration adds a full agent + cmd cycle.
-- **Parallelism vs rate limits**: `map` steps with `parallel: 5` can trigger API rate limits (429), which currently causes failures. Lower parallelism is more reliable.
-- **First run**: the Docker image build (`minion-sandbox:latest`) adds ~2 minutes the very first time. Subsequent runs use the cached image.
+> **First run:** Docker image builds automatically (~2 min, cached after that). Large projects take longer to copy into the sandbox. See [Troubleshooting](#troubleshooting) for common issues.
+
+## Prerequisites
+
+| Requirement | How to get it | Notes |
+|-------------|---------------|-------|
+| **Rust toolchain** | [rustup.rs](https://rustup.rs) | For `cargo install` |
+| **ANTHROPIC_API_KEY** | [console.anthropic.com](https://console.anthropic.com) | `export ANTHROPIC_API_KEY="sk-ant-..."` |
+| **Docker Desktop** | [docker.com](https://www.docker.com/products/docker-desktop/) | Sandbox runs workflows in isolation |
+| **gh CLI** | [cli.github.com](https://cli.github.com) | `gh auth login` — GH_TOKEN is auto-detected |
 
 ## Quick Start
 
@@ -81,17 +95,6 @@ minion slack start
 
 All workflows are YAML files you can customize or create from scratch.
 
-## Prerequisites
-
-| Requirement | How to get it | Notes |
-|-------------|---------------|-------|
-| **Rust toolchain** | [rustup.rs](https://rustup.rs) | For `cargo install` |
-| **ANTHROPIC_API_KEY** | [console.anthropic.com](https://console.anthropic.com) | `export ANTHROPIC_API_KEY="sk-ant-..."` |
-| **Docker Desktop** | [docker.com](https://www.docker.com/products/docker-desktop/) | Sandbox runs workflows in isolation |
-| **gh CLI** | [cli.github.com](https://cli.github.com) | `gh auth login` — GH_TOKEN is **auto-detected** |
-
-> **Docker image auto-build:** The first time you run a workflow, Minion automatically builds the sandbox image (`minion-sandbox:latest`). This takes ~2 minutes once and never needs to be repeated.
-
 ## Features
 
 ### 🐳 Docker Sandbox (default)
@@ -100,11 +103,11 @@ All workflows are YAML files you can customize or create from scratch.
 
 Every workflow runs inside an isolated Docker container. Your project is copied in, the AI works in isolation, and only the results come back. If anything goes wrong, the container is destroyed — zero impact on your project.
 
-#### 🔐 Secure API Proxy
+### 🔐 Secure API Proxy
 
 API keys **never enter the container**. Minion runs a host-side reverse proxy that intercepts API calls from inside the sandbox and injects authentication headers on-the-fly:
 
-![Secure API Proxy Mechanism](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/proxy.png)
+![Secure API Proxy Mechanism](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-api-proxy.png)
 
 - The container only sees `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>`
 - `ANTHROPIC_API_KEY` stays on the host machine — never exposed as a container env var
@@ -115,6 +118,17 @@ API keys **never enter the container**. Minion runs a host-side reverse proxy th
 minion execute code-review.yaml -- 42        # Sandbox ON (default)
 minion execute code-review.yaml --no-sandbox -- 42  # Run locally instead
 ```
+
+## Security Model
+
+| What | Where it lives |
+|------|----------------|
+| `ANTHROPIC_API_KEY` | Host machine only — never passed to the container |
+| API requests from inside sandbox | Intercepted by host proxy, auth header injected on-the-fly |
+| Project files | Copied into the container, isolated from your working directory |
+| Container lifecycle | Fresh container per run — destroyed on completion |
+
+If anything goes wrong inside the sandbox, the container is destroyed with zero impact on your project. The proxy process starts with the workflow and stops when it completes.
 
 ### 🔍 Language-Aware Code Review
 
@@ -439,6 +453,35 @@ Then mention it:
 | `@bot generate docs <target>` | `generate-docs.yaml` |
 | `@bot fix ci <pr-url>` | `fix-ci.yaml` |
 
+## Troubleshooting
+
+**First run is slow** — Docker image builds once (~2 min) and is cached after that. Larger projects take longer to copy into the container.
+
+**`429 Too Many Requests`** — reduce parallelism in `map` steps. The default `parallel: 5` can hit API rate limits; try `parallel: 2`.
+
+**Sandbox setup takes 90+ seconds** — this is proportional to project size. A known limitation; smaller repos are noticeably faster.
+
+**`gh` not found inside sandbox** — run `gh auth login` on the host before executing workflows that interact with GitHub.
+
+**`minion-sandbox:latest` not found** — run `minion setup` once to trigger the image build, or let any `minion execute` call build it automatically.
+
+---
+
+## Contributing
+
+Issues and PRs are welcome. To run the project locally:
+
+```bash
+git clone https://github.com/allanbrunobr/minion-engine
+cd minion-engine
+cargo build
+cargo test
+```
+
+Workflow YAML files live in `workflows/` — the fastest way to contribute is adding or improving a workflow template. Language-specific prompt templates are in `prompts/`.
+
+---
+
 ## Project Structure
 
 ```
@@ -458,4 +501,4 @@ prompts/        # Language-specific prompt templates
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for details.
