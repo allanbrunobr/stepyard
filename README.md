@@ -334,7 +334,7 @@ steps:
 
 ## Slack Bot Integration
 
-![Slack Bot Interaction Flow](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-slack-bot.jpg)
+![Slack Bot Interaction Flow](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/slack.jpg)
 
 Trigger Minion workflows from Slack by mentioning the bot:
 
