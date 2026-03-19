@@ -107,7 +107,7 @@ Every workflow runs inside an isolated Docker container. Your project is copied 
 
 API keys **never enter the container**. Minion runs a host-side reverse proxy that intercepts API calls from inside the sandbox and injects authentication headers on-the-fly:
 
-![Secure API Proxy Mechanism](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-api-proxy.png)
+![Secure API Proxy Mechanism](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-api-proxy.jpg)
 
 - The container only sees `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>`
 - `ANTHROPIC_API_KEY` stays on the host machine — never exposed as a container env var
@@ -334,7 +334,7 @@ steps:
 
 ## Slack Bot Integration
 
-![Slack Bot Interaction Flow](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-slack-bot.png)
+![Slack Bot Interaction Flow](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-slack-bot.jpg)
 
 Trigger Minion workflows from Slack by mentioning the bot:
 
