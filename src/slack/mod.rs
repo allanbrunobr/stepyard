@@ -196,6 +196,32 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         });
     }
 
+    // whitebook <medical question>
+    if let Some(caps) = regex::Regex::new(r"whitebook\s+(.+)")
+        .unwrap()
+        .captures(&clean)
+    {
+        return Some(WorkflowMatch {
+            workflow: "whitebook-query.yaml".to_string(),
+            target: caps[1].trim().to_string(),
+            repo: None,
+            description: "Whitebook medical query".to_string(),
+        });
+    }
+
+    // diagnosis <clinical description>
+    if let Some(caps) = regex::Regex::new(r"diagnosis\s+(.+)")
+        .unwrap()
+        .captures(&clean)
+    {
+        return Some(WorkflowMatch {
+            workflow: "whitebook-diagnosis.yaml".to_string(),
+            target: caps[1].trim().to_string(),
+            repo: None,
+            description: "Differential diagnosis".to_string(),
+        });
+    }
+
     None
 }
 
@@ -424,6 +450,8 @@ async fn slack_events(
                                         • `@minion security audit https://github.com/owner/repo`\n\
                                         • `@minion generate docs https://github.com/owner/repo`\n\
                                         • `@minion fix ci https://github.com/owner/repo/pull/8`\n\
+                                        • `@minion whitebook <medical question>`\n\
+                                        • `@minion diagnosis <clinical description>`\n\
                                         \nYou can also use just numbers (e.g. `fix issue #10`) if the bot is running inside the repo."
                                         .to_string(),
                                     thread_ts: Some(ts),
@@ -506,6 +534,8 @@ const EMBEDDED_WORKFLOWS: &[(&str, &str)] = &[
     ("refactor.yaml", include_str!("../../workflows/refactor.yaml")),
     ("security-audit.yaml", include_str!("../../workflows/security-audit.yaml")),
     ("weekly-report.yaml", include_str!("../../workflows/weekly-report.yaml")),
+    ("whitebook-query.yaml", include_str!("../../workflows/whitebook-query.yaml")),
+    ("whitebook-diagnosis.yaml", include_str!("../../workflows/whitebook-diagnosis.yaml")),
 ];
 
 /// Resolve workflows directory with fallback chain:

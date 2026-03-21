@@ -1,0 +1,42 @@
+name: whitebook-query
+version: 1
+description: "Query Whitebook medical knowledge base via Elasticsearch + AI analysis"
+
+config:
+  global:
+    timeout: 120s
+  chat:
+    temperature: 0.1
+    max_tokens: 4096
+
+steps:
+  - name: search_whitebook
+    type: cmd
+    run: "curl -s -X POST \"$ELASTICSEARCH_URL/$ELASTICSEARCH_INDEX/_search\" -H \"Authorization: ApiKey $ELASTICSEARCH_API_KEY\" -H \"Content-Type: application/json\" -d '{\"query\":{\"multi_match\":{\"query\":\"{{ target }}\",\"fields\":[\"titulo^3\",\"categorias\",\"documento^2\"],\"type\":\"most_fields\",\"operator\":\"OR\",\"minimum_should_match\":\"25%\",\"fuzziness\":\"AUTO\"}},\"size\":5,\"_source\":[\"titulo\",\"categorias\",\"documento\"]}' | jq '[.hits.hits[]._source]'"
+
+  - name: check_results
+    type: gate
+    condition: "{{ steps.search_whitebook.stdout | length > 5 }}"
+
+  - name: analyze
+    type: chat
+    prompt: |
+      Voce e um assistente medico especializado do Whitebook. Baseado EXCLUSIVAMENTE nos dados abaixo, responda a pergunta do medico.
+
+      REGRAS:
+      - Responda SOMENTE com informacoes presentes nos dados fornecidos
+      - Se os dados nao contem informacao suficiente, diga explicitamente
+      - Cite a fonte (titulo do documento) para cada informacao
+      - Use linguagem tecnica medica apropriada
+      - Formate com markdown para legibilidade
+      - Inclua dosagens, posologias e contraindicacoes quando disponíveis
+
+      PERGUNTA DO MEDICO:
+      {{ target }}
+
+      DADOS DO WHITEBOOK:
+      {{ steps.search_whitebook.stdout }}
+
+  - name: result
+    type: cmd
+    run: "echo '{{ steps.analyze.response }}'"

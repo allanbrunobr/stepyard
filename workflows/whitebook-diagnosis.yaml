@@ -1,0 +1,73 @@
+name: whitebook-diagnosis
+version: 1
+description: "Differential diagnosis assistant using Whitebook knowledge base"
+
+config:
+  global:
+    timeout: 180s
+  chat:
+    temperature: 0.1
+    max_tokens: 8192
+
+scopes:
+  search_es:
+    steps:
+      - name: search_term
+        type: cmd
+        run: "curl -s -X POST \"$ELASTICSEARCH_URL/$ELASTICSEARCH_INDEX/_search\" -H \"Authorization: ApiKey $ELASTICSEARCH_API_KEY\" -H \"Content-Type: application/json\" -d '{\"query\":{\"multi_match\":{\"query\":\"{{ scope.value }}\",\"fields\":[\"titulo^3\",\"categorias\",\"documento^2\"],\"type\":\"most_fields\",\"fuzziness\":\"AUTO\"}},\"size\":3,\"_source\":[\"titulo\",\"categorias\",\"documento\"]}' | jq '[.hits.hits[]._source]'"
+
+steps:
+  - name: extract_symptoms
+    type: chat
+    prompt: |
+      Extraia os sintomas e sinais clinicos da seguinte descricao medica.
+      Retorne APENAS um JSON valido, sem markdown, sem explicacao:
+      {"symptoms": ["sintoma1", "sintoma2"], "search_terms": ["termo1", "termo2"]}
+
+      Os search_terms devem ser termos medicos adequados para busca no Whitebook (ex: "meningite bacteriana", "cefaleia tensional").
+      Gere entre 2 e 5 search_terms cobrindo os diagnosticos diferenciais mais provaveis.
+
+      Descricao: {{ target }}
+
+  - name: search_conditions
+    type: map
+    scope: search_es
+    items: "{{ steps.extract_symptoms.response }}"
+    parallel: 3
+    config:
+      collect: text
+
+  - name: differential_analysis
+    type: chat
+    prompt: |
+      Voce e um medico especialista em diagnostico diferencial usando o Whitebook como referencia.
+
+      DESCRICAO DO PACIENTE:
+      {{ target }}
+
+      SINTOMAS EXTRAIDOS:
+      {{ steps.extract_symptoms.response }}
+
+      DADOS DO WHITEBOOK (resultados das buscas):
+      {{ steps.search_conditions.collected }}
+
+      Com base EXCLUSIVAMENTE nos dados acima do Whitebook:
+
+      ## Diagnosticos Diferenciais
+      Liste os diagnosticos mais provaveis, ordenados por probabilidade. Para cada um:
+      - **Diagnostico**: nome
+      - **Probabilidade**: alta/media/baixa
+      - **Sintomas que corroboram**: liste quais sintomas do paciente sustentam este diagnostico
+      - **Fonte Whitebook**: titulo do documento de referencia
+
+      ## Exames Complementares Sugeridos
+      Liste exames para confirmar/descartar, com justificativa.
+
+      ## Conduta Inicial Sugerida
+      Se os dados do Whitebook contiverem orientacoes de conduta, inclua-as.
+
+      IMPORTANTE: Nao invente informacoes. Se os dados sao insuficientes para algum diagnostico, diga explicitamente.
+
+  - name: result
+    type: cmd
+    run: "echo '{{ steps.differential_analysis.response }}'"

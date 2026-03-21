@@ -74,6 +74,10 @@ impl SandboxConfig {
         "OPENAI_API_KEY",
         "GH_TOKEN",
         "GITHUB_TOKEN",
+        // Elasticsearch (Whitebook and other knowledge-base workflows)
+        "ELASTICSEARCH_URL",
+        "ELASTICSEARCH_API_KEY",
+        "ELASTICSEARCH_INDEX",
     ];
 
     /// Well-known directories to exclude when copying workspace into the
