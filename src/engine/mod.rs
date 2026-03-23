@@ -283,15 +283,26 @@ impl Engine {
         let mut docker = DockerSandbox::new(sandbox_config, &effective_workspace);
 
         // ── Start API proxy to keep secrets on the host ─────────────
-        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-            match ApiProxy::start(api_key).await {
+        // Detects auth mode automatically:
+        //   1. ANTHROPIC_OAUTH_TOKEN → OAuth (Claude MAX subscription)
+        //   2. ANTHROPIC_API_KEY → API key (pay-per-token)
+        // Optionally routes through LiteLLM gateway if LITELLM_GATEWAY_URL is set.
+        if let Some(auth) = crate::sandbox::proxy::detect_auth_from_env() {
+            let auth_label = match &auth {
+                crate::sandbox::proxy::ProxyAuth::ApiKey(_) => "API key",
+                crate::sandbox::proxy::ProxyAuth::OAuthToken { gateway_url, .. } => {
+                    if gateway_url.is_some() { "OAuth via LiteLLM" } else { "OAuth (Claude MAX)" }
+                }
+            };
+            match ApiProxy::start(auth).await {
                 Ok(proxy) => {
                     docker.set_proxy(proxy.port());
                     if !self.quiet {
                         println!(
-                            "  {} API proxy started on port {} — secrets stay on host",
+                            "  {} API proxy started on port {} — {} mode, secrets stay on host",
                             "🔐".green(),
-                            proxy.port()
+                            proxy.port(),
+                            auth_label
                         );
                     }
                     self.api_proxy = Some(proxy);
