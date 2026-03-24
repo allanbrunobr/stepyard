@@ -148,7 +148,7 @@ pub(super) async fn dispatch_scope_step_sandboxed(
         StepType::Cmd => CmdExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
         StepType::Agent => AgentExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
         StepType::Gate => GateExecutor.execute(step, config, ctx).await,
-        StepType::Chat => ChatExecutor.execute(step, config, ctx).await,
+        StepType::Chat => ChatExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
         StepType::Repeat => RepeatExecutor::new(scopes, sandbox.clone())
             .with_config_manager(config_manager.clone())
             .execute(step, config, ctx).await,

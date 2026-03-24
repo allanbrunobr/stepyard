@@ -183,6 +183,74 @@ macro_rules! send_completion {
 
 /// Call LLM via Rig — unified multi-provider completion
 #[allow(clippy::too_many_arguments)]
+/// Execute a chat prompt via `claude -p` CLI (Claude MAX OAuth path).
+/// This is used when CLAUDE_CODE_OAUTH_TOKEN is set, because OAuth tokens
+/// are blocked on the REST API but work with the official Claude Code CLI.
+async fn call_via_claude_cli(
+    prompt: &str,
+    model: &str,
+    max_tokens: u64,
+    timeout: Duration,
+) -> Result<StepOutput, StepError> {
+    use tokio::process::Command;
+
+    // Map model name to claude CLI model flag
+    let model_flag = if model.contains("opus") {
+        "opus"
+    } else if model.contains("haiku") {
+        "haiku"
+    } else {
+        "sonnet"
+    };
+
+    tracing::info!(
+        model = model_flag,
+        max_tokens,
+        "Chat step: using Claude CLI (OAuth/MAX subscription)"
+    );
+
+    let result = tokio::time::timeout(timeout, async {
+        let output = Command::new("claude")
+            .args([
+                "-p",
+                prompt,
+                "--output-format", "text",
+                "--model", model_flag,
+                "--max-turns", "1",
+                "--dangerously-skip-permissions",
+                "--bare",
+                "--no-session-persistence",
+            ])
+            .output()
+            .await
+            .map_err(|e| StepError::Fail(format!(
+                "Failed to execute claude CLI: {e}. Is @anthropic-ai/claude-code installed?"
+            )))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(StepError::Fail(format!(
+                "claude CLI failed (exit {}): {stderr}",
+                output.status.code().unwrap_or(-1)
+            )));
+        }
+
+        let response = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(response)
+    })
+    .await
+    .map_err(|_| StepError::Fail(format!("claude CLI timed out after {timeout:?}")))?;
+
+    let response = result?;
+
+    Ok(StepOutput::Chat(ChatOutput {
+        response: response.clone(),
+        model: model.to_string(),
+        input_tokens: 0,
+        output_tokens: 0,
+    }))
+}
+
 async fn call_via_rig(
     provider: &str,
     model_name: &str,
@@ -356,9 +424,14 @@ impl StepExecutor for ChatExecutor {
             .get_duration("timeout")
             .unwrap_or(Duration::from_secs(120));
 
-        // Resolve API key (Ollama doesn't need one)
-        // For Anthropic, also checks ANTHROPIC_OAUTH_TOKEN (Claude MAX subscription)
-        let api_key = if provider == "ollama" {
+        // Resolve API key (Ollama doesn't need one, Claude MAX uses CLI instead)
+        let use_claude_cli_early = provider == "anthropic"
+            && std::env::var("CLAUDE_CODE_OAUTH_TOKEN")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
+
+        let api_key = if provider == "ollama" || use_claude_cli_early {
+            // Ollama doesn't need a key; Claude MAX uses CLI path (no REST API key needed)
             String::new()
         } else {
             let api_key_env = config.get_str("api_key_env").unwrap_or(match provider {
@@ -372,33 +445,11 @@ impl StepExecutor for ChatExecutor {
                 "mistral" => "MISTRAL_API_KEY",
                 _ => "ANTHROPIC_API_KEY",
             });
-            // For Anthropic: prefer OAuth token over API key
-            if provider == "anthropic" {
-                if let Ok(token) = std::env::var("ANTHROPIC_OAUTH_TOKEN") {
-                    if !token.is_empty() {
-                        token
-                    } else {
-                        std::env::var(api_key_env).map_err(|_| {
-                            StepError::Fail(format!(
-                                "API key not found: set ANTHROPIC_OAUTH_TOKEN (Claude MAX) or ANTHROPIC_API_KEY"
-                            ))
-                        })?
-                    }
-                } else {
-                    std::env::var(api_key_env).map_err(|_| {
-                        StepError::Fail(format!(
-                            "API key not found: set ANTHROPIC_OAUTH_TOKEN (Claude MAX) or ANTHROPIC_API_KEY"
-                        ))
-                    })?
-                }
-            } else {
-                std::env::var(api_key_env).map_err(|_| {
-                    StepError::Fail(format!(
-                        "API key not found: environment variable '{}' is not set",
-                        api_key_env
-                    ))
-                })?
-            }
+            std::env::var(api_key_env).map_err(|_| {
+                StepError::Fail(format!(
+                    "API key not found: set CLAUDE_CODE_OAUTH_TOKEN (Claude MAX) or {api_key_env}"
+                ))
+            })?
         };
 
         // Resolve base_url: generic > provider-specific > default
@@ -421,29 +472,44 @@ impl StepExecutor for ChatExecutor {
 
         let prompt = ctx.render_template(prompt_template)?;
 
-        // Story 5.1 + 5.2: Build message list from chat history with optional truncation
-        let session_name = config.get_str("session");
-        let truncation = TruncationStrategy::from_config(config);
-        let rig_messages: Vec<Message> = if let Some(session) = session_name {
-            let history = ctx.get_chat_messages(session);
-            let truncated = truncate_messages(&history, &truncation);
-            to_rig_messages(&truncated)
+        // ── Claude MAX OAuth path ─────────────────────────────────────
+        // When CLAUDE_CODE_OAUTH_TOKEN is set AND we're using Anthropic provider,
+        // use `claude -p` CLI instead of the REST API (OAuth tokens are blocked
+        // on the REST API but work with the Claude Code CLI).
+        let use_claude_cli = provider == "anthropic"
+            && std::env::var("CLAUDE_CODE_OAUTH_TOKEN")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
+
+        let output = if use_claude_cli {
+            call_via_claude_cli(&prompt, model, max_tokens, timeout).await?
         } else {
-            Vec::new()
+            // Story 5.1 + 5.2: Build message list from chat history with optional truncation
+            let session_name_for_rig = config.get_str("session");
+            let truncation = TruncationStrategy::from_config(config);
+            let rig_messages: Vec<Message> = if let Some(session) = session_name_for_rig {
+                let history = ctx.get_chat_messages(session);
+                let truncated = truncate_messages(&history, &truncation);
+                to_rig_messages(&truncated)
+            } else {
+                Vec::new()
+            };
+
+            call_via_rig(
+                provider,
+                model,
+                &api_key,
+                base_url.as_deref(),
+                rig_messages,
+                &prompt,
+                temperature,
+                max_tokens,
+                timeout,
+            )
+            .await?
         };
 
-        let output = call_via_rig(
-            provider,
-            model,
-            &api_key,
-            base_url.as_deref(),
-            rig_messages,
-            &prompt,
-            temperature,
-            max_tokens,
-            timeout,
-        )
-        .await?;
+        let session_name = config.get_str("session");
 
         // Story 5.1: Store sent message and response in chat history
         if let Some(session) = session_name {
@@ -458,6 +524,146 @@ impl StepExecutor for ChatExecutor {
         }
 
         Ok(output)
+    }
+}
+
+/// Simple base64 encoding for passing prompt text safely through shell.
+/// Uses the `base64` crate if available, otherwise falls back to a basic
+/// implementation.  We use data_encoding which is already a transitive dep.
+fn base64_encode(input: &str) -> String {
+    // Simple base64 implementation without external dependency
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = input.as_bytes();
+    let mut result = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((n >> 18) & 63) as usize] as char);
+        result.push(CHARS[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((n >> 6) & 63) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(n & 63) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
+// ── SandboxAwareExecutor for ChatExecutor ────────────────────────
+// When using Claude CLI (OAuth/MAX), we need to run `claude -p` inside
+// the Docker container where the CLI is installed.
+
+use crate::steps::SandboxAwareExecutor;
+type SharedSandbox = Option<std::sync::Arc<tokio::sync::Mutex<crate::sandbox::docker::DockerSandbox>>>;
+
+#[async_trait]
+impl SandboxAwareExecutor for ChatExecutor {
+    async fn execute_sandboxed(
+        &self,
+        step_def: &StepDef,
+        config: &StepConfig,
+        context: &Context,
+        sandbox: &SharedSandbox,
+    ) -> Result<StepOutput, StepError> {
+        let provider = config.get_str("provider").unwrap_or("anthropic");
+        let use_claude_cli = provider == "anthropic"
+            && std::env::var("CLAUDE_CODE_OAUTH_TOKEN")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
+
+        // If not using Claude CLI, or no sandbox, fall back to normal execute
+        if !use_claude_cli || sandbox.is_none() {
+            return self.execute(step_def, config, context).await;
+        }
+
+        // Using Claude CLI inside sandbox container
+        let model = config.get_str("model").unwrap_or("claude-3-haiku-20240307");
+        let max_tokens = config.get_u64("max_tokens").unwrap_or(1024);
+        let timeout = config
+            .get_duration("timeout")
+            .unwrap_or(std::time::Duration::from_secs(120));
+
+        let model_flag = if model.contains("opus") {
+            "opus"
+        } else if model.contains("haiku") {
+            "haiku"
+        } else {
+            "sonnet"
+        };
+
+        let prompt_template = step_def
+            .prompt
+            .as_ref()
+            .ok_or_else(|| StepError::Fail("chat step missing 'prompt' field".into()))?;
+        let prompt = context.render_template(prompt_template)?;
+
+        // Escape the prompt for shell execution inside Docker
+        let escaped_prompt = prompt.replace('\'', "'\\''");
+
+        tracing::info!(
+            model = model_flag,
+            max_tokens,
+            "Chat step: using Claude CLI inside sandbox (OAuth/MAX subscription)"
+        );
+
+        let sandbox_guard = sandbox.as_ref().unwrap().lock().await;
+
+        // 1. Setup: create .claude.json for minion user and write prompt to temp file
+        let prompt_b64 = base64_encode(&prompt);
+        let setup_cmd = format!(
+            "mkdir -p /home/minion/.claude && \
+             echo '{{}}' > /home/minion/.claude.json && \
+             chown -R minion:minion /home/minion/.claude /home/minion/.claude.json && \
+             echo '{}' | base64 -d > /tmp/minion-prompt.txt",
+            prompt_b64
+        );
+        let _ = sandbox_guard.run_command(&setup_cmd).await;
+
+        // 2. Run claude as minion user, reading prompt from file
+        let claude_cmd = format!(
+            "cd /workspace && claude -p \"$(cat /tmp/minion-prompt.txt)\" --output-format text --model {} --max-turns 1 --dangerously-skip-permissions",
+            model_flag
+        );
+
+        let result = tokio::time::timeout(timeout, sandbox_guard.run_command_as_user(&claude_cmd, "minion"))
+            .await
+            .map_err(|_| StepError::Timeout(timeout))?
+            .map_err(|e| StepError::Fail(format!("claude CLI in sandbox failed: {e}")))?;
+
+        let response = result.stdout.trim().to_string();
+
+        if result.exit_code != 0 {
+            return Err(StepError::Fail(format!(
+                "claude CLI failed (exit {}): {}",
+                result.exit_code, result.stderr
+            )));
+        }
+
+        // Store in chat history if session is active
+        let session_name = config.get_str("session");
+        if let Some(session) = session_name {
+            context.append_chat_messages(
+                session,
+                vec![
+                    ChatMessage { role: "user".to_string(), content: prompt },
+                    ChatMessage { role: "assistant".to_string(), content: response.clone() },
+                ],
+            );
+        }
+
+        Ok(StepOutput::Chat(ChatOutput {
+            response,
+            model: model.to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+        }))
     }
 }
 

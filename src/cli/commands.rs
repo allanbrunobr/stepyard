@@ -254,16 +254,20 @@ async fn validate_environment(
             crate::workflow::schema::StepType::Chat | crate::workflow::schema::StepType::Map
         )
     });
-    if has_chat_steps && std::env::var("ANTHROPIC_API_KEY").is_err() {
+    let has_anthropic_auth = std::env::var("ANTHROPIC_API_KEY").is_ok()
+        || std::env::var("CLAUDE_CODE_OAUTH_TOKEN").is_ok()
+        || std::env::var("ANTHROPIC_OAUTH_TOKEN").is_ok();
+    if has_chat_steps && !has_anthropic_auth {
         errors.push(
-            "ANTHROPIC_API_KEY is not set.\n\
-             This workflow uses AI steps (chat/map) that require the Anthropic API.\n\
+            "Anthropic credentials not found.\n\
+             This workflow uses AI steps (chat/map) that require Anthropic.\n\
              \n\
-             Set it in your shell profile (~/.zshrc, ~/.bashrc, etc.):\n\
-               export ANTHROPIC_API_KEY=\"sk-ant-...\"\n\
+             Option 1 — Claude MAX subscription (uses claude CLI):\n\
+               export CLAUDE_CODE_OAUTH_TOKEN=\"sk-ant-oat01-...\"\n\
+               (generate with: claude setup-token)\n\
              \n\
-             Or pass it inline:\n\
-               ANTHROPIC_API_KEY=\"sk-ant-...\" minion execute <workflow> -- <target>"
+             Option 2 — API key (pay-per-token):\n\
+               export ANTHROPIC_API_KEY=\"sk-ant-...\""
                 .to_string(),
         );
     }

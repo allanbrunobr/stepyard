@@ -72,6 +72,7 @@ impl SandboxConfig {
     pub const AUTO_ENV: &'static [&'static str] = &[
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_OAUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
         "OPENAI_API_KEY",
         "GH_TOKEN",
         "GITHUB_TOKEN",

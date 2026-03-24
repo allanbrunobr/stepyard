@@ -817,7 +817,13 @@ impl Engine {
                     .execute(step_def, &config, &self.context)
                     .await
             }
-            StepType::Chat => ChatExecutor.execute(step_def, &config, &self.context).await,
+            StepType::Chat => {
+                // When using Claude CLI (OAuth/MAX), chat steps need sandbox access
+                // to execute `claude -p` inside the container where the CLI is installed.
+                ChatExecutor
+                    .execute_sandboxed(step_def, &config, &self.context, sandbox_ref)
+                    .await
+            }
             StepType::Map => {
                 MapExecutor::new(&self.workflow.scopes, self.sandbox.clone())
                     .with_config_manager(Some(Arc::clone(&self.config_manager)))
