@@ -71,12 +71,9 @@ impl SandboxConfig {
     /// credentials needed by workflows.
     pub const AUTO_ENV: &'static [&'static str] = &[
         "ANTHROPIC_API_KEY",
-        "ANTHROPIC_OAUTH_TOKEN",
         "OPENAI_API_KEY",
         "GH_TOKEN",
         "GITHUB_TOKEN",
-        "LITELLM_GATEWAY_URL",
-        "LITELLM_API_KEY",
     ];
 
     /// Well-known directories to exclude when copying workspace into the
@@ -120,11 +117,7 @@ impl SandboxConfig {
     }
 
     /// Secrets that are proxied and should NOT be passed as env vars into the container.
-    pub const PROXIED_SECRETS: &'static [&'static str] = &[
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_OAUTH_TOKEN",
-        "LITELLM_API_KEY",
-    ];
+    pub const PROXIED_SECRETS: &'static [&'static str] = &["ANTHROPIC_API_KEY"];
 
     /// Return the effective env-var list: explicit config overrides auto-env.
     pub fn effective_env(&self) -> Vec<String> {

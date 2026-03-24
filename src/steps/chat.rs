@@ -357,7 +357,6 @@ impl StepExecutor for ChatExecutor {
             .unwrap_or(Duration::from_secs(120));
 
         // Resolve API key (Ollama doesn't need one)
-        // For Anthropic, also checks ANTHROPIC_OAUTH_TOKEN (Claude MAX subscription)
         let api_key = if provider == "ollama" {
             String::new()
         } else {
@@ -372,33 +371,12 @@ impl StepExecutor for ChatExecutor {
                 "mistral" => "MISTRAL_API_KEY",
                 _ => "ANTHROPIC_API_KEY",
             });
-            // For Anthropic: prefer OAuth token over API key
-            if provider == "anthropic" {
-                if let Ok(token) = std::env::var("ANTHROPIC_OAUTH_TOKEN") {
-                    if !token.is_empty() {
-                        token
-                    } else {
-                        std::env::var(api_key_env).map_err(|_| {
-                            StepError::Fail(format!(
-                                "API key not found: set ANTHROPIC_OAUTH_TOKEN (Claude MAX) or ANTHROPIC_API_KEY"
-                            ))
-                        })?
-                    }
-                } else {
-                    std::env::var(api_key_env).map_err(|_| {
-                        StepError::Fail(format!(
-                            "API key not found: set ANTHROPIC_OAUTH_TOKEN (Claude MAX) or ANTHROPIC_API_KEY"
-                        ))
-                    })?
-                }
-            } else {
-                std::env::var(api_key_env).map_err(|_| {
-                    StepError::Fail(format!(
-                        "API key not found: environment variable '{}' is not set",
-                        api_key_env
-                    ))
-                })?
-            }
+            std::env::var(api_key_env).map_err(|_| {
+                StepError::Fail(format!(
+                    "API key not found: environment variable '{}' is not set",
+                    api_key_env
+                ))
+            })?
         };
 
         // Resolve base_url: generic > provider-specific > default
@@ -526,8 +504,8 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("API key not found") || err.contains("DEFINITELY_NOT_SET_API_KEY_XYZ123"),
-            "Error should mention missing API key: {}", err
+            err.contains("DEFINITELY_NOT_SET_API_KEY_XYZ123"),
+            "Error should mention env var name: {}", err
         );
     }
 
