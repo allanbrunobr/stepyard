@@ -1,6 +1,6 @@
 [package]
 name = "minion-engine"
-version = "0.7.5"
+version = "0.7.6"
 edition = "2021"
 description = "AI workflow engine that orchestrates Claude Code CLI — automate code review, refactoring, and PR creation with YAML workflows"
 license = "MIT"
@@ -12,8 +12,6 @@ categories = ["command-line-utilities", "development-tools", "asynchronous"]
 readme = "README.md"
 authors = ["Allan Bruno"]
 exclude = [
-  "/workflows/",
-  "/prompts/",
   "/Formula/",
   "/.github/",
   "PROMPT.md",
