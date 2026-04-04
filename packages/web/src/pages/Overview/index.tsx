@@ -1,4 +1,4 @@
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { DateRangeSelector } from '@/components/ui/DateRangeSelector';
 import { UsageChart } from '@/components/charts/UsageChart';
 import { PeakHoursChart } from '@/components/charts/PeakHoursChart';
