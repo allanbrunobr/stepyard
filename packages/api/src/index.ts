@@ -4,6 +4,7 @@ import { logger } from './logger';
 import { runMigrations } from './migrations';
 import { healthRouter } from './routes/health';
 import { eventsRouter } from './routes/events';
+import { workflowsRouter } from './routes/workflows';
 import { startCleanupScheduler } from './scheduler';
 
 dotenv.config({ path: '../../.env' });
@@ -15,6 +16,7 @@ app.use(express.json());
 
 app.use('/api', healthRouter);
 app.use('/api', eventsRouter);
+app.use('/api', workflowsRouter);
 
 async function start(): Promise<void> {
   await runMigrations();
