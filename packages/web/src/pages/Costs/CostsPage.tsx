@@ -38,6 +38,7 @@ export function CostsPage() {
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [byDeveloper, setByDeveloper] = useState<CostByDeveloper[]>([]);
   const [byWorkflow, setByWorkflow] = useState<CostByWorkflow[]>([]);
   const [byRepo, setByRepo] = useState<CostByRepo[]>([]);
@@ -45,26 +46,34 @@ export function CostsPage() {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
-    try {
-      const qs = `from=${from}&to=${to}`;
-      const [devData, wfData, repoData, dailyData] = await Promise.all([
+    setError(null);
+    const qs = `from=${from}&to=${to}`;
+
+    const [devResult, wfResult, repoResult, dailyResult] =
+      await Promise.allSettled([
         apiFetch<CostByDeveloper[]>(`/analytics/costs/by-developer?${qs}`),
         apiFetch<CostByWorkflow[]>(`/analytics/costs/by-workflow?${qs}`),
         apiFetch<CostByRepo[]>(`/analytics/costs/by-repo?${qs}`),
         apiFetch<DailyCost[]>(`/analytics/costs/daily?${qs}`),
       ]);
-      setByDeveloper(devData);
-      setByWorkflow(wfData);
-      setByRepo(repoData);
-      setDaily(dailyData);
-    } catch {
-      setByDeveloper([]);
-      setByWorkflow([]);
-      setByRepo([]);
-      setDaily([]);
-    } finally {
-      setLoading(false);
+
+    setByDeveloper(devResult.status === "fulfilled" ? devResult.value : []);
+    setByWorkflow(wfResult.status === "fulfilled" ? wfResult.value : []);
+    setByRepo(repoResult.status === "fulfilled" ? repoResult.value : []);
+    setDaily(dailyResult.status === "fulfilled" ? dailyResult.value : []);
+
+    const failures = [devResult, wfResult, repoResult, dailyResult].filter(
+      (r) => r.status === "rejected"
+    );
+    if (failures.length > 0) {
+      setError(
+        failures.length === 4
+          ? "Failed to load cost data. Please try again."
+          : "Some cost data could not be loaded."
+      );
     }
+
+    setLoading(false);
   }, [from, to]);
 
   useEffect(() => {
@@ -88,9 +97,15 @@ export function CostsPage() {
         />
       </PageHeader>
 
+      {error && (
+        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+
       {loading ? (
         <LoadingState />
-      ) : !hasData ? (
+      ) : !hasData && !error ? (
         <EmptyState />
       ) : (
         <div className="space-y-6">

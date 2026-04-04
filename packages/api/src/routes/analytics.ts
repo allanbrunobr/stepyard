@@ -4,9 +4,20 @@ import pool from "../db";
 
 const router = Router();
 
+function isValidDate(value: string): boolean {
+  const d = new Date(value + "T00:00:00Z");
+  return !isNaN(d.getTime()) && d.toISOString().startsWith(value);
+}
+
 const dateRangeSchema = z.object({
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "from must be YYYY-MM-DD"),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "to must be YYYY-MM-DD"),
+  from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "from must be YYYY-MM-DD")
+    .refine(isValidDate, "from is not a valid calendar date"),
+  to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "to must be YYYY-MM-DD")
+    .refine(isValidDate, "to is not a valid calendar date"),
 });
 
 function parseDateRange(query: Record<string, unknown>) {
