@@ -1,35 +1,32 @@
 import { NavLink } from 'react-router-dom';
+import { LayoutDashboard, List, Users, DollarSign } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
-  { label: 'Overview', path: '/' },
-  { label: 'Workflow Log', path: '/workflows' },
-  { label: 'Developer Activity', path: '/developers' },
-  { label: 'Cost Tracking', path: '/costs' },
+  { to: '/', label: 'Overview', icon: LayoutDashboard },
+  { to: '/workflows', label: 'Workflows', icon: List },
+  { to: '/developers', label: 'Developers', icon: Users },
+  { to: '/costs', label: 'Costs', icon: DollarSign },
 ];
 
 export function Sidebar() {
   return (
-    <aside className="w-60 h-screen border-r border-[hsl(var(--border))] bg-[hsl(var(--card))] flex flex-col">
-      <div className="p-4 border-b border-[hsl(var(--border))]">
-        <h1 className="text-lg font-bold">Minion Dashboard</h1>
-      </div>
-      <nav className="flex-1 p-2">
-        {navItems.map((item) => (
+    <aside className="w-60 border-r bg-card min-h-screen p-4">
+      <h2 className="text-lg font-bold mb-6 px-2">Minion Dashboard</h2>
+      <nav className="flex flex-col gap-1">
+        {navItems.map(({ to, label, icon: Icon }) => (
           <NavLink
-            key={item.path}
-            to={item.path}
-            end={item.path === '/'}
+            key={to}
+            to={to}
             className={({ isActive }) =>
               cn(
-                'block px-3 py-2 rounded-md text-sm font-medium mb-1 transition-colors',
-                isActive
-                  ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
-                  : 'text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--muted))]'
+                'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent',
+                isActive && 'bg-accent text-accent-foreground',
               )
             }
           >
-            {item.label}
+            <Icon className="h-4 w-4" />
+            {label}
           </NavLink>
         ))}
       </nav>
