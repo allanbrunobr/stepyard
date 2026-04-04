@@ -5,9 +5,18 @@ import { logger } from '../logger';
 
 export const workflowsRouter = Router();
 
-// Workflow read endpoints are unauthenticated: this is an internal dashboard
-// deployed on a private VPS. The write endpoint (/api/events) in events.ts
-// retains its own Bearer token auth to protect ingestion.
+function requireAuth(req: Request, res: Response, next: Function) {
+  const authHeader = req.headers.authorization;
+  const secret = process.env.API_SECRET;
+  if (!secret || !authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== secret) {
+    res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid or missing authorization' } });
+    return;
+  }
+  next();
+}
+
+// Apply to all workflow routes
+workflowsRouter.use(requireAuth);
 
 // --- Validation Schemas ---
 
@@ -125,16 +134,16 @@ workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => 
       batch = await client.query(`FETCH ${batchSize} FROM ${cursorName}`);
       for (const row of batch.rows) {
         const fields = [
-          csvEscape(String(row.started_at ?? '')),
-          csvEscape(String(row.user_name ?? '')),
-          csvEscape(String(row.workflow ?? '')),
-          csvEscape(String(row.target ?? '')),
-          csvEscape(String(row.repo ?? '')),
-          csvEscape(String(row.status ?? '')),
-          row.duration_ms ?? '',
-          row.total_tokens ?? '',
-          row.cost_usd ?? '',
-          csvEscape(String(row.error ?? '')),
+          csvEscape(String(row.started_at)),
+          csvEscape(row.user_name ?? ''),
+          csvEscape(row.workflow ?? ''),
+          csvEscape(row.target ?? ''),
+          csvEscape(row.repo ?? ''),
+          csvEscape(row.status ?? ''),
+          String(row.duration_ms ?? ''),
+          String(row.total_tokens ?? ''),
+          String(row.cost_usd ?? ''),
+          csvEscape(row.error ?? ''),
           row.sandbox_confirmed ? 'Yes' : 'No',
         ];
         res.write(fields.join(',') + '\n');
@@ -256,13 +265,12 @@ workflowsRouter.get('/workflows/:runId', async (req: Request, res: Response) => 
 // --- Helpers ---
 
 function csvEscape(value: string): string {
-  // Neutralize formula injection: prefix dangerous leading chars with a single quote
-  let safe = value;
-  if (/^[=+\-@\t\r]/.test(safe)) {
-    safe = `'${safe}`;
+  // Neutralize spreadsheet formula injection
+  if (/^[=+\-@\t\r]/.test(value)) {
+    value = "'" + value;
   }
-  if (safe.includes(',') || safe.includes('"') || safe.includes('\n') || safe.includes("'")) {
-    return `"${safe.replace(/"/g, '""')}"`;
+  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+    return `"${value.replace(/"/g, '""')}"`;
   }
-  return safe;
+  return value;
 }
