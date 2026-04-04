@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api-client';
-import type { WorkflowRun, WorkflowStep } from '../../../types';
+import type { WorkflowRun, WorkflowStep } from '../types';
 
 interface PaginationMeta {
   total: number;

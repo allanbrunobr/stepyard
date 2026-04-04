@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { StatusBadge } from '@/components/shared/StatusBadge';
-import type { WorkflowRun } from '../../../../types';
+import type { WorkflowRun } from '../../types';
 import { formatDuration, formatCost, formatTimestamp } from '@/lib/format';
 
 interface Column {
@@ -52,7 +52,7 @@ export function WorkflowTable({ data, sort, order, onSort }: WorkflowTableProps)
       case 'cost_usd':
         return row.cost_usd != null ? formatCost(row.cost_usd) : '-';
       default:
-        return (row as Record<string, unknown>)[key] as string ?? '-';
+        return (row as unknown as Record<string, unknown>)[key] as string ?? '-';
     }
   }
 

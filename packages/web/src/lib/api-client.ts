@@ -1,4 +1,5 @@
 const BASE_URL = '/api';
+const API_TOKEN = import.meta.env.VITE_API_SECRET ?? 'change-me-in-production';
 
 export class ApiError extends Error {
   constructor(
@@ -17,8 +18,12 @@ export async function apiFetch<T>(
   init?: RequestInit,
 ): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${API_TOKEN}`,
+      ...init?.headers,
+    },
   });
 
   if (!res.ok) {

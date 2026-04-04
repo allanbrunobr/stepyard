@@ -59,14 +59,29 @@ export function WorkflowLogPage() {
     setSearchParams({});
   }
 
-  function handleExport() {
+  async function handleExport() {
     const params = new URLSearchParams();
     if (filters.user_name) params.set('user_name', filters.user_name);
     if (filters.workflow) params.set('workflow', filters.workflow);
     if (filters.status) params.set('status', filters.status);
     if (filters.from) params.set('from', filters.from);
     if (filters.to) params.set('to', filters.to);
-    window.location.href = `/api/workflows/export?${params.toString()}`;
+
+    const token = import.meta.env.VITE_API_SECRET ?? 'change-me-in-production';
+    const res = await fetch(`/api/workflows/export?${params.toString()}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') ?? '';
+    const filenameMatch = disposition.match(/filename="(.+)"/);
+    const filename = filenameMatch?.[1] ?? 'minion-dashboard-export.csv';
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   return (

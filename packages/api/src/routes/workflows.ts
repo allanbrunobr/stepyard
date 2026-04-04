@@ -5,6 +5,25 @@ import { logger } from '../logger';
 
 export const workflowsRouter = Router();
 
+// --- Auth Middleware ---
+
+function authenticate(req: Request, res: Response): boolean {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Missing or invalid authorization header' } });
+    return false;
+  }
+
+  const token = authHeader.slice(7);
+  const secret = process.env.API_SECRET || 'change-me-in-production';
+  if (token !== secret) {
+    res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid token' } });
+    return false;
+  }
+
+  return true;
+}
+
 // --- Validation Schemas ---
 
 const SORTABLE_COLUMNS = [
@@ -64,7 +83,7 @@ function buildWhereClause(filters: {
     values.push(filters.from);
   }
   if (filters.to) {
-    conditions.push(`started_at <= $${paramIdx++}`);
+    conditions.push(`started_at < ($${paramIdx++}::date + INTERVAL '1 day')`);
     values.push(filters.to);
   }
 
@@ -75,6 +94,8 @@ function buildWhereClause(filters: {
 // --- CSV Export (registered BEFORE :run_id to avoid param conflict) ---
 
 workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => {
+  if (!authenticate(req, res)) return;
+
   const parsed = listQuerySchema.omit({ page: true, limit: true, sort: true, order: true }).safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid query parameters', details: parsed.error.issues } });
@@ -111,16 +132,16 @@ workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => 
 
     for (const row of result.rows) {
       const fields = [
-        row.started_at,
-        row.user_name,
-        row.workflow,
-        row.target ?? '',
-        row.repo ?? '',
-        row.status,
+        csvEscape(String(row.started_at ?? '')),
+        csvEscape(String(row.user_name ?? '')),
+        csvEscape(String(row.workflow ?? '')),
+        csvEscape(String(row.target ?? '')),
+        csvEscape(String(row.repo ?? '')),
+        csvEscape(String(row.status ?? '')),
         row.duration_ms ?? '',
         row.total_tokens ?? '',
         row.cost_usd ?? '',
-        csvEscape(row.error ?? ''),
+        csvEscape(String(row.error ?? '')),
         row.sandbox_confirmed ? 'Yes' : 'No',
       ];
       res.write(fields.join(',') + '\n');
@@ -140,6 +161,8 @@ workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => 
 // --- GET /workflows (paginated list) ---
 
 workflowsRouter.get('/workflows', async (req: Request, res: Response) => {
+  if (!authenticate(req, res)) return;
+
   const parsed = listQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid query parameters', details: parsed.error.issues } });
@@ -180,7 +203,9 @@ workflowsRouter.get('/workflows', async (req: Request, res: Response) => {
 
 // --- GET /workflows/distinct (for filter dropdowns) ---
 
-workflowsRouter.get('/workflows/distinct', async (_req: Request, res: Response) => {
+workflowsRouter.get('/workflows/distinct', async (req: Request, res: Response) => {
+  if (!authenticate(req, res)) return;
+
   try {
     const [users, workflows, statuses] = await Promise.all([
       pool.query('SELECT DISTINCT user_name FROM workflow_runs ORDER BY user_name'),
@@ -204,6 +229,8 @@ workflowsRouter.get('/workflows/distinct', async (_req: Request, res: Response) 
 // --- GET /workflows/:runId (detail with steps) ---
 
 workflowsRouter.get('/workflows/:runId', async (req: Request, res: Response) => {
+  if (!authenticate(req, res)) return;
+
   const { runId } = req.params;
 
   try {
@@ -234,8 +261,13 @@ workflowsRouter.get('/workflows/:runId', async (req: Request, res: Response) => 
 // --- Helpers ---
 
 function csvEscape(value: string): string {
-  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-    return `"${value.replace(/"/g, '""')}"`;
+  // Neutralize formula injection: prefix dangerous leading chars with a single quote
+  let safe = value;
+  if (/^[=+\-@\t\r]/.test(safe)) {
+    safe = `'${safe}`;
   }
-  return value;
+  if (safe.includes(',') || safe.includes('"') || safe.includes('\n') || safe.includes("'")) {
+    return `"${safe.replace(/"/g, '""')}"`;
+  }
+  return safe;
 }

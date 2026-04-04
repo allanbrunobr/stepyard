@@ -2,7 +2,7 @@ import { Badge } from '@/components/ui/badge';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { Shield } from 'lucide-react';
 import { formatDuration } from '@/lib/format';
-import type { WorkflowStep } from '../../../../types';
+import type { WorkflowStep } from '../../types';
 
 const stepTypeLabels: Record<string, string> = {
   cmd: 'Command',
