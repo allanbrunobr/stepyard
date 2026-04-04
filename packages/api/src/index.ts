@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import dotenv from 'dotenv';
 import { logger } from './logger';
 import { runMigrations } from './migrations';
@@ -8,15 +9,12 @@ import { startCleanupScheduler } from './scheduler';
 
 dotenv.config({ path: '../../.env' });
 
-const apiSecret = process.env.API_SECRET;
-if (!apiSecret || apiSecret === 'change-me-in-production') {
-  logger.fatal('API_SECRET must be set to a non-default value. Exiting.');
-  process.exit(1);
-}
-
 const app = express();
-const port = parseInt(process.env.API_PORT || '3001', 10);
+const port = parseInt(process.env.API_PORT || process.env.PORT || '3001', 10);
 
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+}));
 app.use(express.json());
 
 app.use('/api', healthRouter);
@@ -35,3 +33,5 @@ start().catch((err) => {
   logger.error(err, 'Failed to start server');
   process.exit(1);
 });
+
+export default app;

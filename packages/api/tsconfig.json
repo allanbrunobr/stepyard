@@ -3,19 +3,17 @@
     "strict": true,
     "target": "ES2022",
     "module": "commonjs",
+    "lib": ["ES2022"],
     "moduleResolution": "node",
     "outDir": "./dist",
     "rootDir": "./src",
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "declaration": true,
     "sourceMap": true,
-    "paths": {
-      "@types/*": ["../../types/*"]
-    },
     "baseUrl": "."
   },
-  "include": ["src/**/*.ts"],
-  "references": []
+  "include": ["src/**/*"]
 }
