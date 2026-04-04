@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AppLayout } from "./components/layout";
+import { DevelopersPage } from "./pages/Developers";
 
 function App() {
   return (
@@ -9,6 +10,7 @@ function App() {
           <Route path="/" element={<div>Overview (wt2)</div>} />
           <Route path="/workflows" element={<div>Workflows (wt3)</div>} />
           {/* Route registrations below — append only */}
+          <Route path="/developers" element={<DevelopersPage />} />
         </Routes>
       </AppLayout>
     </BrowserRouter>
