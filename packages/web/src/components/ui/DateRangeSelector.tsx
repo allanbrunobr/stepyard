@@ -8,7 +8,7 @@ interface DateRangeSelectorProps {
   onCustomRange: (from: Date, to: Date) => void;
 }
 
-const presets: { label: string; value: RangePreset }[] = [
+const presetButtons: { label: string; value: RangePreset }[] = [
   { label: 'Today', value: 'today' },
   { label: '7d', value: '7d' },
   { label: '30d', value: '30d' },
@@ -17,6 +17,7 @@ const presets: { label: string; value: RangePreset }[] = [
 ];
 
 export function DateRangeSelector({ preset, onPresetChange, onCustomRange }: DateRangeSelectorProps) {
+  const [showCustomPicker, setShowCustomPicker] = React.useState(preset === 'custom');
   const [customFrom, setCustomFrom] = React.useState('');
   const [customTo, setCustomTo] = React.useState('');
 
@@ -29,19 +30,28 @@ export function DateRangeSelector({ preset, onPresetChange, onCustomRange }: Dat
     }
   };
 
+  const handleClick = (value: RangePreset) => {
+    if (value === 'custom') {
+      setShowCustomPicker(true);
+    } else {
+      setShowCustomPicker(false);
+      onPresetChange(value);
+    }
+  };
+
+  // Determine which button is visually active
+  const activeButton = showCustomPicker && preset !== 'custom' ? null : preset;
+
   return (
     <div className="flex items-center gap-2">
       <div className="flex rounded-lg border border-[hsl(var(--border))] overflow-hidden">
-        {presets.map((p) => (
+        {presetButtons.map((p) => (
           <button
             key={p.value}
-            onClick={() => {
-              if (p.value !== 'custom') onPresetChange(p.value);
-              else onPresetChange('custom');
-            }}
+            onClick={() => handleClick(p.value)}
             className={cn(
               'px-3 py-1.5 text-sm font-medium transition-colors',
-              preset === p.value
+              (p.value === 'custom' ? showCustomPicker : activeButton === p.value)
                 ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]'
                 : 'hover:bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]'
             )}
@@ -50,7 +60,7 @@ export function DateRangeSelector({ preset, onPresetChange, onCustomRange }: Dat
           </button>
         ))}
       </div>
-      {preset === 'custom' && (
+      {showCustomPicker && (
         <div className="flex items-center gap-2">
           <input
             type="date"

@@ -20,12 +20,22 @@ interface PeakHour {
 
 const router = Router();
 
-function parseDateRange(req: Request): { from: Date; to: Date } {
+function parseDateRange(req: Request, res: Response): { from: Date; to: Date } | null {
   const now = new Date();
   const to = req.query.to ? new Date(req.query.to as string) : now;
   const from = req.query.from
     ? new Date(req.query.from as string)
     : new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+    res.status(400).json({ error: 'INVALID_DATE_RANGE', message: 'Invalid from or to date parameter' });
+    return null;
+  }
+
+  if (from > to) {
+    res.status(400).json({ error: 'INVALID_DATE_RANGE', message: 'from date must be before to date' });
+    return null;
+  }
 
   return { from, to };
 }
@@ -33,7 +43,9 @@ function parseDateRange(req: Request): { from: Date; to: Date } {
 // GET /api/overview/summary
 router.get('/summary', async (req: Request, res: Response) => {
   try {
-    const { from, to } = parseDateRange(req);
+    const range = parseDateRange(req, res);
+    if (!range) return;
+    const { from, to } = range;
 
     const result = await pool.query(
       `SELECT
@@ -64,13 +76,15 @@ router.get('/summary', async (req: Request, res: Response) => {
 // GET /api/overview/daily-usage
 router.get('/daily-usage', async (req: Request, res: Response) => {
   try {
-    const { from, to } = parseDateRange(req);
+    const range = parseDateRange(req, res);
+    if (!range) return;
+    const { from, to } = range;
 
     const result = await pool.query(
-      `SELECT DATE(started_at) AS date, COUNT(*)::int AS count
+      `SELECT DATE(started_at AT TIME ZONE 'UTC') AS date, COUNT(*)::int AS count
       FROM workflow_runs
       WHERE started_at >= $1 AND started_at <= $2
-      GROUP BY DATE(started_at)
+      GROUP BY DATE(started_at AT TIME ZONE 'UTC')
       ORDER BY date`,
       [from.toISOString(), to.toISOString()]
     );
@@ -108,13 +122,15 @@ router.get('/daily-usage', async (req: Request, res: Response) => {
 // GET /api/overview/peak-hours
 router.get('/peak-hours', async (req: Request, res: Response) => {
   try {
-    const { from, to } = parseDateRange(req);
+    const range = parseDateRange(req, res);
+    if (!range) return;
+    const { from, to } = range;
 
     const result = await pool.query(
-      `SELECT EXTRACT(HOUR FROM started_at)::int AS hour, COUNT(*)::int AS count
+      `SELECT EXTRACT(HOUR FROM started_at AT TIME ZONE 'UTC')::int AS hour, COUNT(*)::int AS count
       FROM workflow_runs
       WHERE started_at >= $1 AND started_at <= $2
-      GROUP BY EXTRACT(HOUR FROM started_at)
+      GROUP BY EXTRACT(HOUR FROM started_at AT TIME ZONE 'UTC')
       ORDER BY hour`,
       [from.toISOString(), to.toISOString()]
     );
