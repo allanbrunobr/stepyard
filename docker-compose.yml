@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-minion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-minion_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-minion_engine}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-minion}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: ./packages/api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-3001}:3001"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-minion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-minion_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-minion_engine}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      API_PORT: 3001
+      API_SECRET: ${API_SECRET:-change-me-in-production}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./packages/api/src:/app/src
+      - ./packages/api/migrations:/app/migrations
+      - ./types:/app/types
+
+  web:
+    build: ./packages/web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    volumes:
+      - ./packages/web/src:/app/src
+      - ./packages/web/index.html:/app/index.html
+      - ./types:/app/types
+
+volumes:
+  pgdata:
