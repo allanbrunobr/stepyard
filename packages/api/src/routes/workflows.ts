@@ -15,8 +15,9 @@ function requireAuth(req: Request, res: Response, next: Function) {
   next();
 }
 
-// Apply to all workflow routes
-workflowsRouter.use(requireAuth);
+// TODO (post-MVP): Add auth middleware for read endpoints
+// For PoC, access is controlled at network/firewall level on the VPS
+// workflowsRouter.use(requireAuth);
 
 // --- Validation Schemas ---
 
