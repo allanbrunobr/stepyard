@@ -1,0 +1,211 @@
+import { useEffect, useState, useCallback } from "react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import { PageHeader } from "../../components/layout";
+import {
+  DateRangePicker,
+  LoadingState,
+  EmptyState,
+} from "../../components/analytics";
+import { CostTable } from "../../components/analytics/CostTable";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { apiFetch } from "../../lib/api-client";
+import { formatUsd } from "../../lib/utils";
+import type {
+  CostByDeveloper,
+  CostByWorkflow,
+  CostByRepo,
+  DailyCost,
+} from "../../../../types";
+
+function toLocalDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function defaultFrom(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 30);
+  return toLocalDateStr(d);
+}
+
+function defaultTo(): string {
+  return toLocalDateStr(new Date());
+}
+
+export function CostsPage() {
+  const [from, setFrom] = useState(defaultFrom);
+  const [to, setTo] = useState(defaultTo);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [byDeveloper, setByDeveloper] = useState<CostByDeveloper[]>([]);
+  const [byWorkflow, setByWorkflow] = useState<CostByWorkflow[]>([]);
+  const [byRepo, setByRepo] = useState<CostByRepo[]>([]);
+  const [daily, setDaily] = useState<DailyCost[]>([]);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const qs = `from=${from}&to=${to}`;
+
+    const [devResult, wfResult, repoResult, dailyResult] =
+      await Promise.allSettled([
+        apiFetch<CostByDeveloper[]>(`/analytics/costs/by-developer?${qs}`),
+        apiFetch<CostByWorkflow[]>(`/analytics/costs/by-workflow?${qs}`),
+        apiFetch<CostByRepo[]>(`/analytics/costs/by-repo?${qs}`),
+        apiFetch<DailyCost[]>(`/analytics/costs/daily?${qs}`),
+      ]);
+
+    setByDeveloper(devResult.status === "fulfilled" ? devResult.value : []);
+    setByWorkflow(wfResult.status === "fulfilled" ? wfResult.value : []);
+    setByRepo(repoResult.status === "fulfilled" ? repoResult.value : []);
+    setDaily(dailyResult.status === "fulfilled" ? dailyResult.value : []);
+
+    const failures = [devResult, wfResult, repoResult, dailyResult].filter(
+      (r) => r.status === "rejected"
+    );
+    if (failures.length > 0) {
+      setError(
+        failures.length === 4
+          ? "Failed to load cost data. Please try again."
+          : "Some cost data could not be loaded."
+      );
+    }
+
+    setLoading(false);
+  }, [from, to]);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
+
+  const hasData =
+    byDeveloper.length > 0 ||
+    byWorkflow.length > 0 ||
+    byRepo.length > 0 ||
+    daily.length > 0;
+
+  return (
+    <div>
+      <PageHeader title="Cost Tracking" description="AI spend breakdowns and trends">
+        <DateRangePicker
+          from={from}
+          to={to}
+          onFromChange={setFrom}
+          onToChange={setTo}
+        />
+      </PageHeader>
+
+      {error && (
+        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <LoadingState />
+      ) : !hasData && !error ? (
+        <EmptyState />
+      ) : (
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Daily Cost Trend</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {daily.length === 0 ? (
+                <EmptyState message="No daily cost data available." />
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={daily}>
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 12 }}
+                      label={{ value: "Date", position: "insideBottom", offset: -5 }}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 12 }}
+                      tickFormatter={(v: number) => `$${v.toFixed(0)}`}
+                      label={{
+                        value: "Cost (USD)",
+                        angle: -90,
+                        position: "insideLeft",
+                        offset: 10,
+                      }}
+                    />
+                    <Tooltip
+                      formatter={(value: number) => [formatUsd(value), "Cost"]}
+                      labelFormatter={(label: string) => `Date: ${label}`}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="cost_usd"
+                      stroke="hsl(222.2 47.4% 11.2%)"
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <div className="grid gap-6 md:grid-cols-1 lg:grid-cols-3">
+            <Card>
+              <CardContent className="pt-6">
+                <CostTable
+                  title="Cost by Developer"
+                  labelHeader="Developer"
+                  rows={byDeveloper.map((r) => ({
+                    label: r.user_name,
+                    cost_usd: r.cost_usd,
+                    total_tokens: r.total_tokens,
+                    run_count: r.run_count,
+                  }))}
+                />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="pt-6">
+                <CostTable
+                  title="Cost by Workflow Type"
+                  labelHeader="Workflow"
+                  rows={byWorkflow.map((r) => ({
+                    label: r.workflow,
+                    cost_usd: r.cost_usd,
+                    total_tokens: r.total_tokens,
+                    run_count: r.run_count,
+                  }))}
+                />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardContent className="pt-6">
+                <CostTable
+                  title="Cost by Repository"
+                  labelHeader="Repository"
+                  rows={byRepo.map((r) => ({
+                    label: r.repo,
+                    cost_usd: r.cost_usd,
+                    total_tokens: r.total_tokens,
+                    run_count: r.run_count,
+                  }))}
+                />
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

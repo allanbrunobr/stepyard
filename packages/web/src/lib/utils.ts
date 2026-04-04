@@ -9,6 +9,14 @@ export function formatTokens(n: number): string {
   return n.toLocaleString();
 }
 
+export function formatNumber(value: number): string {
+  return value.toLocaleString();
+}
+
 export function formatCost(n: number): string {
   return `$${n.toFixed(2)}`;
+}
+
+export function formatUsd(value: number): string {
+  return `$${value.toFixed(2)}`;
 }

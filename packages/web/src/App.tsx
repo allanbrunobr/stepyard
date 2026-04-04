@@ -4,6 +4,8 @@ import { Layout } from '@/components/layout/Layout';
 import { OverviewPage } from '@/pages/Overview';
 import { WorkflowLogPage } from './pages/Workflows/WorkflowLogPage';
 import { WorkflowDetailPage } from './pages/WorkflowDetail/WorkflowDetailPage';
+import { DevelopersPage } from './pages/Developers';
+import { CostsPage } from './pages/Costs';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,8 +24,8 @@ export default function App() {
           <Route path="/" element={<OverviewPage />} />
           <Route path="/workflows" element={<WorkflowLogPage />} />
           <Route path="/workflows/:runId" element={<WorkflowDetailPage />} />
-          <Route path="/developers" element={<Navigate to="/" replace />} />
-          <Route path="/costs" element={<Navigate to="/" replace />} />
+          <Route path="/developers" element={<DevelopersPage />} />
+          <Route path="/costs" element={<CostsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
