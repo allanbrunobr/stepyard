@@ -34,9 +34,9 @@ export function useOverviewData(from: Date, to: Date): OverviewData {
 
     try {
       const [summaryData, usageData, hoursData] = await Promise.all([
-        apiFetch<OverviewSummary>(`/api/overview/summary?${params}`, { signal: controller.signal }),
-        apiFetch<DailyUsage[]>(`/api/overview/daily-usage?${params}`, { signal: controller.signal }),
-        apiFetch<PeakHour[]>(`/api/overview/peak-hours?${params}`, { signal: controller.signal }),
+        apiFetch<OverviewSummary>(`/overview/summary?${params}`, { signal: controller.signal }),
+        apiFetch<DailyUsage[]>(`/overview/daily-usage?${params}`, { signal: controller.signal }),
+        apiFetch<PeakHour[]>(`/overview/peak-hours?${params}`, { signal: controller.signal }),
       ]);
 
       if (!controller.signal.aborted) {
