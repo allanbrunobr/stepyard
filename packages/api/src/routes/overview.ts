@@ -20,32 +20,32 @@ interface PeakHour {
 
 const router = Router();
 
-function parseDateRange(req: Request, res: Response): { from: Date; to: Date } | null {
+function parseDateRange(req: Request): { from: Date; to: Date } {
   const now = new Date();
-  const to = req.query.to ? new Date(req.query.to as string) : now;
-  const from = req.query.from
+  const toDate = req.query.to ? new Date(req.query.to as string) : now;
+  const fromDate = req.query.from
     ? new Date(req.query.from as string)
     : new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  if (isNaN(from.getTime()) || isNaN(to.getTime())) {
-    res.status(400).json({ error: 'INVALID_DATE_RANGE', message: 'Invalid from or to date parameter' });
-    return null;
+  if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+    throw new Error('INVALID_DATE');
+  }
+  if (fromDate > toDate) {
+    throw new Error('INVALID_DATE_RANGE');
   }
 
-  if (from > to) {
-    res.status(400).json({ error: 'INVALID_DATE_RANGE', message: 'from date must be before to date' });
-    return null;
+  const maxRange = 90 * 24 * 60 * 60 * 1000;
+  if (toDate.getTime() - fromDate.getTime() > maxRange) {
+    throw new Error('INVALID_DATE_RANGE');
   }
 
-  return { from, to };
+  return { from: fromDate, to: toDate };
 }
 
 // GET /api/overview/summary
 router.get('/summary', async (req: Request, res: Response) => {
   try {
-    const range = parseDateRange(req, res);
-    if (!range) return;
-    const { from, to } = range;
+    const { from, to } = parseDateRange(req);
 
     const result = await pool.query(
       `SELECT
@@ -68,6 +68,10 @@ router.get('/summary', async (req: Request, res: Response) => {
 
     res.json(summary);
   } catch (err) {
+    if (err instanceof Error && (err.message === 'INVALID_DATE' || err.message === 'INVALID_DATE_RANGE')) {
+      res.status(400).json({ error: 'INVALID_DATE_RANGE', message: 'Invalid or inverted date range' });
+      return;
+    }
     console.error('Error fetching summary:', err);
     res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to fetch summary data' });
   }
@@ -76,9 +80,7 @@ router.get('/summary', async (req: Request, res: Response) => {
 // GET /api/overview/daily-usage
 router.get('/daily-usage', async (req: Request, res: Response) => {
   try {
-    const range = parseDateRange(req, res);
-    if (!range) return;
-    const { from, to } = range;
+    const { from, to } = parseDateRange(req);
 
     const result = await pool.query(
       `SELECT DATE(started_at AT TIME ZONE 'UTC') AS date, COUNT(*)::int AS count
@@ -114,6 +116,10 @@ router.get('/daily-usage', async (req: Request, res: Response) => {
 
     res.json(dailyUsage);
   } catch (err) {
+    if (err instanceof Error && (err.message === 'INVALID_DATE' || err.message === 'INVALID_DATE_RANGE')) {
+      res.status(400).json({ error: 'INVALID_DATE_RANGE', message: 'Invalid or inverted date range' });
+      return;
+    }
     console.error('Error fetching daily usage:', err);
     res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to fetch daily usage data' });
   }
@@ -122,9 +128,7 @@ router.get('/daily-usage', async (req: Request, res: Response) => {
 // GET /api/overview/peak-hours
 router.get('/peak-hours', async (req: Request, res: Response) => {
   try {
-    const range = parseDateRange(req, res);
-    if (!range) return;
-    const { from, to } = range;
+    const { from, to } = parseDateRange(req);
 
     const result = await pool.query(
       `SELECT EXTRACT(HOUR FROM started_at AT TIME ZONE 'UTC')::int AS hour, COUNT(*)::int AS count
@@ -151,6 +155,10 @@ router.get('/peak-hours', async (req: Request, res: Response) => {
 
     res.json(peakHours);
   } catch (err) {
+    if (err instanceof Error && (err.message === 'INVALID_DATE' || err.message === 'INVALID_DATE_RANGE')) {
+      res.status(400).json({ error: 'INVALID_DATE_RANGE', message: 'Invalid or inverted date range' });
+      return;
+    }
     console.error('Error fetching peak hours:', err);
     res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to fetch peak hours data' });
   }
