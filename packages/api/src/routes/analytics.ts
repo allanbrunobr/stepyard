@@ -9,7 +9,7 @@ function isValidDate(value: string): boolean {
   return !isNaN(d.getTime()) && d.toISOString().startsWith(value);
 }
 
-const MAX_RANGE_DAYS = 365;
+const MAX_RANGE_DAYS = 90;
 
 const dateRangeSchema = z
   .object({
@@ -39,10 +39,37 @@ function parseDateRange(query: Record<string, unknown>) {
   return dateRangeSchema.parse(query);
 }
 
+function validateDateRangeGuards(
+  from: string,
+  to: string,
+  res: Response
+): boolean {
+  if (from > to) {
+    res
+      .status(400)
+      .json({ error: [{ message: "from date must be before to date" }] });
+    return false;
+  }
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
+  const maxDays = 90;
+  if (
+    toDate.getTime() - fromDate.getTime() >
+    maxDays * 24 * 60 * 60 * 1000
+  ) {
+    res.status(400).json({
+      error: [{ message: `Date range cannot exceed ${maxDays} days` }],
+    });
+    return false;
+  }
+  return true;
+}
+
 // GET /api/analytics/developers?from=&to=
 router.get("/developers", async (req: Request, res: Response) => {
   try {
     const { from, to } = parseDateRange(req.query);
+    if (!validateDateRangeGuards(from, to, res)) return;
 
     const result = await pool.query(
       `SELECT
@@ -71,6 +98,7 @@ router.get("/developers", async (req: Request, res: Response) => {
 router.get("/costs/by-developer", async (req: Request, res: Response) => {
   try {
     const { from, to } = parseDateRange(req.query);
+    if (!validateDateRangeGuards(from, to, res)) return;
 
     const result = await pool.query(
       `SELECT
@@ -99,6 +127,7 @@ router.get("/costs/by-developer", async (req: Request, res: Response) => {
 router.get("/costs/by-workflow", async (req: Request, res: Response) => {
   try {
     const { from, to } = parseDateRange(req.query);
+    if (!validateDateRangeGuards(from, to, res)) return;
 
     const result = await pool.query(
       `SELECT
@@ -127,6 +156,7 @@ router.get("/costs/by-workflow", async (req: Request, res: Response) => {
 router.get("/costs/by-repo", async (req: Request, res: Response) => {
   try {
     const { from, to } = parseDateRange(req.query);
+    if (!validateDateRangeGuards(from, to, res)) return;
 
     const result = await pool.query(
       `SELECT
@@ -155,6 +185,7 @@ router.get("/costs/by-repo", async (req: Request, res: Response) => {
 router.get("/costs/daily", async (req: Request, res: Response) => {
   try {
     const { from, to } = parseDateRange(req.query);
+    if (!validateDateRangeGuards(from, to, res)) return;
 
     const result = await pool.query(
       `SELECT
