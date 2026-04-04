@@ -7,5 +7,6 @@ RUN npm install
 
 COPY tsconfig.json ./
 COPY src/ ./src/
+COPY migrations/ ./migrations/
 
 CMD ["npx", "tsx", "watch", "src/index.ts"]
