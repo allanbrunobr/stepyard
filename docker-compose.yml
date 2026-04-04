@@ -28,7 +28,7 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       API_PORT: 3001
-      API_SECRET: ${API_SECRET:-change-me-in-production}
+      API_SECRET: ${API_SECRET:?API_SECRET must be set in .env}
     depends_on:
       db:
         condition: service_healthy

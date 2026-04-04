@@ -8,6 +8,12 @@ import { startCleanupScheduler } from './scheduler';
 
 dotenv.config({ path: '../../.env' });
 
+const apiSecret = process.env.API_SECRET;
+if (!apiSecret || apiSecret === 'change-me-in-production') {
+  logger.fatal('API_SECRET must be set to a non-default value. Exiting.');
+  process.exit(1);
+}
+
 const app = express();
 const port = parseInt(process.env.API_PORT || '3001', 10);
 

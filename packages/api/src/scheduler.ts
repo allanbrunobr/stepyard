@@ -7,7 +7,8 @@ const RETENTION_DAYS = 90;
 async function cleanupOldRecords(): Promise<void> {
   try {
     const result = await pool.query(
-      `DELETE FROM workflow_runs WHERE started_at < NOW() - INTERVAL '${RETENTION_DAYS} days'`
+      `DELETE FROM workflow_runs WHERE started_at < NOW() - make_interval(days => $1)`,
+      [RETENTION_DAYS]
     );
     const deletedCount = result.rowCount ?? 0;
     logger.info({ deletedCount }, `Cleanup complete: deleted ${deletedCount} workflow runs older than ${RETENTION_DAYS} days`);

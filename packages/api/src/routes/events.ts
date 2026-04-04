@@ -39,8 +39,8 @@ function authenticate(req: Request, res: Response): boolean {
   }
 
   const token = authHeader.slice(7);
-  const secret = process.env.API_SECRET || 'change-me-in-production';
-  if (token !== secret) {
+  const secret = process.env.API_SECRET;
+  if (!secret || token !== secret) {
     res.status(401).json({ error: 'Invalid token' });
     return false;
   }
@@ -84,6 +84,7 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
         finished_at = EXCLUDED.finished_at,
         error = EXCLUDED.error,
         updated_at = NOW()
+      WHERE workflow_runs.updated_at <= NOW()
       RETURNING (xmax = 0) AS is_insert`,
       [
         data.run_id, data.user_name, data.workflow, data.target ?? null,
@@ -92,6 +93,12 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
         data.started_at, data.finished_at ?? null, data.error ?? null,
       ]
     );
+
+    if (upsertResult.rowCount === 0) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ error: 'Stale event rejected — a newer update already exists' });
+      return;
+    }
 
     const isInsert = upsertResult.rows[0].is_insert;
 
