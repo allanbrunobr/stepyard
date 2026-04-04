@@ -13,6 +13,7 @@ const StepSchema = z.object({
   tokens_in: z.number().int().optional(),
   tokens_out: z.number().int().optional(),
   sandboxed: z.boolean().optional(),
+  error: z.string().optional(),
 });
 
 const EventSchema = z.object({
@@ -86,7 +87,7 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
         error = EXCLUDED.error,
         event_version = EXCLUDED.event_version,
         updated_at = NOW()
-      WHERE workflow_runs.event_version <= EXCLUDED.event_version
+      WHERE workflow_runs.event_version < EXCLUDED.event_version
       RETURNING (xmax = 0) AS is_insert`,
       [
         data.run_id, data.user_name, data.workflow, data.target ?? null,
@@ -105,19 +106,19 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
 
     const isInsert = upsertResult.rows[0].is_insert;
 
-    // Always replace steps — treat each event as a full snapshot
-    await client.query('DELETE FROM workflow_steps WHERE run_id = $1', [data.run_id]);
-
     if (data.steps && data.steps.length > 0) {
+      // Replace steps only when the payload explicitly includes them
+      await client.query('DELETE FROM workflow_steps WHERE run_id = $1', [data.run_id]);
+
       for (const step of data.steps) {
         await client.query(
-          `INSERT INTO workflow_steps (run_id, step_name, step_type, status, duration_ms, tokens_in, tokens_out, sandboxed)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          `INSERT INTO workflow_steps (run_id, step_name, step_type, status, duration_ms, tokens_in, tokens_out, sandboxed, error)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             data.run_id, step.step_name, step.step_type ?? null,
             step.status, step.duration_ms ?? null,
             step.tokens_in ?? null, step.tokens_out ?? null,
-            step.sandboxed ?? null,
+            step.sandboxed ?? null, step.error ?? null,
           ]
         );
       }
