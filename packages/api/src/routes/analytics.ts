@@ -9,16 +9,31 @@ function isValidDate(value: string): boolean {
   return !isNaN(d.getTime()) && d.toISOString().startsWith(value);
 }
 
-const dateRangeSchema = z.object({
-  from: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "from must be YYYY-MM-DD")
-    .refine(isValidDate, "from is not a valid calendar date"),
-  to: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "to must be YYYY-MM-DD")
-    .refine(isValidDate, "to is not a valid calendar date"),
-});
+const MAX_RANGE_DAYS = 365;
+
+const dateRangeSchema = z
+  .object({
+    from: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "from must be YYYY-MM-DD")
+      .refine(isValidDate, "from is not a valid calendar date"),
+    to: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "to must be YYYY-MM-DD")
+      .refine(isValidDate, "to is not a valid calendar date"),
+  })
+  .refine(
+    (data) => new Date(data.from) <= new Date(data.to),
+    { message: "from must not be after to" }
+  )
+  .refine(
+    (data) => {
+      const diffMs =
+        new Date(data.to).getTime() - new Date(data.from).getTime();
+      return diffMs / (1000 * 60 * 60 * 24) <= MAX_RANGE_DAYS;
+    },
+    { message: `Date range must not exceed ${MAX_RANGE_DAYS} days` }
+  );
 
 function parseDateRange(query: Record<string, unknown>) {
   return dateRangeSchema.parse(query);
@@ -147,7 +162,7 @@ router.get("/costs/daily", async (req: Request, res: Response) => {
         COALESCE(SUM(wr.cost_usd), 0)::float AS cost_usd
       FROM generate_series($1::date, $2::date, '1 day'::interval) AS d
       LEFT JOIN workflow_runs wr
-        ON DATE(wr.started_at) = d::date
+        ON (wr.started_at AT TIME ZONE 'UTC')::date = d::date
       GROUP BY d::date
       ORDER BY d::date ASC`,
       [from, to]
