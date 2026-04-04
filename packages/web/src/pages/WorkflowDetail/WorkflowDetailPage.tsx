@@ -17,8 +17,14 @@ export function WorkflowDetailPage() {
   const run = data?.data;
 
   function handleBack() {
-    const referrerSearch = location.search || '';
-    navigate(`/workflows${referrerSearch}`);
+    // If we came from the workflow list, go back to preserve full browser history.
+    // The search params were forwarded from the list page into this URL.
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      // Direct navigation fallback: use forwarded search params from the URL
+      navigate(`/workflows${location.search}`);
+    }
   }
 
   return (

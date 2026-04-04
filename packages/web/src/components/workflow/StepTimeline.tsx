@@ -58,8 +58,10 @@ export function StepTimeline({ steps }: StepTimelineProps) {
                 </div>
               </div>
 
-              {isFailed && step.status === 'failed' && (
-                <p className="text-destructive text-xs mt-1">Step failed</p>
+              {isFailed && (
+                <p className="text-destructive text-xs mt-1">
+                  {step.error ?? 'Step failed'}
+                </p>
               )}
             </div>
           );

@@ -25,4 +25,5 @@ export interface WorkflowStep {
   tokens_in?: number;
   tokens_out?: number;
   sandboxed?: boolean;
+  error?: string;
 }

@@ -5,24 +5,9 @@ import { logger } from '../logger';
 
 export const workflowsRouter = Router();
 
-// --- Auth Middleware ---
-
-function authenticate(req: Request, res: Response): boolean {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Missing or invalid authorization header' } });
-    return false;
-  }
-
-  const token = authHeader.slice(7);
-  const secret = process.env.API_SECRET || 'change-me-in-production';
-  if (token !== secret) {
-    res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid token' } });
-    return false;
-  }
-
-  return true;
-}
+// Workflow read endpoints are unauthenticated: this is an internal dashboard
+// deployed on a private VPS. The write endpoint (/api/events) in events.ts
+// retains its own Bearer token auth to protect ingestion.
 
 // --- Validation Schemas ---
 
@@ -94,7 +79,6 @@ function buildWhereClause(filters: {
 // --- CSV Export (registered BEFORE :run_id to avoid param conflict) ---
 
 workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => {
-  if (!authenticate(req, res)) return;
 
   const parsed = listQuerySchema.omit({ page: true, limit: true, sort: true, order: true }).safeParse(req.query);
   if (!parsed.success) {
@@ -116,6 +100,7 @@ workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => 
     'Timestamp,Developer,Workflow Type,Target,Repository,Status,Duration (ms),Tokens,Cost (USD),Error,Sandbox Confirmed\n';
   res.write(csvHeader);
 
+  const client = await pool.connect();
   try {
     const query = `
       SELECT r.started_at, r.user_name, r.workflow, r.target, r.repo, r.status,
@@ -128,40 +113,53 @@ workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => 
       ORDER BY r.started_at DESC
     `;
 
-    const result = await pool.query(query, where.values);
+    // Use a SQL cursor to stream rows in batches, avoiding loading all rows into memory
+    const cursorName = 'csv_export_cursor';
+    const batchSize = 500;
 
-    for (const row of result.rows) {
-      const fields = [
-        csvEscape(String(row.started_at ?? '')),
-        csvEscape(String(row.user_name ?? '')),
-        csvEscape(String(row.workflow ?? '')),
-        csvEscape(String(row.target ?? '')),
-        csvEscape(String(row.repo ?? '')),
-        csvEscape(String(row.status ?? '')),
-        row.duration_ms ?? '',
-        row.total_tokens ?? '',
-        row.cost_usd ?? '',
-        csvEscape(String(row.error ?? '')),
-        row.sandbox_confirmed ? 'Yes' : 'No',
-      ];
-      res.write(fields.join(',') + '\n');
-    }
+    await client.query('BEGIN');
+    await client.query(`DECLARE ${cursorName} CURSOR FOR ${query}`, where.values);
 
+    let batch;
+    do {
+      batch = await client.query(`FETCH ${batchSize} FROM ${cursorName}`);
+      for (const row of batch.rows) {
+        const fields = [
+          csvEscape(String(row.started_at ?? '')),
+          csvEscape(String(row.user_name ?? '')),
+          csvEscape(String(row.workflow ?? '')),
+          csvEscape(String(row.target ?? '')),
+          csvEscape(String(row.repo ?? '')),
+          csvEscape(String(row.status ?? '')),
+          row.duration_ms ?? '',
+          row.total_tokens ?? '',
+          row.cost_usd ?? '',
+          csvEscape(String(row.error ?? '')),
+          row.sandbox_confirmed ? 'Yes' : 'No',
+        ];
+        res.write(fields.join(',') + '\n');
+      }
+    } while (batch.rows.length === batchSize);
+
+    await client.query(`CLOSE ${cursorName}`);
+    await client.query('COMMIT');
     res.end();
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     logger.error(err, 'Failed to export CSV');
     if (!res.headersSent) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to export CSV' } });
     } else {
       res.end();
     }
+  } finally {
+    client.release();
   }
 });
 
 // --- GET /workflows (paginated list) ---
 
 workflowsRouter.get('/workflows', async (req: Request, res: Response) => {
-  if (!authenticate(req, res)) return;
 
   const parsed = listQuerySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -203,9 +201,7 @@ workflowsRouter.get('/workflows', async (req: Request, res: Response) => {
 
 // --- GET /workflows/distinct (for filter dropdowns) ---
 
-workflowsRouter.get('/workflows/distinct', async (req: Request, res: Response) => {
-  if (!authenticate(req, res)) return;
-
+workflowsRouter.get('/workflows/distinct', async (_req: Request, res: Response) => {
   try {
     const [users, workflows, statuses] = await Promise.all([
       pool.query('SELECT DISTINCT user_name FROM workflow_runs ORDER BY user_name'),
@@ -229,7 +225,6 @@ workflowsRouter.get('/workflows/distinct', async (req: Request, res: Response) =
 // --- GET /workflows/:runId (detail with steps) ---
 
 workflowsRouter.get('/workflows/:runId', async (req: Request, res: Response) => {
-  if (!authenticate(req, res)) return;
 
   const { runId } = req.params;
 
