@@ -3,3 +3,9 @@
 # macOS AppleDouble metadata files (created by tar on macOS)
 ._*
 .DS_Store
+
+# Environment secrets — use .env.example as template
+.env
+
+# Node
+node_modules/

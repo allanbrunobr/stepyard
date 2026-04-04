@@ -11,6 +11,7 @@ export interface WorkflowRun {
   started_at: string;
   finished_at?: string;
   error?: string;
+  event_version?: number;
   created_at?: string;
   updated_at?: string;
 }
@@ -40,6 +41,7 @@ export interface EventPayload {
   started_at: string;
   finished_at?: string;
   error?: string;
+  event_version?: number;
   steps?: WorkflowStep[];
 }
 
