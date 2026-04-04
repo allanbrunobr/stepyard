@@ -86,7 +86,7 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
         error = EXCLUDED.error,
         event_version = EXCLUDED.event_version,
         updated_at = NOW()
-      WHERE workflow_runs.event_version < EXCLUDED.event_version
+      WHERE workflow_runs.event_version <= EXCLUDED.event_version
       RETURNING (xmax = 0) AS is_insert`,
       [
         data.run_id, data.user_name, data.workflow, data.target ?? null,
@@ -105,9 +105,10 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
 
     const isInsert = upsertResult.rows[0].is_insert;
 
-    if (data.steps && data.steps.length > 0) {
-      await client.query('DELETE FROM workflow_steps WHERE run_id = $1', [data.run_id]);
+    // Always replace steps — treat each event as a full snapshot
+    await client.query('DELETE FROM workflow_steps WHERE run_id = $1', [data.run_id]);
 
+    if (data.steps && data.steps.length > 0) {
       for (const step of data.steps) {
         await client.query(
           `INSERT INTO workflow_steps (run_id, step_name, step_type, status, duration_ms, tokens_in, tokens_out, sandboxed)
