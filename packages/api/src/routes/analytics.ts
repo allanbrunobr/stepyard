@@ -143,7 +143,7 @@ router.get("/costs/daily", async (req: Request, res: Response) => {
 
     const result = await pool.query(
       `SELECT
-        d::date AS date,
+        to_char(d::date, 'YYYY-MM-DD') AS date,
         COALESCE(SUM(wr.cost_usd), 0)::float AS cost_usd
       FROM generate_series($1::date, $2::date, '1 day'::interval) AS d
       LEFT JOIN workflow_runs wr
@@ -153,12 +153,7 @@ router.get("/costs/daily", async (req: Request, res: Response) => {
       [from, to]
     );
 
-    res.json(
-      result.rows.map((row) => ({
-        date: (row.date as Date).toISOString().split("T")[0],
-        cost_usd: row.cost_usd,
-      }))
-    );
+    res.json(result.rows);
   } catch (err) {
     if (err instanceof z.ZodError) {
       res.status(400).json({ error: err.errors });

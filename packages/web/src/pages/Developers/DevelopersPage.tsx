@@ -19,14 +19,21 @@ import { apiFetch } from "../../lib/api-client";
 import { formatUsd, formatNumber } from "../../lib/utils";
 import type { DeveloperRanking } from "../../../../types";
 
+function toLocalDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function defaultFrom(): string {
   const d = new Date();
   d.setDate(d.getDate() - 30);
-  return d.toISOString().split("T")[0];
+  return toLocalDateStr(d);
 }
 
 function defaultTo(): string {
-  return new Date().toISOString().split("T")[0];
+  return toLocalDateStr(new Date());
 }
 
 export function DevelopersPage() {
@@ -35,9 +42,11 @@ export function DevelopersPage() {
   const [to, setTo] = useState(defaultTo);
   const [data, setData] = useState<DeveloperRanking[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const result = await apiFetch<DeveloperRanking[]>(
         `/analytics/developers?from=${from}&to=${to}`
@@ -45,6 +54,7 @@ export function DevelopersPage() {
       setData(result);
     } catch {
       setData([]);
+      setError("Failed to load developer data. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -65,6 +75,12 @@ export function DevelopersPage() {
         />
       </PageHeader>
 
+      {error && (
+        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Developer Rankings</CardTitle>
@@ -72,7 +88,7 @@ export function DevelopersPage() {
         <CardContent>
           {loading ? (
             <LoadingState />
-          ) : data.length === 0 ? (
+          ) : data.length === 0 && !error ? (
             <EmptyState />
           ) : (
             <Table>

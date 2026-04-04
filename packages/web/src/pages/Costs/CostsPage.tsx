@@ -24,14 +24,21 @@ import type {
   DailyCost,
 } from "../../../../types";
 
+function toLocalDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function defaultFrom(): string {
   const d = new Date();
   d.setDate(d.getDate() - 30);
-  return d.toISOString().split("T")[0];
+  return toLocalDateStr(d);
 }
 
 function defaultTo(): string {
-  return new Date().toISOString().split("T")[0];
+  return toLocalDateStr(new Date());
 }
 
 export function CostsPage() {
