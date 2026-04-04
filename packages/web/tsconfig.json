@@ -10,7 +10,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "paths": {
-      "@types/*": ["../../types/*"]
+      "@types/*": ["../../types/*"],
+      "@/*": ["./src/*"]
     },
     "baseUrl": "."
   },
