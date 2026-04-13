@@ -15,6 +15,13 @@ pub enum Event {
         step_type: String,
         duration_ms: u64,
         timestamp: DateTime<Utc>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<f64>,
+        sandboxed: bool,
     },
     StepFailed {
         step_name: String,
@@ -22,6 +29,7 @@ pub enum Event {
         error: String,
         duration_ms: u64,
         timestamp: DateTime<Utc>,
+        sandboxed: bool,
     },
     WorkflowStarted {
         timestamp: DateTime<Utc>,

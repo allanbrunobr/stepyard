@@ -67,6 +67,17 @@ pub struct EventsConfig {
     pub webhook: Option<String>,
     /// File path to append events as JSONL
     pub file: Option<String>,
+    /// Dashboard API configuration — sends complete workflow run on completion
+    pub dashboard: Option<DashboardConfig>,
+}
+
+/// Configuration for the Dashboard event emitter
+#[derive(Debug, Clone, Deserialize)]
+pub struct DashboardConfig {
+    /// Dashboard API URL (e.g., "http://187.45.254.82:3001/api/events")
+    pub url: String,
+    /// Bearer token for API authentication
+    pub secret: Option<String>,
 }
 
 /// Named scope (sub-workflow)

@@ -18,7 +18,7 @@ use crate::cli::display;
 use crate::config::{ConfigManager, StepConfig};
 use crate::control_flow::ControlFlow;
 use crate::error::StepError;
-use crate::events::subscribers::{FileSubscriber, WebhookSubscriber};
+use crate::events::subscribers::{DashboardSubscriber, FileSubscriber, WebhookSubscriber};
 use crate::events::types::Event;
 use crate::events::EventBus;
 use crate::plugins::loader::PluginLoader;
@@ -142,7 +142,7 @@ impl Engine {
         vars: HashMap<String, serde_json::Value>,
         options: EngineOptions,
     ) -> Self {
-        let mut context = Context::new(target, vars.clone());
+        let mut context = Context::new(target.clone(), vars.clone());
         // Wrap --var parameters into an "args" object so templates can use {{ args.mode }}
         let args_obj: serde_json::Map<String, serde_json::Value> = vars.into_iter().collect();
         context.insert_var("args", serde_json::Value::Object(args_obj));
@@ -179,6 +179,54 @@ impl Engine {
             if let Some(ref file_path) = events_cfg.file {
                 event_bus.add_subscriber(Box::new(FileSubscriber::new(file_path.clone())));
                 tracing::info!(path = %file_path, "Registered file event subscriber");
+            }
+            if let Some(ref dashboard_cfg) = events_cfg.dashboard {
+                // Resolve user_name: env MINION_USER > git user.name > "unknown"
+                let user_name = std::env::var("MINION_USER").unwrap_or_else(|_| {
+                    std::process::Command::new("git")
+                        .args(["config", "user.name"])
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "unknown".to_string())
+                });
+                // Resolve repo: --repo flag > git remote origin
+                let repo_name = options.repo.clone().or_else(|| {
+                    std::process::Command::new("git")
+                        .args(["remote", "get-url", "origin"])
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| {
+                            // Extract OWNER/REPO from URL
+                            let s = s.trim().trim_end_matches(".git");
+                            s.rsplit('/')
+                                .take(2)
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .rev()
+                                .collect::<Vec<_>>()
+                                .join("/")
+                        })
+                        .filter(|s| !s.is_empty())
+                });
+                // Secret: config > env DASHBOARD_API_SECRET
+                let secret = dashboard_cfg.secret.clone().or_else(|| {
+                    std::env::var("DASHBOARD_API_SECRET").ok()
+                });
+                let sandbox_str = format!("{:?}", options.sandbox_mode);
+                event_bus.add_subscriber(Box::new(DashboardSubscriber::new(
+                    dashboard_cfg.url.clone(),
+                    secret,
+                    workflow.name.clone(),
+                    target.clone(),
+                    repo_name,
+                    user_name.clone(),
+                    sandbox_str,
+                )));
+                tracing::info!(url = %dashboard_cfg.url, user = %user_name, "Registered dashboard event subscriber");
             }
         }
 
@@ -741,6 +789,10 @@ impl Engine {
             })
             .await;
 
+        // Give async event subscribers (e.g. DashboardSubscriber) time to
+        // complete their HTTP requests before the process exits.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
         // Propagate any error from the step loop
         run_result?;
 
@@ -928,6 +980,8 @@ impl Engine {
         }
 
         // ── Event: StepCompleted / StepFailed ─────────────────────────────────
+        // Pull token/cost data from the last StepRecord (just pushed above)
+        let last_record = self.step_records.last();
         match &result {
             Ok(_) => {
                 self.event_bus
@@ -936,6 +990,10 @@ impl Engine {
                         step_type: step_def.step_type.to_string(),
                         duration_ms,
                         timestamp: chrono::Utc::now(),
+                        input_tokens: last_record.and_then(|r| r.input_tokens),
+                        output_tokens: last_record.and_then(|r| r.output_tokens),
+                        cost_usd: last_record.and_then(|r| r.cost_usd),
+                        sandboxed: use_sandbox,
                     })
                     .await;
             }
@@ -947,6 +1005,7 @@ impl Engine {
                         error: e.to_string(),
                         duration_ms,
                         timestamp: chrono::Utc::now(),
+                        sandboxed: use_sandbox,
                     })
                     .await;
             }
