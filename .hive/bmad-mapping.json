@@ -1,0 +1,229 @@
+{
+  "generated": "2026-04-13",
+  "source_epics_file": "_bmad-output/engine-v2/epics.md",
+  "project_context_file": null,
+  "codebase_map_file": null,
+  "scope": "Minion Engine v2 refactor (pre-requisite for Agent Dashboard module)",
+  "mappings": [
+    {
+      "feature_number": 1,
+      "epic_number": 1,
+      "story_number": 1,
+      "epic_title": "Session as First-Class Primitive",
+      "story_title": "Criar crate minion-session com types publicos e schema SQL",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 2,
+      "epic_number": 1,
+      "story_number": 2,
+      "epic_title": "Session as First-Class Primitive",
+      "story_title": "Implementar Session::new e Session::append_event com persistencia",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 3,
+      "epic_number": 1,
+      "story_number": 3,
+      "epic_title": "Session as First-Class Primitive",
+      "story_title": "Implementar Session::load e Session::replay com ordem deterministica",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 4,
+      "epic_number": 1,
+      "story_number": 4,
+      "epic_title": "Session as First-Class Primitive",
+      "story_title": "Integrar Session no engine v0.7.6 atual (replace in-memory state)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 5,
+      "epic_number": 2,
+      "story_number": 1,
+      "epic_title": "Decouple Harness and Sandbox",
+      "story_title": "Extrair minion-core com types compartilhados",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 6,
+      "epic_number": 2,
+      "story_number": 2,
+      "epic_title": "Decouple Harness and Sandbox",
+      "story_title": "Extrair crate minion-sandbox-orchestrator com trait SandboxLifecycle",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 7,
+      "epic_number": 2,
+      "story_number": 3,
+      "epic_title": "Decouple Harness and Sandbox",
+      "story_title": "Extrair crate minion-harness com Engine::step e Engine::resume",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 8,
+      "epic_number": 2,
+      "story_number": 4,
+      "epic_title": "Decouple Harness and Sandbox",
+      "story_title": "Migrar binario minion execute para usar nova API",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 9,
+      "epic_number": 2,
+      "story_number": 5,
+      "epic_title": "Decouple Harness and Sandbox",
+      "story_title": "Teste de stress multi-session concorrente",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 10,
+      "epic_number": 3,
+      "story_number": 1,
+      "epic_title": "MCP Proxy as Separate Process",
+      "story_title": "Crate minion-mcp-proxy com estrutura base e GET /healthz",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 11,
+      "epic_number": 3,
+      "story_number": 2,
+      "epic_title": "MCP Proxy as Separate Process",
+      "story_title": "Implementar validacao de JWT session_id HS256 15min",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 12,
+      "epic_number": 3,
+      "story_number": 3,
+      "epic_title": "MCP Proxy as Separate Process",
+      "story_title": "Implementar POST /mcp/:server/call com vault fetch + forward",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 13,
+      "epic_number": 3,
+      "story_number": 4,
+      "epic_title": "MCP Proxy as Separate Process",
+      "story_title": "Integrar harness para chamar proxy em vez de MCP direto",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 14,
+      "epic_number": 4,
+      "story_number": 1,
+      "epic_title": "Dispatch HTTP API",
+      "story_title": "Subcommand minion serve com POST /workflows/dispatch",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 15,
+      "epic_number": 4,
+      "story_number": 2,
+      "epic_title": "Dispatch HTTP API",
+      "story_title": "Endpoint GET /sessions/:id com estado atual",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 16,
+      "epic_number": 4,
+      "story_number": 3,
+      "epic_title": "Dispatch HTTP API",
+      "story_title": "Endpoint GET /sessions/:id/events (SSE)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 17,
+      "epic_number": 4,
+      "story_number": 4,
+      "epic_title": "Dispatch HTTP API",
+      "story_title": "Endpoint POST /sessions/:id/resume para retomar sessions pausadas",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 18,
+      "epic_number": 5,
+      "story_number": 1,
+      "epic_title": "PLANS.md Persistence and YAML v1 Compat",
+      "story_title": "Implementar PlanFile com backing S3-compat",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 19,
+      "epic_number": 5,
+      "story_number": 2,
+      "epic_title": "PLANS.md Persistence and YAML v1 Compat",
+      "story_title": "Expor tools plan.read / plan.write ao agent",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 20,
+      "epic_number": 5,
+      "story_number": 3,
+      "epic_title": "PLANS.md Persistence and YAML v1 Compat",
+      "story_title": "Parser WorkflowDef::V1 | V2 com deteccao de versao",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 21,
+      "epic_number": 5,
+      "story_number": 4,
+      "epic_title": "PLANS.md Persistence and YAML v1 Compat",
+      "story_title": "Subcommand minion migrate workflow.yaml (v1 -> v2)",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    },
+    {
+      "feature_number": 22,
+      "epic_number": 5,
+      "story_number": 5,
+      "epic_title": "PLANS.md Persistence and YAML v1 Compat",
+      "story_title": "Enforce data-limite 2026-10-13 para rejeitar v1",
+      "story_file": null,
+      "bmad_status": "ready-for-dev",
+      "hive_status": "pending"
+    }
+  ]
+}
