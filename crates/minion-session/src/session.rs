@@ -254,4 +254,58 @@ impl Session {
     pub fn ended_at(&self) -> Option<DateTime<Utc>> {
         self.ended_at
     }
+
+    /// Mark the session as `completed`, setting `ended_at = NOW()`.
+    ///
+    /// This updates the `sessions` row only. Events remain append-only
+    /// (NFC2 unaffected). Safe to call once; subsequent calls are no-ops
+    /// because the status check stops repeated transitions.
+    ///
+    /// # Errors
+    /// [`SessionError::Database`] on SQL failure.
+    pub async fn complete(&mut self) -> Result<(), SessionError> {
+        self.finish(SessionStatus::Completed).await
+    }
+
+    /// Mark the session as `failed`, setting `ended_at = NOW()`.
+    ///
+    /// # Errors
+    /// [`SessionError::Database`] on SQL failure.
+    pub async fn fail(&mut self) -> Result<(), SessionError> {
+        self.finish(SessionStatus::Failed).await
+    }
+
+    /// Mark the session as `cancelled`, setting `ended_at = NOW()`.
+    ///
+    /// # Errors
+    /// [`SessionError::Database`] on SQL failure.
+    pub async fn cancel(&mut self) -> Result<(), SessionError> {
+        self.finish(SessionStatus::Cancelled).await
+    }
+
+    async fn finish(&mut self, status: SessionStatus) -> Result<(), SessionError> {
+        // Only transition from `running`; re-calling with the same terminal
+        // state is a no-op so the engine can safely call complete/fail
+        // idempotently on cleanup paths.
+        let row: Option<(String, Option<DateTime<Utc>>)> = sqlx::query_as(
+            r#"
+            UPDATE sessions
+            SET status = $2, ended_at = NOW()
+            WHERE id = $1 AND status = 'running'
+            RETURNING status, ended_at
+            "#,
+        )
+        .bind(self.id.as_uuid())
+        .bind(status.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some((db_status, ended_at)) = row {
+            self.status = SessionStatus::from_db(&db_status)?;
+            self.ended_at = ended_at;
+        }
+        // If row is None, session already terminal (or missing). Leave
+        // local state untouched — callers can inspect `status()` to confirm.
+        Ok(())
+    }
 }

@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context};
 use clap::Args;
@@ -10,6 +10,62 @@ use crate::workflow::parser;
 use crate::workflow::validator;
 
 use super::init_templates;
+
+/// Connect to PostgreSQL, run Session migrations, and open a Session for this
+/// workflow dispatch.
+///
+/// Returns a clear error (not `anyhow!`) when DATABASE_URL is missing or the
+/// database is unreachable — this fulfills Story 1.4 AC:
+/// "DATABASE_URL pointing to a PG that is down -> exit != 0 with 'engine
+/// requires PostgreSQL backend'."
+async fn open_session(
+    workflow_name: &str,
+    json_mode: bool,
+) -> anyhow::Result<minion_session::Session> {
+    let db_url = std::env::var("DATABASE_URL").map_err(|_| {
+        let msg = "engine requires PostgreSQL backend: DATABASE_URL env var is not set";
+        if json_mode {
+            let json = serde_json::json!({"error": msg, "type": "ConfigError"});
+            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
+        } else {
+            eprintln!("{msg}");
+            eprintln!(
+                "Hint: export DATABASE_URL=postgres://user:password@host:port/database"
+            );
+        }
+        anyhow::anyhow!("DATABASE_URL not set")
+    })?;
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&db_url)
+        .await
+        .map_err(|e| {
+            let msg = format!("engine requires PostgreSQL backend: cannot reach database: {e}");
+            if json_mode {
+                let json = serde_json::json!({"error": msg, "type": "DatabaseUnreachable"});
+                println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
+            } else {
+                eprintln!("{msg}");
+            }
+            anyhow::anyhow!("DATABASE_URL unreachable: {e}")
+        })?;
+
+    minion_session::migrate(&pool)
+        .await
+        .with_context(|| "engine requires PostgreSQL backend: migrations failed")?;
+
+    // Workflow identifier — stable UUID derived from the workflow name so that
+    // the same workflow name always maps to the same workflow_id row. A real
+    // workflows table (Story 2.x) will replace this with an opaque lookup.
+    let workflow_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, workflow_name.as_bytes());
+    let tenant_id = std::env::var("MINION_TENANT").unwrap_or_else(|_| "default".to_string());
+
+    minion_session::Session::new(&pool, workflow_id, tenant_id)
+        .await
+        .with_context(|| "failed to create session row")
+}
 
 /// Resolve a workflow path with fallback chain:
 /// 1. As-is (if the file exists — developer running from repo or absolute path)
@@ -176,6 +232,16 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
     // developers installing via `cargo install` know exactly what's missing.
     validate_environment(&workflow, sandbox_mode != SandboxMode::Disabled, args.json).await?;
 
+    // ── Session setup (Epic 1 Story 1.4) ─────────────────────────────────
+    // Dry-run skips DB entirely — it is pure introspection. Any other mode
+    // requires a reachable PostgreSQL as documented in ARCHITECTURE.md
+    // (anti-invariant "no cold-start without PostgreSQL").
+    let session = if args.dry_run {
+        None
+    } else {
+        Some(open_session(&workflow.name, args.json).await?)
+    };
+
     let opts = EngineOptions {
         verbose: args.verbose,
         quiet: args.quiet,
@@ -184,6 +250,7 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
         resume_from: args.resume.clone(),
         sandbox_mode,
         repo: args.repo.clone(),
+        session,
     };
 
     let mut engine = Engine::with_options(workflow.clone(), target, vars, opts).await;

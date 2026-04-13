@@ -193,6 +193,43 @@ async fn concurrent_appends_produce_no_gaps_and_no_duplicates() {
 }
 
 #[tokio::test]
+async fn complete_sets_ended_at_and_status() {
+    db_test!(pool, {
+        let mut session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("new");
+        assert!(session.ended_at().is_none());
+        assert_eq!(session.status().as_str(), "running");
+
+        session.complete().await.expect("complete");
+        assert_eq!(session.status().as_str(), "completed");
+        assert!(session.ended_at().is_some());
+
+        // Verify at the DB level — no Rust caching tricks.
+        let reloaded = Session::load(&pool, session.id()).await.expect("reload");
+        assert_eq!(reloaded.status().as_str(), "completed");
+        assert!(reloaded.ended_at().is_some());
+    });
+}
+
+#[tokio::test]
+async fn fail_is_idempotent_after_already_terminal() {
+    db_test!(pool, {
+        let mut session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("new");
+        session.fail().await.expect("fail once");
+        let first_ended = session.ended_at();
+        assert_eq!(session.status().as_str(), "failed");
+
+        // Second call is a no-op — row is already terminal.
+        session.fail().await.expect("fail twice");
+        assert_eq!(session.status().as_str(), "failed");
+        assert_eq!(session.ended_at(), first_ended);
+    });
+}
+
+#[tokio::test]
 async fn public_api_offers_no_update_or_delete_path() {
     // Compile-time check: Session has no &mut methods that rewrite events
     // and no DELETE-emitting method on its public surface. If someone adds

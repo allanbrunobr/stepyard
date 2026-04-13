@@ -69,7 +69,7 @@ indicatif = "0.17"
 # Utilities
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 async-trait = "0.1"
 futures = "0.3"
 dirs = "5"
@@ -77,6 +77,15 @@ rhai = "1"
 
 # Dynamic plugin loading
 libloading = "0.8"
+
+# Session persistence (Epic 1 Story 1.4)
+minion-session = { path = "crates/minion-session" }
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-native-tls",
+    "postgres",
+    "uuid",
+    "chrono",
+] }
 
 # Slack Bot (optional — enable with --features slack)
 axum = { version = "0.8.8", features = ["json"], optional = true }

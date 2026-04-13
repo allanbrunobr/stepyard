@@ -21,6 +21,7 @@ use crate::error::StepError;
 use crate::events::subscribers::{DashboardSubscriber, FileSubscriber, WebhookSubscriber};
 use crate::events::types::Event;
 use crate::events::EventBus;
+use minion_session::Session;
 use crate::plugins::loader::PluginLoader;
 use crate::plugins::registry::PluginRegistry;
 use crate::prompts::{
@@ -42,7 +43,7 @@ use context::Context;
 use state::WorkflowState;
 
 /// Options for configuring the Engine
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct EngineOptions {
     pub verbose: bool,
     pub quiet: bool,
@@ -56,6 +57,24 @@ pub struct EngineOptions {
     pub sandbox_mode: SandboxMode,
     /// GitHub repo (OWNER/REPO) to clone inside Docker instead of copying CWD
     pub repo: Option<String>,
+    /// Session for append-only event persistence (Epic 1 Story 1.4).
+    /// Required for non-dry-run executions; dry_run may pass `None`.
+    pub session: Option<Session>,
+}
+
+impl std::fmt::Debug for EngineOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineOptions")
+            .field("verbose", &self.verbose)
+            .field("quiet", &self.quiet)
+            .field("json", &self.json)
+            .field("dry_run", &self.dry_run)
+            .field("resume_from", &self.resume_from)
+            .field("sandbox_mode", &self.sandbox_mode)
+            .field("repo", &self.repo)
+            .field("session", &self.session.as_ref().map(|s| s.id()))
+            .finish()
+    }
 }
 
 /// Per-step execution record collected for JSON output
@@ -117,6 +136,8 @@ pub struct Engine {
     repo: Option<String>,
     /// Secure API proxy — holds secrets on the host, container only gets the proxy URL
     api_proxy: Option<ApiProxy>,
+    /// Append-only session log (Epic 1 Story 1.4). `None` only for dry-run.
+    session: Option<Session>,
 }
 
 #[allow(dead_code)]
@@ -271,7 +292,28 @@ impl Engine {
             stack_info,
             repo: options.repo,
             api_proxy: None,
+            session: options.session,
         }
+    }
+
+    /// Persist an event to the Session log (durability-first) then fan it out
+    /// to subscribers via the event bus. If no session is attached (dry-run),
+    /// only the bus is notified.
+    ///
+    /// Session write failures propagate as an anyhow::Error so the caller can
+    /// decide whether to continue — the engine's policy is to abort on a lost
+    /// write since the v2 contract requires every event to be replayable
+    /// (Invariante 11).
+    async fn emit_event(&self, evt: Event) -> anyhow::Result<()> {
+        if let Some(ref session) = self.session {
+            let payload = serde_json::to_value(&evt)?;
+            session
+                .append(payload)
+                .await
+                .map_err(|e| anyhow::anyhow!("session append failed: {e}"))?;
+        }
+        self.event_bus.emit(evt).await;
+        Ok(())
     }
 
     /// Return collected step records (for JSON output or testing)
@@ -587,11 +629,10 @@ impl Engine {
         }
 
         // ── Event: WorkflowStarted ────────────────────────────────────────────
-        self.event_bus
-            .emit(Event::WorkflowStarted {
-                timestamp: chrono::Utc::now(),
-            })
-            .await;
+        self.emit_event(Event::WorkflowStarted {
+            timestamp: chrono::Utc::now(),
+        })
+        .await?;
 
         let start = Instant::now();
         let steps = self.workflow.steps.clone();
@@ -782,16 +823,30 @@ impl Engine {
         }
 
         // ── Event: WorkflowCompleted ──────────────────────────────────────────
-        self.event_bus
-            .emit(Event::WorkflowCompleted {
-                duration_ms: start.elapsed().as_millis() as u64,
-                timestamp: chrono::Utc::now(),
-            })
-            .await;
+        self.emit_event(Event::WorkflowCompleted {
+            duration_ms: start.elapsed().as_millis() as u64,
+            timestamp: chrono::Utc::now(),
+        })
+        .await?;
 
         // Give async event subscribers (e.g. DashboardSubscriber) time to
         // complete their HTTP requests before the process exits.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // ── Session lifecycle: mark completed / failed ────────────────────────
+        // status = completed if step loop ok, failed otherwise. Idempotent
+        // at DB level (finish() skips if session is already terminal).
+        if let Some(ref mut session) = self.session {
+            let result_is_ok = run_result.is_ok();
+            let finish = if result_is_ok {
+                session.complete().await
+            } else {
+                session.fail().await
+            };
+            if let Err(e) = finish {
+                tracing::warn!(error = %e, "Failed to mark session terminal status");
+            }
+        }
 
         // Propagate any error from the step loop
         run_result?;
@@ -822,13 +877,12 @@ impl Engine {
         let start = Instant::now();
 
         // ── Event: StepStarted ────────────────────────────────────────────────
-        self.event_bus
-            .emit(Event::StepStarted {
-                step_name: step_def.name.clone(),
-                step_type: step_def.step_type.to_string(),
-                timestamp: chrono::Utc::now(),
-            })
-            .await;
+        self.emit_event(Event::StepStarted {
+            step_name: step_def.name.clone(),
+            step_type: step_def.step_type.to_string(),
+            timestamp: chrono::Utc::now(),
+        })
+        .await?;
 
         tracing::debug!(
             step = %step_def.name,
@@ -984,22 +1038,24 @@ impl Engine {
         let last_record = self.step_records.last();
         match &result {
             Ok(_) => {
-                self.event_bus
-                    .emit(Event::StepCompleted {
-                        step_name: step_def.name.clone(),
-                        step_type: step_def.step_type.to_string(),
-                        duration_ms,
-                        timestamp: chrono::Utc::now(),
-                        input_tokens: last_record.and_then(|r| r.input_tokens),
-                        output_tokens: last_record.and_then(|r| r.output_tokens),
-                        cost_usd: last_record.and_then(|r| r.cost_usd),
-                        sandboxed: use_sandbox,
-                    })
-                    .await;
+                self.emit_event(Event::StepCompleted {
+                    step_name: step_def.name.clone(),
+                    step_type: step_def.step_type.to_string(),
+                    duration_ms,
+                    timestamp: chrono::Utc::now(),
+                    input_tokens: last_record.and_then(|r| r.input_tokens),
+                    output_tokens: last_record.and_then(|r| r.output_tokens),
+                    cost_usd: last_record.and_then(|r| r.cost_usd),
+                    sandboxed: use_sandbox,
+                })
+                .await
+                .map_err(|e| StepError::Fail(e.to_string()))?;
             }
             Err(e) if !matches!(e, StepError::ControlFlow(_)) => {
-                self.event_bus
-                    .emit(Event::StepFailed {
+                // Best-effort persist on failure path; if the DB write itself
+                // fails we still want the original step error to propagate.
+                if let Err(emit_err) = self
+                    .emit_event(Event::StepFailed {
                         step_name: step_def.name.clone(),
                         step_type: step_def.step_type.to_string(),
                         error: e.to_string(),
@@ -1007,7 +1063,10 @@ impl Engine {
                         timestamp: chrono::Utc::now(),
                         sandboxed: use_sandbox,
                     })
-                    .await;
+                    .await
+                {
+                    tracing::warn!(error = %emit_err, "Failed to persist StepFailed event");
+                }
             }
             _ => {}
         }
