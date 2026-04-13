@@ -38,7 +38,7 @@
 ## Feature 7: Extrair crate minion-harness com Engine::step e Engine::resume
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.3] As a engine user, I want `Engine::new(HarnessConfig, Session, Box<dyn SandboxLifecycle>)` with `step`/`resume` methods, so that each step is an atomic transaction reconstructable via session replay. Source: _bmad-output/engine-v2/epics.md Existing: src/engine/mod.rs ⚠ toca hub file
 - Dependencies: Feature 6
-- Status: pending
+- Status: done
 
 ## Feature 8: Migrar binario minion execute para usar nova API
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.4] As a operator, I want the existing `minion execute` subcommand to call `Engine::step` in a loop until completion or failure, so that the CLI UX stays the same after the refactor. Source: _bmad-output/engine-v2/epics.md Existing: src/cli/commands.rs
