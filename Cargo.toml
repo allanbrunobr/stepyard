@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/minion-session"]
+
 [package]
 name = "minion-engine"
 version = "0.7.6"
