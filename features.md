@@ -28,7 +28,7 @@
 ## Feature 5: Extrair minion-core com types compartilhados
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.1] As a engine developer, I want a `minion-core` crate containing `Event`, `StepRecord`, `WorkflowDef`, `Subscriber` trait, so that other crates depend only on stable types without I/O. Source: _bmad-output/engine-v2/epics.md Existing: src/events/types.rs ⚠ toca hub file
 - Dependencies: Feature 4
-- Status: pending
+- Status: done
 
 ## Feature 6: Extrair crate minion-sandbox-orchestrator com trait SandboxLifecycle
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.2] As a harness developer, I want a separate crate exposing `Sandbox`, `SandboxId` and trait `SandboxLifecycle`, so that the harness does not know Docker directly and tests can mock the lifecycle. Source: _bmad-output/engine-v2/epics.md Existing: src/sandbox/ ⚠ toca hub file
