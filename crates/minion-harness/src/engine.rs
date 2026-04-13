@@ -94,7 +94,9 @@ pub struct Engine {
     cancel: CancelToken,
     #[allow(dead_code)]
     config: HarnessConfig,
-    started_at: std::sync::Mutex<Option<Instant>>,
+    /// First-step timestamp. Plain `Option` is Send-safe and `&mut self` on
+    /// every public mutator means we never need a lock here.
+    started_at: Option<Instant>,
 }
 
 impl Engine {
@@ -127,7 +129,7 @@ impl Engine {
             workflow,
             cancel: CancelToken::default(),
             config,
-            started_at: std::sync::Mutex::new(None),
+            started_at: None,
         }
     }
 
@@ -182,16 +184,13 @@ impl Engine {
         let start = Instant::now();
 
         // Remember when the workflow actually started (first step).
-        if progress.completed_steps == 0 {
-            let mut mu = self.started_at.lock().unwrap();
-            if mu.is_none() {
-                *mu = Some(start);
-                // Emit WorkflowStarted exactly once per session.
-                self.emit(Event::WorkflowStarted {
-                    timestamp: Utc::now(),
-                })
-                .await?;
-            }
+        if progress.completed_steps == 0 && self.started_at.is_none() {
+            self.started_at = Some(start);
+            // Emit WorkflowStarted exactly once per session.
+            self.emit(Event::WorkflowStarted {
+                timestamp: Utc::now(),
+            })
+            .await?;
         }
 
         self.emit(Event::StepStarted {
@@ -352,8 +351,6 @@ impl Engine {
         if self.session.status() == SessionStatus::Running {
             let duration_ms = self
                 .started_at
-                .lock()
-                .unwrap()
                 .map(|t| t.elapsed().as_millis() as u64)
                 .unwrap_or(0);
             self.emit(Event::WorkflowCompleted {
