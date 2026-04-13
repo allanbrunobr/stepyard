@@ -1,49 +1,9 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+//! Re-export of the canonical [`Event`] enum from `minion-core`.
+//!
+//! Story 2.1 moved `Event` to `crates/minion-core/src/event.rs` so that
+//! downstream crates (sessions, harness, sandbox-orchestrator) can depend on
+//! it without pulling in the engine binary. This module preserves the legacy
+//! import path `crate::events::types::Event` so existing call sites keep
+//! compiling unchanged.
 
-/// All events that can be emitted by the engine
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "event", rename_all = "snake_case")]
-pub enum Event {
-    StepStarted {
-        step_name: String,
-        step_type: String,
-        timestamp: DateTime<Utc>,
-    },
-    StepCompleted {
-        step_name: String,
-        step_type: String,
-        duration_ms: u64,
-        timestamp: DateTime<Utc>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        input_tokens: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output_tokens: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cost_usd: Option<f64>,
-        sandboxed: bool,
-    },
-    StepFailed {
-        step_name: String,
-        step_type: String,
-        error: String,
-        duration_ms: u64,
-        timestamp: DateTime<Utc>,
-        sandboxed: bool,
-    },
-    WorkflowStarted {
-        timestamp: DateTime<Utc>,
-    },
-    WorkflowCompleted {
-        duration_ms: u64,
-        timestamp: DateTime<Utc>,
-    },
-    SandboxCreated {
-        sandbox_id: String,
-        timestamp: DateTime<Utc>,
-    },
-    SandboxDestroyed {
-        sandbox_id: String,
-        timestamp: DateTime<Utc>,
-    },
-}
+pub use minion_core::Event;

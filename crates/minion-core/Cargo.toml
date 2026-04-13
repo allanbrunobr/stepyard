@@ -1,0 +1,16 @@
+[package]
+name = "minion-core"
+version = "0.1.0"
+edition = "2021"
+description = "Stable, IO-free types and traits shared across the Minion Engine v2 crates"
+license = "MIT"
+authors = ["Allan Bruno"]
+
+# Hard rule (Story 2.1 AC): no runtime IO deps. No tokio. No sqlx. No reqwest.
+# Anything that pulls in a runtime belongs in a downstream crate.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }

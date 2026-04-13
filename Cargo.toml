@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/minion-session"]
+members = [".", "crates/minion-core", "crates/minion-session"]
 
 [package]
 name = "minion-engine"
@@ -77,6 +77,9 @@ rhai = "1"
 
 # Dynamic plugin loading
 libloading = "0.8"
+
+# Stable contract types (Epic 2 Story 2.1)
+minion-core = { path = "crates/minion-core" }
 
 # Session persistence (Epic 1 Story 1.4)
 minion-session = { path = "crates/minion-session" }

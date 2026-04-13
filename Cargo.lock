@@ -1633,6 +1633,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "minion-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "minion-engine"
 version = "0.7.6"
 dependencies = [
@@ -1649,6 +1660,7 @@ dependencies = [
  "hmac",
  "indicatif",
  "libloading",
+ "minion-core",
  "minion-session",
  "regex",
  "reqwest 0.12.28",
