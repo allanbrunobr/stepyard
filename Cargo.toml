@@ -1,5 +1,10 @@
 [workspace]
-members = [".", "crates/minion-core", "crates/minion-session"]
+members = [
+    ".",
+    "crates/minion-core",
+    "crates/minion-session",
+    "crates/minion-sandbox-orchestrator",
+]
 
 [package]
 name = "minion-engine"
