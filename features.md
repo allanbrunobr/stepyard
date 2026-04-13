@@ -8,17 +8,17 @@
 ## Feature 1: Criar crate minion-session com types publicos e schema SQL
 - Description: [Epic 1: Session as First-Class Primitive, Story 1.1] As a engine developer, I want a new `minion-session` crate with `Session`, `SessionEvent`, `StepRecord` types plus SQL schema for `sessions` and `session_events` tables, so that other crates can depend on a stable session contract instead of in-process state. Source: _bmad-output/engine-v2/epics.md
 - Dependencies: none
-- Status: pending
+- Status: done
 
 ## Feature 2: Implementar Session::new e Session::append_event com persistencia
 - Description: [Epic 1: Session as First-Class Primitive, Story 1.2] As a harness engineer, I want `Session::new(workflow_id, tenant_id) -> Session` and `Session::append(event)` persisting to PostgreSQL, so that the harness can create sessions and log events without managing storage itself. Source: _bmad-output/engine-v2/epics.md
 - Dependencies: Feature 1
-- Status: pending
+- Status: done
 
 ## Feature 3: Implementar Session::load e Session::replay com ordem deterministica
 - Description: [Epic 1: Session as First-Class Primitive, Story 1.3] As a harness engineer, I want `Session::load(session_id)` rebuilding the handle from disk and `session.replay() -> Vec<Event>` in seq order, so that the harness can resume any session after process restart. Source: _bmad-output/engine-v2/epics.md
 - Dependencies: Feature 2
-- Status: pending
+- Status: done
 
 ## Feature 4: Integrar Session no engine v0.7.6 atual (replace in-memory state)
 - Description: [Epic 1: Session as First-Class Primitive, Story 1.4] As a engine developer, I want the current v0.7.6 engine to use `Session::append` instead of its in-memory `Vec<Event>`, so that v0.7.6 behaves like v2 even before the full refactor. Source: _bmad-output/engine-v2/epics.md Existing: src/engine/mod.rs
