@@ -48,7 +48,7 @@
 ## Feature 9: Teste de stress multi-session concorrente
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.5] As a engine developer, I want an integration test dispatching 10 concurrent sessions on the same `Engine` instance, so that we prove `Engine: Send + Sync` and there are no races in the orchestrator. Source: _bmad-output/engine-v2/epics.md
 - Dependencies: Feature 8
-- Status: pending
+- Status: done
 
 ## Feature 10: Crate minion-mcp-proxy com estrutura base e GET /healthz
 - Description: [Epic 3: MCP Proxy as Separate Process, Story 3.1] As a platform engineer, I want a `minion-mcp-proxy` binary listening on a configurable port with a `GET /healthz` endpoint, so that we have validated boilerplate (container, healthcheck, logging) before implementing the real routes. Source: _bmad-output/engine-v2/epics.md
