@@ -1,5 +1,6 @@
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{bail, Context};
 use clap::Args;
@@ -9,63 +10,10 @@ use crate::sandbox::{self, SandboxMode};
 use crate::workflow::parser;
 use crate::workflow::validator;
 
+use super::display;
+use super::harness_adapter;
 use super::init_templates;
-
-/// Connect to PostgreSQL, run Session migrations, and open a Session for this
-/// workflow dispatch.
-///
-/// Returns a clear error (not `anyhow!`) when DATABASE_URL is missing or the
-/// database is unreachable — this fulfills Story 1.4 AC:
-/// "DATABASE_URL pointing to a PG that is down -> exit != 0 with 'engine
-/// requires PostgreSQL backend'."
-async fn open_session(
-    workflow_name: &str,
-    json_mode: bool,
-) -> anyhow::Result<minion_session::Session> {
-    let db_url = std::env::var("DATABASE_URL").map_err(|_| {
-        let msg = "engine requires PostgreSQL backend: DATABASE_URL env var is not set";
-        if json_mode {
-            let json = serde_json::json!({"error": msg, "type": "ConfigError"});
-            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
-        } else {
-            eprintln!("{msg}");
-            eprintln!(
-                "Hint: export DATABASE_URL=postgres://user:password@host:port/database"
-            );
-        }
-        anyhow::anyhow!("DATABASE_URL not set")
-    })?;
-
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(8)
-        .acquire_timeout(Duration::from_secs(5))
-        .connect(&db_url)
-        .await
-        .map_err(|e| {
-            let msg = format!("engine requires PostgreSQL backend: cannot reach database: {e}");
-            if json_mode {
-                let json = serde_json::json!({"error": msg, "type": "DatabaseUnreachable"});
-                println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
-            } else {
-                eprintln!("{msg}");
-            }
-            anyhow::anyhow!("DATABASE_URL unreachable: {e}")
-        })?;
-
-    minion_session::migrate(&pool)
-        .await
-        .with_context(|| "engine requires PostgreSQL backend: migrations failed")?;
-
-    // Workflow identifier — stable UUID derived from the workflow name so that
-    // the same workflow name always maps to the same workflow_id row. A real
-    // workflows table (Story 2.x) will replace this with an opaque lookup.
-    let workflow_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, workflow_name.as_bytes());
-    let tenant_id = std::env::var("MINION_TENANT").unwrap_or_else(|_| "default".to_string());
-
-    minion_session::Session::new(&pool, workflow_id, tenant_id)
-        .await
-        .with_context(|| "failed to create session row")
-}
+use super::session_setup::open_session;
 
 /// Resolve a workflow path with fallback chain:
 /// 1. As-is (if the file exists — developer running from repo or absolute path)
@@ -139,6 +87,16 @@ pub struct ExecuteArgs {
     /// Example: --repo allanbrunobr/minion-engine
     #[arg(long, value_name = "OWNER/REPO")]
     pub repo: Option<String>,
+
+    /// Engine implementation to drive the workflow:
+    /// `v1` (default) — the legacy monolithic `Engine::run()` with all 9
+    /// step types (cmd, agent, chat, gate, repeat, map, parallel, call,
+    /// template, script).
+    /// `v2` — the new `minion_harness::Engine::resume()` step loop. Only
+    /// supports cmd steps in this release (Story 2.4); non-cmd workflows
+    /// exit non-zero with a clear error.
+    #[arg(long, value_name = "v1|v2", default_value = "v1")]
+    pub engine: String,
 }
 
 #[derive(Args)]
@@ -165,6 +123,123 @@ pub struct InitArgs {
 pub struct InspectArgs {
     /// Path to the workflow YAML file
     pub workflow: PathBuf,
+}
+
+/// `--engine v2` path — drives the workflow through
+/// [`minion_harness::Engine`] step-by-step, printing the same
+/// `▶ name` / `✓ name (…s)` lines the v1 display emits.
+///
+/// Returns `Ok(())` on successful completion. Non-zero exit codes for failed
+/// or cancelled workflows are produced by `std::process::exit` so the caller
+/// does not need to translate them.
+async fn execute_v2(
+    args: ExecuteArgs,
+    workflow: crate::workflow::schema::WorkflowDef,
+    sandbox_mode: SandboxMode,
+) -> anyhow::Result<()> {
+    use minion_harness::{Engine as HarnessEngine, HarnessConfig, StepOutcome};
+    use minion_sandbox_orchestrator::{DockerLifecycle, LocalShellLifecycle, SandboxLifecycle};
+
+    let harness_workflow = harness_adapter::adapt(&workflow)
+        .map_err(|e| anyhow::anyhow!("cannot run workflow on --engine v2: {e}"))?;
+
+    let session = open_session(&workflow.name, args.json).await?;
+
+    let lifecycle: Arc<dyn SandboxLifecycle> = if sandbox_mode == SandboxMode::Disabled {
+        Arc::new(LocalShellLifecycle::new())
+    } else {
+        Arc::new(DockerLifecycle::default())
+    };
+
+    let config = HarnessConfig {
+        tenant_id: std::env::var("MINION_TENANT").unwrap_or_else(|_| "default".into()),
+    };
+
+    let mut engine = HarnessEngine::new(config, session, harness_workflow.clone(), lifecycle);
+
+    // Wire SIGINT (Ctrl-C) and SIGTERM to engine cancellation. Story 2.4 AC:
+    // SIGTERM flips the session to `cancelled` in under 5 s.
+    let cancel = engine.cancel_token();
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut term = match signal(SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+        cancel.cancel();
+    });
+
+    display::workflow_start(&workflow.name);
+    let wf_start = Instant::now();
+
+    // Drive the harness one step at a time so we can print start/finish lines
+    // between calls. Each `engine.step()` writes StepStarted + StepCompleted |
+    // StepFailed to the session log and returns the outcome.
+    let mut step_index = 0usize;
+    loop {
+        // Peek the upcoming step name from the adapted workflow — the log
+        // has not been written yet for it. If we are past the end, the next
+        // call to step() will just emit WorkflowCompleted.
+        let upcoming = harness_workflow.steps.get(step_index);
+
+        let pb = upcoming.map(|s| display::step_start(&s.name, "cmd"));
+        let step_start_time = Instant::now();
+
+        let outcome = engine
+            .step()
+            .await
+            .context("minion_harness::Engine::step failed")?;
+
+        match outcome {
+            StepOutcome::StepCompleted { step_name } => {
+                if let Some(pb) = pb {
+                    display::step_ok(&pb, &step_name, step_start_time.elapsed());
+                }
+                step_index += 1;
+            }
+            StepOutcome::StepFailed { step_name, error } => {
+                if let Some(pb) = pb {
+                    display::step_fail(&pb, &step_name, &error);
+                }
+                eprintln!("step `{step_name}` failed: {error}");
+                std::process::exit(1);
+            }
+            StepOutcome::WorkflowCompleted => {
+                if let Some(pb) = pb {
+                    pb.finish_and_clear();
+                }
+                display::workflow_done(wf_start.elapsed(), step_index);
+                return Ok(());
+            }
+            StepOutcome::Cancelled => {
+                if let Some(pb) = pb {
+                    pb.finish_and_clear();
+                }
+                eprintln!("workflow cancelled");
+                // 130 is the conventional exit code for SIGINT; SIGTERM maps
+                // to 143 but we collapse both here to keep the UX simple.
+                std::process::exit(130);
+            }
+            _ => {
+                if let Some(pb) = pb {
+                    pb.finish_and_clear();
+                }
+                eprintln!("unexpected outcome from harness");
+                std::process::exit(1);
+            }
+        }
+    }
 }
 
 pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
@@ -231,6 +306,22 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
     // Give clear, actionable errors before starting the workflow so that
     // developers installing via `cargo install` know exactly what's missing.
     validate_environment(&workflow, sandbox_mode != SandboxMode::Disabled, args.json).await?;
+
+    // ── Engine selection (Epic 2 Story 2.4) ──────────────────────────────
+    // `--engine v2` drives the workflow through `minion_harness::Engine` — a
+    // thin step/resume loop that delegates persistence to the Session log and
+    // execution to a `SandboxLifecycle`. v2 only supports cmd steps today;
+    // the remaining step types stay on the v1 code path below.
+    match args.engine.as_str() {
+        "v1" => {} // fall through to legacy path
+        "v2" => {
+            if args.dry_run {
+                bail!("--engine v2 does not support --dry-run yet (Story 2.4)");
+            }
+            return execute_v2(args, workflow, sandbox_mode).await;
+        }
+        other => bail!("unknown --engine value `{other}` (expected `v1` or `v2`)"),
+    }
 
     // ── Session setup (Epic 1 Story 1.4) ─────────────────────────────────
     // Dry-run skips DB entirely — it is pure introspection. Any other mode

@@ -89,6 +89,13 @@ minion-core = { path = "crates/minion-core" }
 
 # Session persistence (Epic 1 Story 1.4)
 minion-session = { path = "crates/minion-session" }
+
+# Sandbox lifecycle abstraction (Epic 2 Story 2.2)
+minion-sandbox-orchestrator = { path = "crates/minion-sandbox-orchestrator" }
+
+# Harness step/resume/cancel loop (Epic 2 Story 2.3)
+minion-harness = { path = "crates/minion-harness" }
+
 sqlx = { version = "0.8", features = [
     "runtime-tokio-native-tls",
     "postgres",
@@ -110,3 +117,5 @@ lto = "thin"
 [dev-dependencies]
 wiremock = "0.6"
 tempfile = "3"
+assert_cmd = "2"
+predicates = "3"

@@ -1,6 +1,8 @@
 mod commands;
 pub mod display;
+mod harness_adapter;
 pub mod init_templates;
+mod session_setup;
 mod setup;
 
 use clap::{Args, Parser, Subcommand};

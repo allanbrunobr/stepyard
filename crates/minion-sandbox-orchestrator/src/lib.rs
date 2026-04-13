@@ -25,10 +25,12 @@
 //!   step and get either the cached container or a fresh one.
 
 mod docker;
+mod local;
 pub mod mock;
 mod sandbox;
 
 pub use docker::{DockerLifecycle, DockerLifecycleConfig};
+pub use local::LocalShellLifecycle;
 pub use mock::{MockCall, MockLifecycle};
 pub use sandbox::{ExecOutput, Sandbox, SandboxError, SandboxId};
 

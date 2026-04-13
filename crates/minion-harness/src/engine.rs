@@ -168,7 +168,10 @@ impl Engine {
         // is stuck and no new step should be executed.
         let progress = self.progress_from_log().await?;
         if progress.has_failure {
-            // Workflow is in failed state; do not advance.
+            // Workflow is in failed state; do not advance. Make sure the
+            // session row reflects that even if a previous process died
+            // before flipping it (Story 2.4 AC: status=failed on step fail).
+            self.finalise_fail().await?;
             return Ok(StepOutcome::StepFailed {
                 step_name: progress.last_failed_step.unwrap_or_default(),
                 error: "workflow previously failed".into(),
@@ -218,8 +221,46 @@ impl Engine {
             return Ok(StepOutcome::Cancelled);
         }
 
-        let exec_result = self.executor.execute(*self.session.id().as_uuid(), step).await;
+        // Race the step against the cancel token so SIGTERM during a long
+        // command (e.g. `sleep 30`) aborts within ~100 ms instead of waiting
+        // for the command to complete (Story 2.4 AC: cancel within 5 s).
+        // Clone Arcs so the exec future does not borrow `self` — we need
+        // `&mut self` afterwards to finalise the session.
+        let executor = self.executor.clone();
+        let session_uuid = *self.session.id().as_uuid();
+        let step_clone = step.clone();
+        let cancel_token = self.cancel.clone();
+        let exec_result = {
+            let exec_fut = executor.execute(session_uuid, &step_clone);
+            let cancel_fut = async {
+                while !cancel_token.is_cancelled() {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            };
+            tokio::pin!(exec_fut);
+            tokio::pin!(cancel_fut);
+            tokio::select! {
+                r = &mut exec_fut => Some(r),
+                _ = &mut cancel_fut => None,
+            }
+        };
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Cancel landed mid-step: drop the exec future, emit StepFailed and
+        // finalise the session as cancelled.
+        let Some(exec_result) = exec_result else {
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: "cmd".into(),
+                error: "Cancelled".into(),
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: true,
+            })
+            .await?;
+            self.finalise_cancel().await?;
+            return Ok(StepOutcome::Cancelled);
+        };
 
         match exec_result {
             Ok(output) if output.is_success() => {
@@ -253,6 +294,7 @@ impl Engine {
                     sandboxed: true,
                 })
                 .await?;
+                self.finalise_fail().await?;
                 Ok(StepOutcome::StepFailed {
                     step_name: step.name.clone(),
                     error,
@@ -269,6 +311,7 @@ impl Engine {
                     sandboxed: true,
                 })
                 .await?;
+                self.finalise_fail().await?;
                 Ok(StepOutcome::StepFailed {
                     step_name: step.name.clone(),
                     error,
@@ -371,6 +414,13 @@ impl Engine {
                 .destroy(&minion_sandbox_orchestrator::SandboxId::default())
                 .await;
             self.session.cancel().await?;
+        }
+        Ok(())
+    }
+
+    async fn finalise_fail(&mut self) -> Result<(), EngineError> {
+        if self.session.status() == SessionStatus::Running {
+            self.session.fail().await?;
         }
         Ok(())
     }

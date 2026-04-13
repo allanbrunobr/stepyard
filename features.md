@@ -43,7 +43,7 @@
 ## Feature 8: Migrar binario minion execute para usar nova API
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.4] As a operator, I want the existing `minion execute` subcommand to call `Engine::step` in a loop until completion or failure, so that the CLI UX stays the same after the refactor. Source: _bmad-output/engine-v2/epics.md Existing: src/cli/commands.rs
 - Dependencies: Feature 7
-- Status: pending
+- Status: done
 
 ## Feature 9: Teste de stress multi-session concorrente
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.5] As a engine developer, I want an integration test dispatching 10 concurrent sessions on the same `Engine` instance, so that we prove `Engine: Send + Sync` and there are no races in the orchestrator. Source: _bmad-output/engine-v2/epics.md
