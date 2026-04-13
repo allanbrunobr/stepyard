@@ -23,7 +23,7 @@
 ## Feature 4: Integrar Session no engine v0.7.6 atual (replace in-memory state)
 - Description: [Epic 1: Session as First-Class Primitive, Story 1.4] As a engine developer, I want the current v0.7.6 engine to use `Session::append` instead of its in-memory `Vec<Event>`, so that v0.7.6 behaves like v2 even before the full refactor. Source: _bmad-output/engine-v2/epics.md Existing: src/engine/mod.rs
 - Dependencies: Feature 3
-- Status: pending
+- Status: done
 
 ## Feature 5: Extrair minion-core com types compartilhados
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.1] As a engine developer, I want a `minion-core` crate containing `Event`, `StepRecord`, `WorkflowDef`, `Subscriber` trait, so that other crates depend only on stable types without I/O. Source: _bmad-output/engine-v2/epics.md Existing: src/events/types.rs ⚠ toca hub file
