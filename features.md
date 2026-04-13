@@ -33,7 +33,7 @@
 ## Feature 6: Extrair crate minion-sandbox-orchestrator com trait SandboxLifecycle
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.2] As a harness developer, I want a separate crate exposing `Sandbox`, `SandboxId` and trait `SandboxLifecycle`, so that the harness does not know Docker directly and tests can mock the lifecycle. Source: _bmad-output/engine-v2/epics.md Existing: src/sandbox/ ⚠ toca hub file
 - Dependencies: Feature 5
-- Status: pending
+- Status: done
 
 ## Feature 7: Extrair crate minion-harness com Engine::step e Engine::resume
 - Description: [Epic 2: Decouple Harness and Sandbox, Story 2.3] As a engine user, I want `Engine::new(HarnessConfig, Session, Box<dyn SandboxLifecycle>)` with `step`/`resume` methods, so that each step is an atomic transaction reconstructable via session replay. Source: _bmad-output/engine-v2/epics.md Existing: src/engine/mod.rs ⚠ toca hub file
