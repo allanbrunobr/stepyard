@@ -4,6 +4,7 @@ members = [
     "crates/minion-core",
     "crates/minion-session",
     "crates/minion-sandbox-orchestrator",
+    "crates/minion-harness",
 ]
 
 [package]

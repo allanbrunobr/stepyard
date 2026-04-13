@@ -1,0 +1,37 @@
+[package]
+name = "minion-harness"
+version = "0.1.0"
+edition = "2021"
+description = "The harness loop of Minion Engine v2 — Engine::step / resume / cancel over a SandboxLifecycle and a Session"
+license = "MIT"
+authors = ["Allan Bruno"]
+
+[dependencies]
+minion-core = { path = "../minion-core" }
+minion-session = { path = "../minion-session" }
+minion-sandbox-orchestrator = { path = "../minion-sandbox-orchestrator" }
+
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+tracing = "0.1"
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-native-tls",
+    "postgres",
+    "uuid",
+    "chrono",
+] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util", "rt-multi-thread", "macros"] }
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-native-tls",
+    "postgres",
+    "uuid",
+    "chrono",
+    "json",
+] }
