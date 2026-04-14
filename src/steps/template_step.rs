@@ -7,7 +7,7 @@ use crate::engine::context::Context;
 use crate::error::StepError;
 use crate::workflow::schema::StepDef;
 
-use super::{AgentOutput, StepExecutor, StepOutput};
+use super::{StepExecutor, StepOutput, TemplateOutput};
 
 pub struct TemplateStepExecutor {
     prompts_dir: String,
@@ -49,11 +49,7 @@ impl StepExecutor for TemplateStepExecutor {
 
         let rendered = ctx.render_template(&template_content)?;
 
-        Ok(StepOutput::Agent(AgentOutput {
-            response: rendered,
-            session_id: None,
-            stats: super::AgentStats::default(),
-        }))
+        Ok(StepOutput::Template(TemplateOutput { rendered }))
     }
 }
 

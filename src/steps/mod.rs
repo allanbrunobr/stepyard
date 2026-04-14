@@ -59,6 +59,12 @@ pub trait SandboxAwareExecutor: Send + Sync {
     ) -> Result<StepOutput, StepError>;
 }
 
+/// Output of a rendered template step (Story 2.8)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateOutput {
+    pub rendered: String,
+}
+
 /// Result of any executed step
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -68,6 +74,7 @@ pub enum StepOutput {
     Chat(ChatOutput),
     Gate(GateOutput),
     Scope(ScopeOutput),
+    Template(TemplateOutput),
     Empty,
 }
 
@@ -84,6 +91,7 @@ impl StepOutput {
                 .as_ref()
                 .map(|v| v.text())
                 .unwrap_or(""),
+            StepOutput::Template(o) => &o.rendered,
             StepOutput::Empty => "",
         }
     }
