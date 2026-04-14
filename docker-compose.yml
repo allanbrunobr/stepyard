@@ -29,6 +29,16 @@ services:
       POSTGRES_PORT: 5432
       API_PORT: 3001
       API_SECRET: ${API_SECRET:?API_SECRET must be set in .env}
+      # Epic 5 Story 5.1 — remote dispatch
+      MINION_DISPATCH_SSH_HOST: ${MINION_DISPATCH_SSH_HOST:-}
+      MINION_WORKFLOWS_DIR: ${MINION_WORKFLOWS_DIR:-/root/.minion/workflows}
+      # `DATABASE_URL:MINION_HOST_DATABASE_URL` remaps — api container's DATABASE_URL
+      # points at `db` (compose network), but minion on the host needs `localhost`.
+      MINION_SSH_ENV_FORWARD: "DATABASE_URL:MINION_HOST_DATABASE_URL,GH_TOKEN,ANTHROPIC_API_KEY"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-minion}:${POSTGRES_PASSWORD:-minion_secret}@db:5432/${POSTGRES_DB:-minion_engine}"
+      MINION_HOST_DATABASE_URL: ${MINION_HOST_DATABASE_URL:-postgres://minion:minion_dashboard_2026@localhost:5432/minion_dashboard}
+      GH_TOKEN: ${GH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -36,6 +46,15 @@ services:
       - ./packages/api/src:/app/src
       - ./packages/api/migrations:/app/migrations
       - ./types:/app/types
+      # Read-only mount of host SSH dir so api can spawn `minion` on the host
+      # via MINION_DISPATCH_SSH_HOST. Host must accept the key in authorized_keys.
+      - ${HOST_SSH_DIR:-/root/.ssh}:/root/.ssh:ro
+      # Workflow YAMLs live on the host; api validates they exist before dispatch.
+      - ${MINION_WORKFLOWS_DIR:-/root/.minion/workflows}:/root/.minion/workflows:ro
+    extra_hosts:
+      # When MINION_DISPATCH_SSH_HOST=root@host.docker.internal, this resolves
+      # to the Docker host on Linux (Docker 20.10+).
+      - "host.docker.internal:host-gateway"
 
   web:
     build: ./packages/web

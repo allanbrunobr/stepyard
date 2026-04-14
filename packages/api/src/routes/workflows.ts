@@ -1,5 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import { spawn } from 'child_process';
+import { closeSync, existsSync, mkdirSync, openSync } from 'fs';
+import { basename, join } from 'path';
 import { pool } from '../db';
 import { logger } from '../logger';
 
@@ -263,7 +266,167 @@ workflowsRouter.get('/workflows/:runId', async (req: Request, res: Response) => 
   }
 });
 
+// --- Dispatch (Epic 5 Story 5.1) ---
+
+const dispatchSchema = z.object({
+  workflow: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine((v) => v === basename(v) && !v.includes('/') && !v.includes('..'), {
+      message: 'workflow must be a plain basename (no path separators)',
+    }),
+  target: z.string().min(1).max(500),
+  repo: z
+    .string()
+    .regex(/^[\w.-]+\/[\w.-]+$/, 'repo must be OWNER/REPO')
+    .optional(),
+  branch: z.string().max(200).optional(),
+  vars: z.record(z.string(), z.string()).optional(),
+});
+
+workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Response) => {
+  const parsed = dispatchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: { code: 'VALIDATION_FAILED', message: 'Invalid dispatch payload', details: parsed.error.issues },
+    });
+    return;
+  }
+
+  const { workflow, target, repo, branch, vars } = parsed.data;
+  const workflowsDir = process.env.MINION_WORKFLOWS_DIR || '/root/.minion/workflows';
+  const workflowFile = join(workflowsDir, `${workflow}.yaml`);
+
+  if (!existsSync(workflowFile)) {
+    res.status(404).json({
+      error: {
+        code: 'WORKFLOW_NOT_FOUND',
+        message: `Workflow '${workflow}' not found in ${workflowsDir}`,
+      },
+    });
+    return;
+  }
+
+  const minionArgs: string[] = ['execute'];
+  if (repo) minionArgs.push('--repo', repo);
+  if (branch) minionArgs.push('--var', `branch=${branch}`);
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      minionArgs.push('--var', `${k}=${v}`);
+    }
+  }
+  minionArgs.push(workflowFile, '--', target);
+
+  // Two deploy modes:
+  //   1. `MINION_DISPATCH_SSH_HOST` set → SSH back to host, run minion there
+  //      (used when the API runs in a container that doesn't have minion installed)
+  //   2. otherwise → spawn `minion` directly from $PATH
+  const sshHost = process.env.MINION_DISPATCH_SSH_HOST;
+  const [binary, args] = sshHost
+    ? buildSshCommand(sshHost, minionArgs)
+    : [process.env.MINION_BINARY || 'minion', minionArgs];
+
+  // Log file for the detached process. Persists after the api request returns
+  // so operators can inspect failures post-hoc. Written to /tmp; container-local.
+  const logDir = process.env.MINION_DISPATCH_LOG_DIR || '/tmp';
+  try { mkdirSync(logDir, { recursive: true }); } catch {}
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const logPath = join(logDir, `minion-dispatch-${ts}-${process.pid}.log`);
+
+  logger.info(
+    { binary, args, workflow, target, repo, branch, sshHost: !!sshHost, logPath },
+    'Dispatching minion run',
+  );
+
+  try {
+    const logFd = openSync(logPath, 'a');
+    const child = spawn(binary, args, {
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+      env: process.env,
+    });
+    child.on('error', (err) => {
+      logger.error({ err, args }, 'Spawned minion emitted error event');
+    });
+    child.unref();
+    closeSync(logFd);
+    const pid = child.pid;
+    if (typeof pid !== 'number') {
+      res.status(500).json({ error: { code: 'SPAWN_FAILED', message: 'Failed to spawn minion (no pid)' } });
+      return;
+    }
+    res.status(202).json({
+      dispatched_at: new Date().toISOString(),
+      pid,
+      workflow,
+      target,
+      repo: repo ?? null,
+      branch: branch ?? null,
+      log: logPath,
+    });
+  } catch (err) {
+    logger.error({ err, args }, 'Failed to spawn minion');
+    res.status(500).json({ error: { code: 'SPAWN_FAILED', message: (err as Error).message } });
+  }
+});
+
 // --- Helpers ---
+
+/**
+ * Wrap a minion invocation in an SSH call. The remote side runs the engine
+ * via `bash -lc '<envs> exec minion ...'` so the host's PATH is loaded and
+ * workflow-level env vars are forwarded from MINION_SSH_ENV_FORWARD.
+ *
+ * MINION_SSH_ENV_FORWARD accepts a comma-separated list of:
+ *   - `NAME`          → forward `NAME=$NAME` (simple)
+ *   - `NAME:SOURCE`   → forward `NAME=$SOURCE` (remap — e.g. when the api
+ *                       container's DATABASE_URL points at `db` but the host
+ *                       needs `localhost`)
+ */
+function buildSshCommand(sshHost: string, minionArgs: string[]): [string, string[]] {
+  const forward = (process.env.MINION_SSH_ENV_FORWARD || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const exports: string[] = [];
+  for (const entry of forward) {
+    const [target, source] = entry.includes(':') ? entry.split(':', 2) : [entry, entry];
+    const value = process.env[source];
+    if (value != null) {
+      exports.push(`${target}=${shellQuote(value)}`);
+    }
+  }
+  // Ensure a clean git-enabled CWD for the engine. Required when not in --repo
+  // mode because minion's sandbox_up expects a git repo to copy as workspace.
+  // The dir is created idempotently and reused across dispatches.
+  const ws = process.env.MINION_DISPATCH_WORKSPACE || '/tmp/minion-dispatch-ws';
+  const prep = [
+    `mkdir -p ${shellQuote(ws)}`,
+    `cd ${shellQuote(ws)}`,
+    `[ -d .git ] || { git init -q && echo dispatch > .dispatch && git add .dispatch && git -c user.email=minion@localhost -c user.name=Minion commit -qm init ; }`,
+  ].join(' && ');
+  // Use an absolute path so we don't rely on the login shell's PATH order.
+  // Some hosts have multiple minion binaries (e.g. ~/.cargo/bin vs /usr/local/bin)
+  // which may be different versions.
+  const minionBin = process.env.MINION_HOST_BINARY || '/usr/local/bin/minion';
+  const remoteCmd = `${prep} && ${exports.join(' ')} exec ${shellQuote(minionBin)} ${minionArgs.map(shellQuote).join(' ')}`;
+  // ssh concatenates remote argv with spaces before feeding it to the remote
+  // shell, which then re-parses. Pass the bash invocation as ONE argument so
+  // the `&&` / quoting in remoteCmd survives.
+  const sshArgs = [
+    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'BatchMode=yes',
+    sshHost,
+    `bash -lc ${shellQuote(remoteCmd)}`,
+  ];
+  return ['ssh', sshArgs];
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_\-./=:,@%+]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 
 function csvEscape(value: string): string {
   // Neutralize spreadsheet formula injection
