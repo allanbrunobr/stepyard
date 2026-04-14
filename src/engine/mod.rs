@@ -852,7 +852,29 @@ impl Engine {
         run_result?;
 
         if !self.quiet {
-            display::workflow_done(start.elapsed(), step_count);
+            let total_in: u64 = self
+                .step_records
+                .iter()
+                .map(|r| r.input_tokens.unwrap_or(0))
+                .sum();
+            let total_out: u64 = self
+                .step_records
+                .iter()
+                .map(|r| r.output_tokens.unwrap_or(0))
+                .sum();
+            let total_cost: f64 = self.step_records.iter().filter_map(|r| r.cost_usd).sum();
+
+            if total_in + total_out > 0 {
+                display::workflow_summary(
+                    step_count,
+                    start.elapsed(),
+                    total_in,
+                    total_out,
+                    total_cost,
+                );
+            } else {
+                display::workflow_done(start.elapsed(), step_count);
+            }
         }
 
         self.state = Some(current_state);
@@ -986,6 +1008,13 @@ impl Engine {
 
                 if let Some(pb) = &pb {
                     display::step_ok(pb, &step_def.name, elapsed);
+                }
+
+                // --verbose: print cmd stdout/stderr below the step line
+                if self.verbose && !self.quiet {
+                    if let StepOutput::Cmd(cmd) = output {
+                        display::cmd_verbose(&cmd.stdout, &cmd.stderr);
+                    }
                 }
             }
             Err(StepError::ControlFlow(cf)) => {

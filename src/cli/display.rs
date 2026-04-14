@@ -107,6 +107,17 @@ pub fn parallel_step(name: &str) {
     println!("    {} {}", "⟶".blue(), name);
 }
 
+/// Print a cmd step's stdout/stderr, indented — only used under --verbose.
+/// Empty streams are skipped so clean commands don't add noise.
+pub fn cmd_verbose(stdout: &str, stderr: &str) {
+    for line in stdout.lines() {
+        println!("    {} {}", "│".dimmed(), line);
+    }
+    for line in stderr.lines() {
+        println!("    {} {}", "│".red().dimmed(), line.dimmed());
+    }
+}
+
 /// Display a rich workflow summary including token usage and cost
 pub fn workflow_summary(
     steps: usize,
@@ -169,6 +180,12 @@ mod tests {
     fn test_parallel_step_does_not_panic() {
         parallel_step("compile");
         parallel_step("lint");
+    }
+
+    #[test]
+    fn test_cmd_verbose_accepts_empty_and_multiline() {
+        cmd_verbose("", "");
+        cmd_verbose("one\ntwo", "warn: foo");
     }
 
     #[test]
