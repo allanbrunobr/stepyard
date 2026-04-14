@@ -1,6 +1,3 @@
-// Public API — used after worktree merge; suppress dead_code lint until then
-#![allow(dead_code)]
-
 /// Manages Claude Code session IDs for conversation continuity
 #[derive(Debug, Default)]
 pub struct SessionManager {

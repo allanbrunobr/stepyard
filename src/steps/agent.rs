@@ -36,15 +36,24 @@ impl AgentExecutor {
         }
 
         // Session resume (Story 2.1)
+        let has_explicit_resume = config.get_str("resume").is_some();
         if let Some(resume_step) = config.get_str("resume") {
             let session_id = lookup_session_id(ctx, resume_step)?;
             args.extend(["--resume".into(), session_id]);
         }
 
         // Session fork (Story 2.2) — uses same --resume flag; Claude CLI creates new session
+        let has_explicit_fork = config.get_str("fork_session").is_some();
         if let Some(fork_step) = config.get_str("fork_session") {
             let session_id = lookup_session_id(ctx, fork_step)?;
             args.extend(["--resume".into(), session_id]);
+        }
+
+        // Workflow-level session (Story 2.6) — applies only when no explicit resume/fork is set.
+        // Default is "shared"; "isolated" starts a fresh session.
+        if !has_explicit_resume && !has_explicit_fork {
+            let isolated = config.get_str("session") == Some("isolated");
+            args.extend(ctx.session_resume_args(isolated));
         }
 
         Ok(args)
@@ -413,6 +422,82 @@ mod tests {
         let args = AgentExecutor::build_args(&config, &ctx).unwrap();
         let resume_idx = args.iter().position(|a| a == "--resume").expect("--resume not found");
         assert_eq!(args[resume_idx + 1], "sess-fork-456");
+    }
+
+    // Story 2.6 — workflow-level shared/isolated session
+
+    fn ctx_with_captured_session(id: &str) -> Context {
+        use crate::steps::{AgentOutput, AgentStats, StepOutput};
+        let mut ctx = Context::new(String::new(), HashMap::new());
+        ctx.store(
+            "first",
+            StepOutput::Agent(AgentOutput {
+                response: "r".to_string(),
+                session_id: Some(id.to_string()),
+                stats: AgentStats::default(),
+            }),
+        );
+        ctx
+    }
+
+    #[test]
+    fn build_args_shared_default_adds_fork_resume() {
+        let ctx = ctx_with_captured_session("sess-workflow-1");
+        let config = StepConfig { values: HashMap::new() };
+
+        let args = AgentExecutor::build_args(&config, &ctx).unwrap();
+        assert!(args.contains(&"--fork-session".to_string()));
+        let idx = args.iter().position(|a| a == "--resume").unwrap();
+        assert_eq!(args[idx + 1], "sess-workflow-1");
+    }
+
+    #[test]
+    fn build_args_isolated_skips_resume() {
+        let ctx = ctx_with_captured_session("sess-workflow-1");
+        let mut values = HashMap::new();
+        values.insert("session".to_string(), serde_json::Value::String("isolated".into()));
+        let config = StepConfig { values };
+
+        let args = AgentExecutor::build_args(&config, &ctx).unwrap();
+        assert!(!args.contains(&"--fork-session".to_string()));
+        assert!(!args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn build_args_shared_without_captured_session_emits_no_args() {
+        let ctx = Context::new(String::new(), HashMap::new());
+        let config = StepConfig { values: HashMap::new() };
+
+        let args = AgentExecutor::build_args(&config, &ctx).unwrap();
+        assert!(!args.contains(&"--fork-session".to_string()));
+        assert!(!args.contains(&"--resume".to_string()));
+    }
+
+    #[test]
+    fn build_args_explicit_resume_wins_over_workflow_session() {
+        use crate::steps::{AgentOutput, AgentStats, StepOutput};
+
+        let mut ctx = ctx_with_captured_session("sess-workflow-1");
+        ctx.store(
+            "target",
+            StepOutput::Agent(AgentOutput {
+                response: "r".to_string(),
+                session_id: Some("sess-explicit".to_string()),
+                stats: AgentStats::default(),
+            }),
+        );
+
+        let mut values = HashMap::new();
+        values.insert("resume".to_string(), serde_json::Value::String("target".into()));
+        let config = StepConfig { values };
+
+        let args = AgentExecutor::build_args(&config, &ctx).unwrap();
+        // Only one --resume (explicit), no --fork-session from workflow flow
+        assert!(!args.contains(&"--fork-session".to_string()));
+        let resumes: Vec<&String> = args.iter().filter(|a| *a == "--resume").collect();
+        assert_eq!(resumes.len(), 1);
+        let idx = args.iter().position(|a| a == "--resume").unwrap();
+        assert_eq!(args[idx + 1], "sess-explicit");
     }
 
     #[tokio::test]

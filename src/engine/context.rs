@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::claude::session::SessionManager;
 use crate::prompts::detector::StackInfo;
 use crate::steps::{ParsedValue, StepOutput};
 
@@ -29,7 +30,8 @@ pub struct Context {
     parent: Option<Arc<Context>>,
     pub scope_value: Option<serde_json::Value>,
     pub scope_index: usize,
-    pub session_id: Option<String>,
+    /// First-wins workflow-level session manager, shared across child contexts
+    session_manager: Arc<Mutex<SessionManager>>,
     /// Shared chat session store — inherited by child contexts via Arc clone
     chat_sessions: ChatSessionStore,
     /// Detected stack info for prompt resolution (Story 11.5/11.6)
@@ -50,7 +52,7 @@ impl Context {
             parent: None,
             scope_value: None,
             scope_index: 0,
-            session_id: None,
+            session_manager: Arc::new(Mutex::new(SessionManager::new())),
             chat_sessions: Arc::new(Mutex::new(HashMap::new())),
             stack_info: None,
             prompts_dir: PathBuf::from("prompts"),
@@ -60,9 +62,10 @@ impl Context {
     /// Store a step output
     pub fn store(&mut self, name: &str, output: StepOutput) {
         if let StepOutput::Agent(ref agent) = output {
-            if let Some(ref sid) = agent.session_id {
-                self.session_id = Some(sid.clone());
-            }
+            self.session_manager
+                .lock()
+                .expect("session_manager lock poisoned")
+                .capture(agent.session_id.clone());
         }
         self.steps.insert(name.to_string(), output);
     }
@@ -86,12 +89,22 @@ impl Context {
             .or_else(|| self.parent.as_ref().and_then(|p| p.get_var(name)))
     }
 
-    /// Get session ID (searches parent chain)
-    #[allow(dead_code)]
-    pub fn get_session(&self) -> Option<&str> {
-        self.session_id
-            .as_deref()
-            .or_else(|| self.parent.as_ref().and_then(|p| p.get_session()))
+    /// Get the first-wins captured session ID for this workflow run, if any.
+    pub fn get_session(&self) -> Option<String> {
+        self.session_manager
+            .lock()
+            .expect("session_manager lock poisoned")
+            .session_id()
+            .map(str::to_string)
+    }
+
+    /// CLI args for resuming the workflow session.
+    /// `isolated = true` → empty (fresh session); otherwise `--fork-session --resume <id>` if captured.
+    pub fn session_resume_args(&self, isolated: bool) -> Vec<String> {
+        self.session_manager
+            .lock()
+            .expect("session_manager lock poisoned")
+            .resume_args(isolated)
     }
 
     /// Store a parsed value for a step
@@ -122,7 +135,7 @@ impl Context {
             parent: Some(parent.clone()),
             scope_value,
             scope_index: index,
-            session_id: parent.session_id.clone(),
+            session_manager: Arc::clone(&parent.session_manager),
             chat_sessions: Arc::clone(&parent.chat_sessions),
             stack_info,
             prompts_dir,
@@ -229,6 +242,10 @@ impl Context {
             ctx.insert(name.as_str(), val);
         }
         ctx.insert("steps", &steps_map);
+
+        // Add top-level session_id (Story 2.6) — empty string when not captured
+        let session_id = self.get_session().unwrap_or_default();
+        ctx.insert("session_id", &session_id);
 
         // Add scope
         if let Some(sv) = &self.scope_value {
@@ -530,6 +547,63 @@ mod tests {
             .render_template(r#"{{ from("root-step").output }}"#)
             .unwrap();
         assert_eq!(result, "root-value");
+    }
+
+    // Story 2.6 — workflow-level session (first-wins) + top-level {{ session_id }}
+
+    fn agent_step_output(session_id: Option<&str>) -> StepOutput {
+        use crate::steps::{AgentOutput, AgentStats, StepOutput};
+        StepOutput::Agent(AgentOutput {
+            response: "r".to_string(),
+            session_id: session_id.map(String::from),
+            stats: AgentStats::default(),
+        })
+    }
+
+    #[test]
+    fn session_capture_is_first_wins() {
+        let mut ctx = Context::new(String::new(), HashMap::new());
+        ctx.store("a", agent_step_output(Some("first-id")));
+        ctx.store("b", agent_step_output(Some("second-id")));
+        assert_eq!(ctx.get_session().as_deref(), Some("first-id"));
+    }
+
+    #[test]
+    fn top_level_session_id_renders_in_template() {
+        let mut ctx = Context::new(String::new(), HashMap::new());
+        ctx.store("a", agent_step_output(Some("workflow-sess")));
+        let rendered = ctx.render_template("{{ session_id }}").unwrap();
+        assert_eq!(rendered, "workflow-sess");
+    }
+
+    #[test]
+    fn top_level_session_id_empty_when_not_captured() {
+        let ctx = Context::new(String::new(), HashMap::new());
+        let rendered = ctx.render_template("{{ session_id }}").unwrap();
+        assert_eq!(rendered, "");
+    }
+
+    #[test]
+    fn child_context_shares_session_manager_with_parent() {
+        let mut parent = Context::new(String::new(), HashMap::new());
+        parent.store("a", agent_step_output(Some("parent-sess")));
+        let child = Context::child(Arc::new(parent), None, 0);
+        assert_eq!(child.get_session().as_deref(), Some("parent-sess"));
+    }
+
+    #[test]
+    fn session_resume_args_shared_returns_fork_resume() {
+        let mut ctx = Context::new(String::new(), HashMap::new());
+        ctx.store("a", agent_step_output(Some("sess-xyz")));
+        let args = ctx.session_resume_args(false);
+        assert_eq!(args, vec!["--fork-session", "--resume", "sess-xyz"]);
+    }
+
+    #[test]
+    fn session_resume_args_isolated_returns_empty() {
+        let mut ctx = Context::new(String::new(), HashMap::new());
+        ctx.store("a", agent_step_output(Some("sess-xyz")));
+        assert!(ctx.session_resume_args(true).is_empty());
     }
 
     #[test]
