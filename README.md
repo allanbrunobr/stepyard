@@ -57,7 +57,16 @@ Every changed file is reviewed with **language-specific criteria** (Python gets 
 ## Quick Start
 
 ```bash
-# 1. Install (Rust toolchain required)
+# 1. Install — pick one:
+
+#   (a) Homebrew (macOS / Linux, no Rust required)
+brew tap allanbrunobr/minion-engine https://github.com/allanbrunobr/homebrew-minion-engine
+brew install minion-engine
+
+#   (b) Pre-compiled binary (no Rust required) — see GitHub Releases
+#       https://github.com/allanbrunobr/minion-engine/releases/latest
+
+#   (c) From source (Rust toolchain required)
 cargo install minion-engine
 
 # 2. Interactive setup — checks requirements and configures API keys
@@ -464,6 +473,16 @@ Then mention it:
 **`gh` not found inside sandbox** — run `gh auth login` on the host before executing workflows that interact with GitHub.
 
 **`minion-sandbox:latest` not found** — run `minion setup` once to trigger the image build, or let any `minion execute` call build it automatically.
+
+---
+
+## Documentation
+
+- [`docs/YAML-SPEC.md`](docs/YAML-SPEC.md) — full workflow format reference
+- [`docs/STEP-TYPES.md`](docs/STEP-TYPES.md) — every step type with examples
+- [`docs/CONFIG.md`](docs/CONFIG.md) — 4-layer config resolution
+- [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md) — sandbox modes, security, proxy
+- [`docs/EXAMPLES.md`](docs/EXAMPLES.md) — reference workflows and patterns
 
 ---
 
