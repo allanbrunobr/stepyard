@@ -2,6 +2,7 @@ mod commands;
 pub mod display;
 mod harness_adapter;
 pub mod init_templates;
+mod remote;
 mod session_setup;
 mod setup;
 
@@ -55,6 +56,8 @@ enum Command {
     /// Slack bot integration (requires: cargo install minion-engine --features slack)
     #[cfg(feature = "slack")]
     Slack(SlackArgs),
+    /// Dispatch workflows to a remote engine (Epic 5 Story 5.2)
+    Remote(remote::RemoteArgs),
     /// Show version
     Version,
 }
@@ -119,6 +122,7 @@ impl Cli {
             Command::Slack(args) => match args.command {
                 SlackCommand::Start { port } => crate::slack::start_server(port).await,
             },
+            Command::Remote(args) => remote::run(args).await,
             Command::Version => {
                 println!("minion {}", env!("CARGO_PKG_VERSION"));
                 Ok(())
