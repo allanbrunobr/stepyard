@@ -276,6 +276,13 @@ impl EventSubscriber for DashboardSubscriber {
                 // Dashboard payload is emitted by the subsequent
                 // StepFailed event, so nothing to accumulate here.
             }
+            Event::SignalReceived { .. } => {
+                // Story 2.3: signals surface as a subsequent StepFailed event
+                // carrying TerminationReason::SignalReceived — so the
+                // dashboard payload is built from that, not here. Matched
+                // explicitly so `non_exhaustive_omitted_patterns` fires if a
+                // future variant is forgotten.
+            }
             // Sandbox events — not needed for dashboard payload
             _ => {}
         }

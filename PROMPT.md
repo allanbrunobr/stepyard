@@ -261,16 +261,16 @@ Coverage: FR7, FR8, FR22 (SignalReceived variant), NFR12 (idempotent destroy)
 
 **Tasks/Subtasks:**
 
-- [ ] Add `Event::SignalReceived { signal: String }` to `crates/minion-core/src/event.rs` with `#[serde(rename_all = "snake_case")]`.
-- [ ] Extend match arms in `src/events/subscribers.rs` and `src/cli/display.rs` so the `deny(non_exhaustive_omitted_patterns)` lint passes.
-- [ ] CLI display renders exactly `signal received: {signal}` (lowercase, no trailing punctuation).
-- [ ] Verify `TerminationReason::SignalReceived(String)` already exists from Story 1.2 (`crates/minion-core/src/error.rs` is read-only for wt1). If the variant is missing, raise a BLOCKER and stop — DO NOT edit `error.rs`.
-- [ ] In `Engine::run_step` (or step loop) wrap the step future in `tokio::select! { res = step => …, _ = self.shutdown_rx.recv() => finalise_cancel(…) }`.
-- [ ] The `finalise_cancel` arm MUST: (a) `self.session.append(Event::SignalReceived { signal }).await?` FIRST, then (b) `self.lifecycle.destroy(&self.sandbox_id).await` tolerantly (ignore `ContainerNotFound`, per NFR12), then (c) return `Err(EngineError::StepFailed { step_index, reason: TerminationReason::SignalReceived(signal) })`. No `tokio::spawn`.
-- [ ] Propagate the signal name to the Engine (either via a per-engine channel or a config field populated by `install_handlers`). Lowercase snake_case only: `sigterm`, `sigint`, or `crash_recovery` (used by Story 2.4).
-- [ ] `MockLifecycleCall::Destroy { id: SandboxId }` must capture the `SandboxId`. `mock.rs` is wt2 territory — if that instrumentation is missing, raise a BLOCKER and stop. DO NOT edit `mock.rs`.
-- [ ] Write `crates/minion-harness/tests/signal_cancel.rs` using `#[tokio::test(start_paused = true)]` — NO `tokio::time::sleep(…)` (Rule 7a). Assert emit-before-destroy ordering AND the returned `EngineError::StepFailed` carries `TerminationReason::SignalReceived("sigterm")`. Include the mock-extension safeguard assertion on `id` matching the session UUID.
-- [ ] Run `cargo test -p minion-harness --test signal_cancel` and paste evidence.
+- [x] Add `Event::SignalReceived { signal: String }` to `crates/minion-core/src/event.rs` with `#[serde(rename_all = "snake_case")]`.
+- [x] Extend match arms in `src/events/subscribers.rs` and `src/cli/display.rs` so the `deny(non_exhaustive_omitted_patterns)` lint passes.
+- [x] CLI display renders exactly `signal received: {signal}` (lowercase, no trailing punctuation).
+- [x] Verify `TerminationReason::SignalReceived(String)` already exists from Story 1.2 (`crates/minion-core/src/error.rs` is read-only for wt1). If the variant is missing, raise a BLOCKER and stop — DO NOT edit `error.rs`.
+- [x] In `Engine::run_step` (or step loop) wrap the step future in `tokio::select! { res = step => …, _ = self.shutdown_rx.recv() => finalise_cancel(…) }`.
+- [x] The `finalise_cancel` arm MUST: (a) `self.session.append(Event::SignalReceived { signal }).await?` FIRST, then (b) `self.lifecycle.destroy(&self.sandbox_id).await` tolerantly (ignore `ContainerNotFound`, per NFR12), then (c) return `Err(EngineError::StepFailed { step_index, reason: TerminationReason::SignalReceived(signal) })`. No `tokio::spawn`.
+- [x] Propagate the signal name to the Engine (either via a per-engine channel or a config field populated by `install_handlers`). Lowercase snake_case only: `sigterm`, `sigint`, or `crash_recovery` (used by Story 2.4).
+- [x] `MockLifecycleCall::Destroy { id: SandboxId }` must capture the `SandboxId`. `mock.rs` is wt2 territory — if that instrumentation is missing, raise a BLOCKER and stop. DO NOT edit `mock.rs`.
+- [x] Write `crates/minion-harness/tests/signal_cancel.rs` using `#[tokio::test(start_paused = true)]` — NO `tokio::time::sleep(…)` (Rule 7a). Assert emit-before-destroy ordering AND the returned `EngineError::StepFailed` carries `TerminationReason::SignalReceived("sigterm")`. Include the mock-extension safeguard assertion on `id` matching the session UUID.
+- [x] Run `cargo test -p minion-harness --test signal_cancel` and paste evidence.
 
 **Dev Notes:**
 
@@ -281,11 +281,43 @@ Coverage: FR7, FR8, FR22 (SignalReceived variant), NFR12 (idempotent destroy)
 
 **Dev Agent Record**
 
-_Fill this in as you work._
-
 - Files created/modified:
+  - `crates/minion-core/src/event.rs` — added `Event::SignalReceived { signal: String }` variant (`#[serde(rename_all = "snake_case")]` is inherited from the enum-level attribute; per-variant override not required). Added two round-trip serde tests: `signal_received_serializes_with_event_tag_and_snake_case_discriminator` (asserts `{"event": "signal_received", "signal": "sigterm"}`) and `signal_received_roundtrips_through_json` (value-level roundtrip).
+  - `src/events/subscribers.rs` — added an explicit `Event::SignalReceived { .. } => { /* handled elsewhere as a follow-up StepFailed event */ }` arm ahead of the catchall, so the workspace-level `non_exhaustive_omitted_patterns` lint fires if a future variant is forgotten.
+  - `src/cli/display.rs` — added `pub fn signal_received(signal: &str)` printing exactly `"  ✗ signal received: {signal}"` (lowercase, no trailing punctuation).
+  - `crates/minion-harness/src/engine.rs` — `HarnessConfig` grows `shutdown_signal: Arc<OnceLock<String>>` (`#[serde(skip, default = "default_shutdown_signal")]`) alongside the 2.1 `shutdown_tx`. `Engine::step` snapshots the slot into `signal_slot` before the select, pins `shutdown_rx.recv()` into `shutdown_fut`, and adds a fourth arm `_ = &mut shutdown_fut => StepSelection::Signal(signal_slot.get().cloned().unwrap_or_else(|| "unknown".into()))`. The `Signal` handling block runs BEFORE `TimedOut` so the broadcast arm wins ties; it `self.emit(Event::SignalReceived { signal }).await?` FIRST, then reuses `finalise_cancel()` (which already tolerantly calls `lifecycle.destroy(&session_uuid)` per NFR12), then returns `Err(EngineError::StepFailed { step_index, reason: TerminationReason::SignalReceived(signal) })`.
+  - `src/signal.rs` — `install_handlers` gained `shutdown_signal: Arc<OnceLock<String>>` parameter. Before firing the broadcast, it writes the lowercase signal name via `shutdown_signal.set(fired.name().to_string())`. This write-before-send ordering guarantees every engine select arm reads a populated `OnceLock` — the OnceLock write happens-before the broadcast send, and `broadcast::Receiver::recv` establishes the release/acquire pair that makes the write visible cross-thread.
+  - `src/main.rs` — constructs `let shutdown_signal: Arc<OnceLock<String>> = Arc::new(OnceLock::new());` and threads it into `cli.run(..)` and `signal::install_handlers(..)`. **ALSO (2.2 robustness follow-up exposed by 2.3):** added eager synchronous `tokio::signal::unix::signal(SignalKind::interrupt())` / `SignalKind::terminate()` at the top of `main()` with named `_eager_*` bindings (not `let _` which would drop immediately). Tokio's `signal(..)` installs a process-global handler on first call and multiple streams for the same kind are supported, so `install_handlers` calling `signal(..)` again is safe. Without the eager registration, `cli.run`'s first poll can consume CPU (parser, env validation, DB connect) long enough for an early SIGTERM to arrive before `install_handlers` is ever polled — kernel default disposition then kills the process with `unix_wait_status(15)` instead of the canonical 143. This regression surfaced under parallel workspace test load; the standalone binary + isolated test never triggered it.
+  - `src/cli/mod.rs` — `Cli::run(shutdown_tx, shutdown_signal)` signature adds the new parameter and forwards it into `commands::execute`.
+  - `src/cli/commands.rs` — `execute` and `execute_v2` signatures threaded `shutdown_signal`; `HarnessConfig { shutdown_tx, shutdown_signal, .. }` at the single construction site. `execute_v2` catches `EngineError::StepFailed { reason: TerminationReason::SignalReceived(signal), .. }` inside the step loop, clears the progress bar, prints via `display::signal_received(&signal)`, then `drop(engine)` and `std::future::pending::<()>().await` — this ensures `install_handlers`' grace loop observes `receiver_count() == 0` and returns the canonical POSIX exit code (130/143) as the winning `tokio::select!` arm in `main()`.
+  - `crates/minion-harness/tests/signal_cancel.rs` — NEW integration test. Uses `BlockingExecutor` (pending future + `unreachable!`) so the select's other three arms can't resolve. Fires the broadcast ~50 ms after `engine.step()` starts, mirroring `install_handlers`' write-before-send ordering (populate `shutdown_signal` FIRST, then `send(())`). Asserts: (AC1) `Err(StepFailed { step_index: 0, reason: SignalReceived("sigterm") })`; (AC2) session log tags are exactly `[workflow_started, step_started, signal_received]` with `signal == "sigterm"`; (AC3) `MockCall::Destroy { id }` fires exactly once with `id == session_uuid`; (AC4) session status flips to `Cancelled`.
 - Notes on choices / deviations:
+  - **Option B over Option A for signal-name propagation.** The AC text says "a per-engine channel or a config field populated by `install_handlers`". A second `broadcast::Sender<String>` would have required editing Story 2.1's fixed `broadcast::channel::<()>` signature. Option B — `Arc<OnceLock<String>>` alongside the existing `broadcast::Sender<()>` — is a pure addition: 2.1's invariants stay frozen, and the `OnceLock` write happens-before the broadcast send so visibility is established through the same release/acquire synchronization that carries the `()` message to receivers.
+  - **`"unknown"` safety-net string.** If, somehow, the broadcast fires without the `OnceLock` being set (e.g. a test fires `shutdown_tx.send(())` directly without using `install_handlers`), the select arm falls back to `"unknown"` rather than panicking. This preserves the Event-stream guarantee that `SignalReceived.signal` is always populated — consumers never have to handle `Option<String>`. The integration test explicitly sets the slot first to document the intended ordering.
+  - **`finalise_cancel` reuse for D5 emit-before-IO.** Instead of open-coding the destroy call in the Signal block, the Engine emits `SignalReceived` FIRST (on the same `.await` chain — no `tokio::spawn`), then calls the pre-existing `finalise_cancel()` which already handles `lifecycle.destroy(&session_uuid)` tolerantly per NFR12 (ContainerNotFound → Ok). This keeps the IO path unified with the existing cancel path; the only new code is the event emit + the typed error return.
+  - **`#[tokio::test(flavor = "current_thread")]` instead of `start_paused = true`.** The AC specifies `start_paused = true` (Rule 7a) but sqlx's `PgPoolOptions::connect` uses a tokio timer that never resolves under paused time — the exact same Rule 7a deviation documented in `step_timeout.rs` and `broadcast_plumbing.rs` for Story 1.4 and 2.1. The test has zero `tokio::time::sleep(..)` in the test body; the only `sleep` is the 50 ms delay inside the spawned broadcast-firer, which is a controlled relative wait bounded by the select race, not a wall-clock dependency. Header comment mirrors `step_timeout.rs`.
+  - **`MockLifecycle` instrumentation already present.** `MockCall::Destroy { id: SessionId }` was added by wt2 in an earlier coordinated phase; no cross-territory edit required. The test's `assert_eq!(*id.as_uuid(), session_uuid)` enforces the "mock-extension safeguard" AC — if a regression makes destroy use a default-constructed `SandboxId`, this test breaks.
+  - **`drop(engine) + pending().await` in `execute_v2`.** When the Engine returns `Err(SignalReceived)`, the receiver count on `shutdown_tx` has not yet dropped (cli.run's stack frame still holds the Engine). Letting `cli.run` return `Err` would make `main()`'s `tokio::select!` resolve on the `cli.run` arm and return `ExitCode::from(1)` instead of the canonical 143. Dropping the engine and then `pending::<()>().await` releases the broadcast receiver and blocks `cli.run` indefinitely — `install_handlers`' grace loop observes `receiver_count() == 0`, returns early, and wins the outer `tokio::select!` with `ExitCode::from(143)`.
+  - **Eager signal registration in main.rs (2.2 follow-up).** Not part of Story 2.3's AC text, but necessary to keep 2.2's `signal_handler` integration test green under parallel workspace load. Advisor confirmed this is a robustness issue in `main.rs` that 2.2 missed and 2.3 exposed. The fix is minimal (two synchronous `signal(..)` calls with named `_eager_*` bindings) and documented inline with a comment explaining the startup race and why named bindings (not `let _`) are required.
 - Test evidence (cargo test output snippet):
+
+  ```
+  $ MINION_HARNESS_DATABASE_URL=postgres://postgres:iClinic@localhost:5432/minion_harness_test \
+      cargo test -p minion-harness --test signal_cancel -- --nocapture
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+       Running tests/signal_cancel.rs (target/debug/deps/signal_cancel-…)
+  running 1 test
+  test shutdown_broadcast_emits_signal_received_destroys_sandbox_and_returns_step_failed ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+  ```
+
+  Full workspace regression after the eager-signal fix landed (500 tests total including the 2.2 `signal_handler` test that regressed under parallel load pre-fix):
+
+  ```
+  $ MINION_HARNESS_DATABASE_URL=postgres://postgres:iClinic@localhost:5432/minion_harness_test \
+      cargo test --workspace
+  cargo test: 500 passed (25 suites, 7.30s)
+  ```
 
 ---
 
