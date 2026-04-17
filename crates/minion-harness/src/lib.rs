@@ -26,12 +26,14 @@
 //! ported in Story 2.4+. This deliberate scope cut keeps the contract
 //! (step/resume/cancel) provable with minimal surface area.
 
+mod defaults;
 mod engine;
 mod executor;
 pub mod startup;
 mod workflow;
 
-pub use engine::{CancelToken, Engine, EngineError, HarnessConfig, StepOutcome};
+pub use defaults::Defaults;
+pub use engine::{resolve_env, CancelToken, Engine, EngineError, HarnessConfig, StepOutcome};
 pub use executor::StepExecutor;
 pub use workflow::{Step, Workflow};
 
