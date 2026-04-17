@@ -35,6 +35,7 @@ pub use mock::{MockCall, MockLifecycle};
 pub use sandbox::{ExecOutput, Sandbox, SandboxError, SandboxId};
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// The contract every sandbox backend implements.
@@ -69,6 +70,24 @@ pub trait SandboxLifecycle: Send + Sync {
     /// idempotent.
     async fn destroy_by_session(&self, session_id: Uuid) -> Result<(), SandboxError> {
         self.destroy(&SandboxId::from(session_id)).await
+    }
+
+    /// Execute `cmd` (argv form) inside the sandbox identified by `id`.
+    /// No env injection — callers that need env pairs use [`exec_with_env`].
+    async fn exec(&self, id: &SandboxId, cmd: &[String]) -> Result<ExecOutput, SandboxError>;
+
+    /// Execute `cmd` with a structured env map. Default impl drops `env` and
+    /// delegates to [`exec`] — backends that care about env injection
+    /// (Docker, Story 3.2) override this. D3: additive extension, preserves
+    /// backward compat for unmigrated impls (NFR22).
+    async fn exec_with_env(
+        &self,
+        id: &SandboxId,
+        cmd: &[String],
+        env: &HashMap<String, String>,
+    ) -> Result<ExecOutput, SandboxError> {
+        let _ = env;
+        self.exec(id, cmd).await
     }
 
     /// Return the live sandbox for this session if one already exists,

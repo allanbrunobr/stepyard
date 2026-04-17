@@ -1,564 +1,455 @@
-# Worktree wt1 — BMAD Development Agent (Epic 2)
+# Worktree wt2 — BMAD Development Agent (Epic 3)
 
-You are an autonomous coding agent in a **parallel git worktree**. Your job is to implement all five stories of **Epic 2: Crash-Safe Process Lifecycle & Session Visibility** (F5–F9), following the BMAD dev-story workflow exactly.
+You are an autonomous coding agent in a **parallel git worktree**. Your job is to implement all five stories of **Epic 3: Sandbox Environment Injection** (F10–F14), following the BMAD dev-story workflow exactly.
 
 ## Your Branch
-`minion-engine-bmad-wt1`
+`minion-engine-bmad-wt2`
 
-Worktree path (absolute): `/Users/bruno/Desktop/Dev/new-stripe-minions/minion-engine-bmad-wt1`
-Branched from: `main` @ `a7b27ef` (Epic 1 F1–F4 shipped).
+Worktree path (absolute): `/Users/bruno/Desktop/Dev/new-stripe-minions/minion-engine-bmad-wt2`
+Branched from: `main` @ `a7b27ef` (Epic 1 F1–F4 shipped). Epic 2 is running in parallel in `minion-engine-bmad-wt1`.
 
 ## Development Methodology
 
-CRITICAL: For each story below, follow the BMAD dev-story workflow:
+CRITICAL: For each story, follow the BMAD dev-story workflow:
 
-1. Call `sequentialthinking` (MCP) to plan BEFORE writing code — verify territory ownership.
-2. Read the story completely (ACs, Tasks, Dev Notes).
-3. Use Serena (MCP) for code navigation: `get_symbols_overview`, `find_symbol`, `find_referencing_symbols`, `replace_symbol_body`. DO NOT read full source files with Read — use Serena's symbolic tools.
+1. Call `sequentialthinking` (MCP) BEFORE writing code — plan the files and the argv-not-shell security invariant.
+2. Read the story completely (ACs, derived Tasks/Subtasks, Dev Notes).
+3. Use Serena (MCP) for code navigation: `get_symbols_overview`, `find_symbol`, `find_referencing_symbols`, `replace_symbol_body`. DO NOT read full Rust source files with `Read` — use Serena's symbolic tools.
 4. Follow Tasks/Subtasks in ORDER.
-5. Red → green → refactor. Write the test first where the story calls for one.
-6. Mark each subtask `[x]` in PROMPT.md as you go, update the story's File List, add Dev Agent Record notes.
-7. After every task for a story passes, commit: `feat(epic-2): implement story 2.N — <title>` and mark the feature `done` in the local `features.md`. Then proceed to the next story.
+5. Red → green → refactor. Write the negative-control test first where the story demands it (Story 3.5 is itself this discipline).
+6. Mark each subtask `[x]` in PROMPT.md as you go, update File List, add Dev Agent Record notes.
+7. After every task for a story passes, commit: `feat(epic-3): implement story 3.N — <title>` and mark the feature `done` in the local `features.md`. Proceed to the next story.
 8. When ALL five stories are implemented, flip each story's Status to `review`.
 
-DO NOT: skip tasks, reorder them, implement features not in the story, mark tasks complete without passing tests, or stop mid-epic.
+DO NOT: skip tasks, reorder them, interpolate env into shell strings, modify files marked read-only, or mark tasks complete without passing tests.
 
 ---
 
 ## Assigned Stories
 
-### Story 2.1 — Thread Cancel Broadcast Channel Through Engine Construction
+### Story 3.1 — Extend `SandboxLifecycle` Trait with `exec_with_env` Default-Impl Method
 
-**Feature 5 in features.md.**
-**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 417–448)
+**Feature 10 in features.md.**
+**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 627–661)
 
-**Status:** Draft
-
-### Story 2.1: Thread Cancel Broadcast Channel Through Engine Construction
+**Status:** _review_
 
 As an engine maintainer,
-I want a per-process `Arc<tokio::sync::broadcast::Sender<()>>` constructed in `main()` and a `broadcast::Receiver<()>` field on every `Engine` subscribed via `HarnessConfig::shutdown_tx`,
-So that later stories can wire signal handlers and crash-recovery without introducing a runtime registry.
+I want `SandboxLifecycle` to gain an `exec_with_env(id, cmd, env: &HashMap<String, String>)` default-impl method that delegates to the existing `exec(id, cmd)` (ignoring env),
+So that Epic 3 can inject env vars via the new method without changing the existing `exec` signature (NFR22 backward compat).
 
 **Acceptance Criteria:**
 
-**Given** `HarnessConfig` in `crates/minion-harness/src/config.rs`
-**When** the struct is inspected
-**Then** it gains `pub shutdown_tx: Arc<tokio::sync::broadcast::Sender<()>>`
-**And** it gains `pub shutdown_grace_s: u64` defaulting to `10` via `#[serde(default = "…")]` (D2 default)
-
-**Given** `Engine::new(HarnessConfig)` in `crates/minion-harness/src/engine.rs`
-**When** constructed
-**Then** it subscribes: `let shutdown_rx = config.shutdown_tx.subscribe();`
-**And** stores `shutdown_rx: tokio::sync::broadcast::Receiver<()>` as a field on the Engine struct
-**And** no `DashMap`, `once_cell::sync::Lazy<Mutex<…>>`, or `static` runtime registry is introduced (D1 invariant)
-
-**Given** `main()` in `src/main.rs`
-**When** main starts
-**Then** it constructs `let (tx, _) = tokio::sync::broadcast::channel::<()>(16); let shutdown_tx = Arc::new(tx);`
-**And** passes `shutdown_tx.clone()` into every `Engine::new(HarnessConfig { shutdown_tx: .., .. })`
-**And** no Engine owns the `Sender` — only `main()` does (receivers are cloned through subscribe)
-
-**Given** a unit test at `crates/minion-harness/tests/broadcast_plumbing.rs`
-**When** multiple Engines are constructed from a shared `shutdown_tx` and the test calls `shutdown_tx.send(()).unwrap()`
-**Then** every Engine's receiver observes exactly one message
-**And** the test uses `#[tokio::test(start_paused = true)]` (Rule 7a) and contains no `tokio::time::sleep(…)` calls
-
-Coverage: FR6, D1, D2 (infrastructure)
-
-**Tasks/Subtasks:**
-
-- [x] Extend `HarnessConfig` with `shutdown_tx: Arc<tokio::sync::broadcast::Sender<()>>` and `shutdown_grace_s: u64` (default 10 via `#[serde(default = "…")]`).
-- [x] Subscribe in `Engine::new(HarnessConfig)` and store `shutdown_rx` as an Engine field (no static / `DashMap` / `Lazy<Mutex<…>>` registry — D1 invariant).
-- [x] Update `main()` in `src/main.rs` to construct `let (tx, _) = tokio::sync::broadcast::channel::<()>(16); let shutdown_tx = Arc::new(tx);` and thread `shutdown_tx.clone()` into every `Engine::new()` call site.
-- [x] Add the unit test `crates/minion-harness/tests/broadcast_plumbing.rs` using `#[tokio::test(start_paused = true)]` (Rule 7a) — NO `tokio::time::sleep(…)`. Assert every receiver observes exactly one message after `shutdown_tx.send(()).unwrap()`.
-- [x] Run `cargo test -p minion-harness --test broadcast_plumbing` and paste the passing snippet into the Dev Agent Record.
-
-**Dev Notes:**
-
-- Architecture decisions: D1 (session-log-as-truth — no registry), D2 (broadcast channel + grace default 10s), D4 (`broadcast::Sender<()>` shutdown channel).
-- Only `main()` owns the `Sender`; every Engine subscribes via `config.shutdown_tx.subscribe()`.
-- This story is pure infrastructure — no behavior change yet. Stories 2.2 and 2.3 consume the channel.
-
-**Dev Agent Record**
-
-- Files created/modified:
-  - `crates/minion-harness/src/engine.rs` — extended `HarnessConfig` with `shutdown_tx: Arc<broadcast::Sender<()>>` (`#[serde(skip, default = "default_shutdown_tx")]`) and `shutdown_grace_s: u64` (`#[serde(default = "default_shutdown_grace_s")]`, value `10`); added `shutdown_rx: broadcast::Receiver<()>` field to `Engine` with `let shutdown_rx = config.shutdown_tx.subscribe();` inside `with_executor`. Field is `#[allow(dead_code)]` pending Story 2.3's `select!` arm.
-  - `src/main.rs` — constructs `let (tx, _) = broadcast::channel::<()>(16); let shutdown_tx = Arc::new(tx);` and threads it into `cli.run(shutdown_tx)`.
-  - `src/cli/mod.rs` — `Cli::run(self, shutdown_tx)` dispatches into `commands::execute(args, shutdown_tx)`.
-  - `src/cli/commands.rs` — `execute` and `execute_v2` signatures now take `shutdown_tx`; `HarnessConfig { shutdown_tx, ..default() }` at the single Engine construction site.
-  - `crates/minion-harness/tests/broadcast_plumbing.rs` — new file; two Engines built from a shared `Arc<Sender>`; asserts `receiver_count() == 2` and `send(()) == Ok(2)`.
-- Notes on choices / deviations:
-  - The AC text says `HarnessConfig in crates/minion-harness/src/config.rs`, but `HarnessConfig` already lives in `crates/minion-harness/src/engine.rs` (pre-existing structure). The struct was extended in-place rather than moved into a new `config.rs` — keeping the change minimally invasive and avoiding a rename that would touch every test fixture. The invariants the AC cares about (subscribe in `Engine::new`, no `DashMap`/`Lazy<Mutex>`/static registry) are preserved unchanged.
-  - `#[tokio::test(start_paused = true)]` was dropped in favour of `#[tokio::test]` — same conflict Story 1.4's `step_timeout.rs` (lines 12–20) documents: sqlx's `PgPoolOptions::connect` uses a tokio timer that never resolves under paused time, so every PG-backed run is pinned to the skip-path. The test has zero `tokio::time::sleep` and zero timer races, so Rule 7a's real invariant (determinism, no wall-clock waste) is preserved on real time. Header comment mirrors `step_timeout.rs`'s wording.
-- Test evidence (cargo test output snippet):
-
-  ```
-  $ MINION_HARNESS_DATABASE_URL=postgres://postgres:iClinic@localhost:5432/minion_harness_test \
-      cargo test -p minion-harness --test broadcast_plumbing -- --nocapture
-      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
-       Running tests/broadcast_plumbing.rs (target/debug/deps/broadcast_plumbing-…)
-  running 1 test
-  test every_engine_subscribes_to_shared_shutdown_tx ... ok
-  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
-  ```
-
----
-
-### Story 2.2 — Install SIGINT/SIGTERM Handlers and Graceful Shutdown Deadline
-
-**Feature 6 in features.md.**
-**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 449–486)
-
-**Status:** Draft
-
-### Story 2.2: Install SIGINT/SIGTERM Handlers and Graceful Shutdown Deadline
-
-As a platform operator,
-I want the `minion` binary to intercept SIGINT and SIGTERM, fire the broadcast channel, wait up to `shutdown_grace_s` for in-flight engines, then exit with the canonical signal exit code,
-So that container cleanup starts within 1s (NFR1) and never hits the kernel's 30s SIGKILL deadline.
-
-**Acceptance Criteria:**
-
-**Given** a new file `src/signal.rs`
+**Given** `SandboxLifecycle` trait in `crates/minion-sandbox-orchestrator/src/lib.rs` (or wherever currently defined)
 **When** inspected
-**Then** it exports `pub async fn install_handlers(shutdown_tx: Arc<tokio::sync::broadcast::Sender<()>>, grace_s: u64) -> ExitCode`
-**And** uses `tokio::signal::unix::signal(SignalKind::interrupt())` and `SignalKind::terminate()` (not the cross-platform `tokio::signal::ctrl_c()` — D2 is Unix-only)
-**And** on signal fire calls `let _ = shutdown_tx.send(());` (best-effort, ignoring `SendError`)
-**And** records which signal fired so `main()` can pick the exit code
+**Then** it gains a new method: `async fn exec_with_env(&self, id: &SandboxId, cmd: &[String], env: &HashMap<String, String>) -> Result<ExecOutput, SandboxError>`
+**And** the default impl is `self.exec(id, cmd).await` (env ignored — preserves existing behavior for unmigrated impls)
+**And** the existing `exec` method signature is NOT changed (D3 explicit: extension via new method, not parameter addition)
+**And** the trait retains `#[async_trait]` (project convention, already-locked)
 
-**Given** SIGINT fires
-**When** the grace period elapses or all engines complete
-**Then** the process exits with code `130`
-**And** elapsed wall-clock from signal-to-exit ≤ `shutdown_grace_s + 1` seconds
+**Given** the mock-extension safeguard
+**When** `MockLifecycle` in `crates/minion-sandbox-orchestrator/src/mock.rs` (or test-common) is extended
+**Then** `MockLifecycleCall::ExecWithEnv { id: SandboxId, cmd: Vec<String>, env: HashMap<String, String> }` is added as a variant
+**And** `MockLifecycle::exec_with_env` override records the full `env` parameter (not dropped, not lossy)
+**And** at least one unit test asserts on the recorded `env` contents — without this assertion a default impl that silently drops `env` would pass tests (mutation-resistance per testing-enforcement invariant)
 
-**Given** SIGTERM fires
-**When** the grace period elapses or all engines complete
-**Then** the process exits with code `143`
+**Given** consumers inside `minion-harness`
+**When** any code invoking a lifecycle method is inspected
+**Then** NEW invocation sites use `exec_with_env(id, cmd, &env)` (even when `env` is empty — pass `&HashMap::new()`)
+**And** EXISTING invocation sites calling `exec(id, cmd)` are NOT refactored in this story (only Story 3.4 wires new call sites; backward-compat preserved)
+**And** `DockerLifecycle` keeps the existing `exec` method unchanged (the `sh -c` legacy carveout documented in Security Requirements remains intact)
 
-**Given** NFR10 (signal handler safety)
-**When** the handler body is inspected
-**Then** it does NOT touch the PostgreSQL pool (connection may be dead during shutdown)
-**And** it does NOT shell out to `docker rm -f` directly (that is the Engine's responsibility via Story 2.3)
-**And** its only side effects are `shutdown_tx.send(())` and measuring wall-clock deadline
+**Given** a unit test at `crates/minion-sandbox-orchestrator/src/mock.rs` (inline `#[cfg(test)] mod tests`)
+**When** the test calls `mock.exec_with_env(&id, &["echo".to_string(), "hello".to_string()], &env_with_FOO=BAR).await`
+**Then** `MockLifecycleCall::ExecWithEnv { env, .. }` records exactly `{"FOO": "BAR"}`
+**And** calling the default impl on a type that did NOT override `exec_with_env` records the `exec` call (not ExecWithEnv) — proves default delegation works
+**And** the test does NOT use `tokio::time::sleep(…)` (Rule 7a)
 
-**Given** an integration test at `tests/signal_handler.rs` using `assert_cmd`
-**When** the test spawns `minion run <trivial-workflow>` as a subprocess and sends SIGTERM after step start
-**Then** the subprocess exits within `shutdown_grace_s + 1` seconds with code 143
-**And** every `std::process::Command` / `assert_cmd::Command` has `.timeout(Duration::from_secs(N))` (Rule 7b)
-**And** elapsed time from signal-to-exit is <5s (NFR1: cleanup within 1s + grace margin)
+Coverage: FR9 infrastructure, D3, NFR22 (backward compat)
 
-Coverage: FR5, D2, NFR1, NFR10
+**Tasks / Subtasks** (derived one-to-one from ACs)
 
-**Tasks/Subtasks:**
+- [ ] AC1: Add `async fn exec_with_env(&self, id: &SandboxId, cmd: &[String], env: &HashMap<String, String>) -> Result<ExecOutput, SandboxError>` to the `SandboxLifecycle` trait in `crates/minion-sandbox-orchestrator/src/lib.rs`, with a default body `self.exec(id, cmd).await`. Keep `#[async_trait]`. Leave `exec` signature untouched.
+- [ ] AC2: In `crates/minion-sandbox-orchestrator/src/mock.rs`, add `MockLifecycleCall::ExecWithEnv { id: SandboxId, cmd: Vec<String>, env: HashMap<String, String> }` variant; implement `MockLifecycle::exec_with_env` override that records the full `env` into that variant (no dropping, no lossy clones).
+- [ ] AC3: Add at least one unit test that asserts on the recorded `env` contents (mutation-resistance — a silently-dropping default impl must fail this test).
+- [ ] AC4: Audit `minion-harness` — new invocation sites introduced by Stories 3.4+ use `exec_with_env(id, cmd, &env)` (pass `&HashMap::new()` when no env). Leave existing `exec(id, cmd)` call sites untouched in THIS story. Verify `DockerLifecycle::exec` is NOT modified here.
+- [ ] AC5: Inline `#[cfg(test)] mod tests` in `mock.rs` with a test that calls `mock.exec_with_env(&id, &["echo".to_string(), "hello".to_string()], &env_with_FOO=BAR).await` and asserts `MockLifecycleCall::ExecWithEnv { env, .. }` records exactly `{"FOO": "BAR"}`.
+- [ ] AC6: In the same test module, add a "default-delegation" test: a type that does NOT override `exec_with_env` records the `exec` call (not `ExecWithEnv`) when its default impl is invoked — proves the default body calls through.
+- [ ] AC7: Verify no test in the module uses `tokio::time::sleep(…)` (Rule 7a).
 
-- [x] Create `src/signal.rs` exporting `pub async fn install_handlers(shutdown_tx: Arc<tokio::sync::broadcast::Sender<()>>, grace_s: u64) -> ExitCode`.
-- [x] Use `tokio::signal::unix::signal(SignalKind::interrupt())` and `SignalKind::terminate()` — NOT `tokio::signal::ctrl_c()` (Unix-only per D2).
-- [x] On signal fire: `let _ = shutdown_tx.send(());` (ignore `SendError`). Record which signal fired (for exit code selection).
-- [x] Enforce the grace deadline: wait up to `shutdown_grace_s` for in-flight engines; then return `ExitCode::from(130)` for SIGINT or `ExitCode::from(143)` for SIGTERM.
-- [x] Audit the handler body — NO Postgres pool access, NO direct `docker rm -f`, side effects limited to broadcast `send` + wall-clock measurement (NFR10).
-- [x] **NOTE:** `tests/signal_handler.rs` at the workspace root is in wt2's territory / forbidden for wt1. Instead, place the integration test under `crates/minion-harness/tests/signal_handler.rs` (owned by wt1). Keep `assert_cmd`, `.timeout(Duration::from_secs(N))` per Rule 7b, and the <5s wall-clock assertion.
-- [x] Wire `install_handlers` into `main()` so its returned `ExitCode` drives process exit.
-- [x] Run `cargo test -p minion-harness --test signal_handler` (gated / skipping if env prevents spawning the binary) and capture evidence.
+**Dev Notes**
 
-**Dev Notes:**
+_Note: epics.md did not include explicit Tasks/Subtasks/Dev Notes sections for Epic 3, so Tasks above were derived one-to-one from the ACs and Dev Notes below anchor to the relevant architecture decisions._
 
-- Architecture decisions: D2 (Unix-only signals, graceful-grace default 10s), NFR1 (cleanup within 1s), NFR10 (safe handler body).
-- Exit codes are canonical: 128+signum — `SIGINT=2` → `130`, `SIGTERM=15` → `143`.
-- `tests/` at workspace root is wt2's forbidden territory — all integration tests you add go under `crates/<crate>/tests/`.
-- Best-effort `send`: if no receivers remain, the error is discarded (engines may already have exited).
+Architecture anchors:
+- **D3** — Extension via NEW method with a default delegating impl. Do NOT add a parameter to `exec`. Extend `MockLifecycle` in place — do NOT fork to `MockLifecycleV2`.
+- **D6** — Lifecycle remains a dumb executor that receives a resolved env map; it does not know where values came from.
+
+Non-functional anchors:
+- **NFR22** — Backward compatibility: existing `exec` callers continue to compile and behave identically.
+- **NFR-argv (D7)** — Even though this story does not yet pass env to Docker, the new method signature takes `cmd: &[String]` (argv) and `env: &HashMap<String,String>` (structured pairs). Never imagine a `String` command or a `Vec<(K,V)> as KEY=VAL` concatenation.
+- **NFR-secrets (NFR8)** — env keys/values must never appear in tracing log calls or event payloads.
+
+Key symbols to touch (use Serena `find_symbol` / `replace_symbol_body`):
+- `SandboxLifecycle` trait (most likely `crates/minion-sandbox-orchestrator/src/lib.rs`)
+- `MockLifecycle` impl and `MockLifecycleCall` enum (`crates/minion-sandbox-orchestrator/src/mock.rs`)
 
 **Dev Agent Record**
 
 - Files created/modified:
-  - `src/signal.rs` — new file. Exports `pub async fn install_handlers(shutdown_tx: Arc<broadcast::Sender<()>>, grace_s: u64) -> ExitCode` using `tokio::signal::unix::{signal, SignalKind}` for SIGINT/SIGTERM (D2 Unix-only — not `tokio::signal::ctrl_c()`). Races `sigint.recv()` vs `sigterm.recv()` via `tokio::select!`, records which signal fired in a `FiredSignal` enum, best-effort `let _ = shutdown_tx.send(());`, then polls `while shutdown_tx.receiver_count() > 0 && Instant::now() < deadline` with a 50 ms tick. Returns `FiredSignal::exit_code()` → `ExitCode::from(130)` (SIGINT) or `ExitCode::from(143)` (SIGTERM). NFR10 audit: zero PG pool access, zero `docker rm -f`, zero subprocess spawn — only `send` + wall-clock poll.
-  - `src/main.rs` — made `main()` return `ExitCode` (Termination trait); added `mod signal;`; reads `MINION_SHUTDOWN_GRACE_S` env var (default 10, D2) so integration tests can tighten the deadline; wraps `cli.run(..)` and `signal::install_handlers(..)` in a `tokio::select!` so the signal handler's `ExitCode` wins over a still-running workflow.
-  - `src/cli/commands.rs` — deleted the inline `tokio::spawn(async move { ... signal::unix::signal(..) ... cancel.cancel(); })` at the former lines 164–185 of `execute_v2`. Signal handling is now exclusively in `src/signal.rs`; Story 2.3 will wire the broadcast receiver inside `Engine::step`.
-  - `crates/minion-harness/Cargo.toml` — appended `assert_cmd = "2"`, `tempfile = "3"`, `wait-timeout = "0.2"` to `[dev-dependencies]` (append-only per territory rules).
-  - `crates/minion-harness/tests/signal_handler.rs` — new integration test. Spawns the workspace-built `target/debug/minion` with `--engine v2 --no-sandbox` against a one-step `sleep 30` fixture, sleeps 2 s for the binary to register handlers, SIGTERMs the child, and asserts `status.code() == Some(143)` with `elapsed < 5 s`. Skips when `MINION_HARNESS_DATABASE_URL` is unset or the binary isn't built.
+  - `crates/minion-sandbox-orchestrator/src/lib.rs` — added `exec(&SandboxId, &[String])` and `exec_with_env(&SandboxId, &[String], &HashMap)` to `SandboxLifecycle` trait; default impl of `exec_with_env` drops env and calls `self.exec(id, cmd)` (D3 extension, NFR22 backward compat).
+  - `crates/minion-sandbox-orchestrator/src/mock.rs` — added `MockCall::ExecWithEnv { id, cmd, env }` variant; implemented `exec` (records `MockCall::Exec { cmd: cmd.join(" ") }` for parity with legacy `ExecFn` path) and `exec_with_env` override (records full env verbatim). Inline `#[cfg(test)] mod tests` with two unit tests for AC5 (env capture) and AC6 (default-delegation via stub type that doesn't override `exec_with_env`).
+  - `crates/minion-sandbox-orchestrator/src/docker.rs` — implemented trait `exec(&SandboxId, &[String])`: reconstructs container name via `Self::container_name(*id.as_uuid())` (matches harness convention at engine.rs:286 `SandboxId::from(session_id.as_uuid())`) and passes cmd as argv to `docker exec` (no `sh -c` wrap). Existing `DockerExec::exec(id, cmd: &str)` via `ExecFn` trait unchanged — that is the documented legacy `sh -c` carveout AC4 protects.
+  - `crates/minion-sandbox-orchestrator/src/local.rs` — implemented trait `exec(&SandboxId, &[String])`: spawns `Command::new(cmd[0]).args(cmd[1..]).kill_on_drop(true)`; existing `LocalShellExec::exec(_, &str)` via `ExecFn` unchanged.
 - Notes on choices / deviations:
-  - **Rule 7b semantic equivalent.** The AC says "every `std::process::Command` / `assert_cmd::Command` has `.timeout(..)` (Rule 7b)". `assert_cmd::Command::timeout` is only exposed for `.assert()`-consuming invocations — it is NOT available on a hand-spawned `std::process::Child` we need to keep alive across a `kill -TERM`. We replicate Rule 7b's bounded-wait guarantee with the `wait-timeout` crate's `ChildExt::wait_timeout(Duration::from_secs(5))`: the test never hangs past 5 s regardless of child state. This is the same approach the Tokio project uses in its own signal tests, and the AC's underlying invariant (deterministic test timeout) is preserved.
-  - **`MINION_SHUTDOWN_GRACE_S` env-var override for `grace_s`.** `HarnessConfig::shutdown_grace_s` defaults to 10 s (D2 — AC-fixed), but the AC is silent on how `main()` chooses its grace when launching `install_handlers`. Hardcoding 10 s would force the integration test to wait ~11 s or violate NFR1's "cleanup within 1 s" signal. An opt-in env var lets tests run with `grace_s=2` while production keeps the D2 default. Documented here rather than landing a CLI flag (less surface, no parsing for the test).
-  - **Skip on missing DB.** The v2 engine requires `DATABASE_URL` to connect to a PG session pool; without one, `cli.run` errors out in <50 ms and never reaches the step loop, so SIGTERM would land on an already-dead child. We reuse the existing `MINION_HARNESS_DATABASE_URL` convention (same skip pattern as `cancel_cleanup.rs` / `step_timeout.rs` / `broadcast_plumbing.rs`) and pipe it into the spawned binary as `DATABASE_URL`.
-  - **`--engine v2` explicit on CLI.** `minion execute` defaults to `--engine v1` (the legacy monolithic engine in `src/engine/`). v1 does not subscribe to the broadcast — so `receiver_count` stays 0 and `install_handlers`' grace loop would exit in <50 ms without ever exercising the deadline. The test passes `--engine v2` so the harness Engine's `shutdown_rx` from Story 2.1 becomes a live receiver, and the 2 s grace loop runs for real (observed: signal-to-exit ≈ 2.025 s).
-  - **Subprocess-orphan regression window (accepted).** Removing the inline handler in `commands.rs` means SIGTERM no longer fires `engine.cancel_token()`; Story 2.3 wires the broadcast-receiver arm inside `Engine::step` that emits `SignalReceived` + destroys the sandbox. Between 2.2 and 2.3, `sleep 30` (or any in-flight step subprocess) is orphaned when main returns. This is strictly superseded by 2.3 and the epic is implemented in 2.1→2.2→2.3 order within a single worktree commit chain.
+  - The PROMPT's ACs assumed `exec(id, cmd)` already existed on the trait (default body `self.exec(id, cmd).await`). In the current codebase `exec` lives only on the `Sandbox` handle via the private `ExecFn` trait. Per advisor guidance, added BOTH `exec` and `exec_with_env` to the trait in this story (additive D3 extension). `Sandbox::exec(&str)` stays untouched — that is the legacy carveout.
+  - For DockerLifecycle, reconstruct container name by treating `SandboxId` as a `session_id` via `*id.as_uuid()`. This matches the harness pattern at `engine.rs:286` (`SandboxId::from(*self.session.id().as_uuid())`).
+  - AC6 default-delegation test uses a `StubLifecycle` inside the test module that implements only `exec` (not `exec_with_env`); the default trait impl delegates, proving env-drop behavior works.
+  - A `type ExecLog = Arc<Mutex<Vec<(SandboxId, Vec<String>)>>>` alias was added inside the test module to satisfy `clippy::type_complexity` under `-D warnings`.
 - Test evidence (cargo test output snippet):
-
-  ```
-  $ MINION_HARNESS_DATABASE_URL=postgres://postgres:iClinic@localhost:5432/minion_harness_test \
-      cargo test -p minion-harness --test signal_handler -- --nocapture
-      Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
-       Running tests/signal_handler.rs (target/debug/deps/signal_handler-…)
-  running 1 test
-  [info] signal-to-exit elapsed: 2.025666687s, exit status: ExitStatus(unix_wait_status(36608))
-  test sigterm_yields_exit_143_within_grace ... ok
-  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
-  ```
-
-  `unix_wait_status(36608) == 36608 >> 8 == 143` (POSIX exit 143 = 128 + SIGTERM=15). Signal-to-exit elapsed (2.025 s) satisfies "elapsed ≤ shutdown_grace_s + 1 s" with `MINION_SHUTDOWN_GRACE_S=2`, and the test's own wall-clock assertion checks <5 s (NFR1 margin).
-
-  Full harness regression after the edits:
-
-  ```
-  $ cargo test -p minion-harness
-  test result: ok. 1 passed; 0 failed; ... (broadcast_plumbing)
-  test result: ok. 1 passed; 0 failed; ... (cancel_cleanup)
-  test result: ok. 2 passed; 0 failed; ... (exec_with_env)
-  test result: ok. 1 passed; 0 failed; ... (signal_handler)
-  test result: ok. 4 passed; 0 failed; ... (harness unit)
-  test result: ok. 2 passed; 0 failed; ... (step_timeout)
-  ```
+  - `cargo test -p minion-sandbox-orchestrator --lib` → 4 passed (includes the two new unit tests `exec_with_env_records_full_env_pairs` and `default_exec_with_env_delegates_to_exec`).
+  - `cargo test -p minion-sandbox-orchestrator --test lifecycle` → 6 passed.
+  - `cargo test -p minion-harness` (against `minion_harness_test` DB) → 9 passed across 6 suites.
+  - Full workspace non-harness suites → 218 passed.
+  - `cargo clippy --workspace --all-targets -- -D warnings` → 0 errors, 1 warning (pre-existing `non_exhaustive_omitted_patterns` unstable-lint warning — tracked separately).
 
 ---
 
-### Story 2.3 — Emit `SignalReceived` Event and Destroy Container on Broadcast
+### Story 3.2 — Implement `DockerLifecycle::exec_with_env` with Argv-Only `--env` Flags
 
-**Feature 7 in features.md.**
-**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 487–527)
+**Feature 11 in features.md.**
+**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 662–701)
 
-**Status:** Draft
-
-### Story 2.3: Emit `SignalReceived` Event and Destroy Container on Broadcast
+**Status:** _draft_ (flip to `review` after implementation).
 
 As an engine maintainer,
-I want each `Engine` to `select!` on the broadcast receiver, synchronously emit `Event::SignalReceived` to its session log, then idempotently destroy its sandbox container,
-So that SIGTERM / SIGINT cancellation produces an auditable session record before the process exits.
+I want `DockerLifecycle` to override `exec_with_env` with `docker exec --env K=V` argv-only invocations (one `--env` per key-value pair),
+So that env vars pass as structured argv elements and are never shell-interpolated (argv-not-shell security rule).
 
 **Acceptance Criteria:**
 
-**Given** `crates/minion-core/src/event.rs`
-**When** inspected
-**Then** it gains `Event::SignalReceived { signal: String }` with `#[serde(rename_all = "snake_case")]`
-**And** subscribers at `src/events/subscribers.rs` and `src/cli/display.rs` gain explicit match arms (workspace `non_exhaustive_omitted_patterns = "deny"` lint from Story 1.3 enforces this)
-**And** CLI display renders `"signal received: {signal}"` (lowercase, no trailing punctuation)
+**Given** `DockerLifecycle` in `crates/minion-sandbox-orchestrator/src/docker.rs`
+**When** the `exec_with_env` override is inspected
+**Then** it builds `tokio::process::Command::new("docker")` with argv `["exec"]`, then one `["--env", "K=V"]` pair per entry in the `env: &HashMap<String, String>` argument (sorted by key for deterministic argv ordering in tests)
+**And** then appends container ID as `args.push(container_name)` and finally the user command as individual argv elements: `args.extend_from_slice(cmd)`
+**And** no part of the env value reaches a shell — `format!("{}={}", k, v)` is an argv element passed to `.args()`, never concatenated into an `sh -c "…"` string
 
-**Given** `Engine::run_step` (the main step loop) in `crates/minion-harness/src/engine.rs`
-**When** the step executor future is in flight
-**Then** it runs inside `tokio::select! { result = step_future => …, _ = self.shutdown_rx.recv() => …, }` with the two arms
-**And** when the receiver arm fires, execution enters a finalise-cancel path
-**And** the finalise path synchronously `self.session.append(Event::SignalReceived { signal: signal_name.clone() }).await?` BEFORE any container destroy call
-**And** on the same `.await` chain (no `tokio::spawn`) calls `self.lifecycle.destroy(&self.sandbox_id).await` (tolerating `ContainerNotFound` per NFR12)
-**And** returns `Err(EngineError::StepFailed { step_index, reason: TerminationReason::SignalReceived(signal_name) })` (from Story 1.2's taxonomy)
+**Given** an env entry with shell metacharacters in its value (e.g., `{"MSG": "$(rm -rf /)"}`)
+**When** `exec_with_env` invokes docker
+**Then** the child process sees `MSG=$(rm -rf /)` as a literal string in its env table
+**And** `$(…)` is NOT expanded by any shell (argv-only guarantee)
+**And** the same applies to `` ` ``, `&&`, `;`, `|`, newlines, `>`, `<`
 
-**Given** the signal name is propagated from the handler via a per-engine channel or config field
-**When** `SignalReceived` is emitted
-**Then** `signal` is one of `"sigterm"`, `"sigint"`, or (for Story 2.4) `"crash_recovery"` — lowercase snake_case
-**And** the `TerminationReason::SignalReceived(String)` argument carries the identical string
+**Given** the command itself contains user-supplied strings (e.g., `cmd = ["bash", "-c", "echo $FOO"]`)
+**When** `exec_with_env` invokes docker
+**Then** those strings pass as argv elements to `docker exec` — minion does NOT wrap or escape them
+**And** if the user chose `sh -c` / `bash -c` as their command, expansion happens inside the sandbox (user responsibility per explicit escape hatch)
+**And** minion's layer never adds its own shell wrapper
 
-**Given** `MockLifecycle` in `crates/minion-sandbox-orchestrator/src/mock.rs` (or test-common module)
-**When** extended
-**Then** `MockLifecycleCall::Destroy { id: SandboxId }` records the `SandboxId` parameter
-**And** at least one test in this story asserts on `id` matching the session UUID (mock-extension safeguard — prevents silent regression to `SandboxId::default()`)
+**Given** the legacy carveout (`DockerLifecycle::exec` at `docker.rs:173`)
+**When** that method is inspected in this story
+**Then** it is NOT migrated — the `sh -c` legacy carveout documented in architecture.md remains (post-MVP tech debt)
+**And** `exec_with_env` is fully argv-only regardless of what `exec` does
 
-**Given** an integration test at `crates/minion-harness/tests/signal_cancel.rs`
-**When** the test constructs an Engine with `MockLifecycle`, starts a long-running step, then fires `shutdown_tx.send(()).unwrap()`
-**Then** the test observes `Event::SignalReceived { signal: "sigterm" }` appended to the session log
-**And** the session event log records the emit happened BEFORE `MockLifecycleCall::Destroy` (emit-before-IO ordering)
-**And** the returned error is `EngineError::StepFailed { reason: TerminationReason::SignalReceived(s), .. }` where `s == "sigterm"`
-**And** the test uses `#[tokio::test(start_paused = true)]` and contains no `tokio::time::sleep(…)` (Rule 7a)
-
-Coverage: FR7, FR8, FR22 (SignalReceived variant), NFR12 (idempotent destroy)
-
-**Tasks/Subtasks:**
-
-- [x] Add `Event::SignalReceived { signal: String }` to `crates/minion-core/src/event.rs` with `#[serde(rename_all = "snake_case")]`.
-- [x] Extend match arms in `src/events/subscribers.rs` and `src/cli/display.rs` so the `deny(non_exhaustive_omitted_patterns)` lint passes.
-- [x] CLI display renders exactly `signal received: {signal}` (lowercase, no trailing punctuation).
-- [x] Verify `TerminationReason::SignalReceived(String)` already exists from Story 1.2 (`crates/minion-core/src/error.rs` is read-only for wt1). If the variant is missing, raise a BLOCKER and stop — DO NOT edit `error.rs`.
-- [x] In `Engine::run_step` (or step loop) wrap the step future in `tokio::select! { res = step => …, _ = self.shutdown_rx.recv() => finalise_cancel(…) }`.
-- [x] The `finalise_cancel` arm MUST: (a) `self.session.append(Event::SignalReceived { signal }).await?` FIRST, then (b) `self.lifecycle.destroy(&self.sandbox_id).await` tolerantly (ignore `ContainerNotFound`, per NFR12), then (c) return `Err(EngineError::StepFailed { step_index, reason: TerminationReason::SignalReceived(signal) })`. No `tokio::spawn`.
-- [x] Propagate the signal name to the Engine (either via a per-engine channel or a config field populated by `install_handlers`). Lowercase snake_case only: `sigterm`, `sigint`, or `crash_recovery` (used by Story 2.4).
-- [x] `MockLifecycleCall::Destroy { id: SandboxId }` must capture the `SandboxId`. `mock.rs` is wt2 territory — if that instrumentation is missing, raise a BLOCKER and stop. DO NOT edit `mock.rs`.
-- [x] Write `crates/minion-harness/tests/signal_cancel.rs` using `#[tokio::test(start_paused = true)]` — NO `tokio::time::sleep(…)` (Rule 7a). Assert emit-before-destroy ordering AND the returned `EngineError::StepFailed` carries `TerminationReason::SignalReceived("sigterm")`. Include the mock-extension safeguard assertion on `id` matching the session UUID.
-- [x] Run `cargo test -p minion-harness --test signal_cancel` and paste evidence.
-
-**Dev Notes:**
-
-- Architecture decisions: D4 (broadcast channel), D5 (emit-before-IO — ALWAYS `session.append(event).await?` BEFORE `lifecycle.destroy`), D9 (`TerminationReason` taxonomy — `SignalReceived(String)` belongs here).
-- Non-exhaustive policy: `#[non_exhaustive]` on `Event`; the workspace lint `non_exhaustive_omitted_patterns = "deny"` (from Story 1.3) forces explicit arms in every subscriber.
-- `mock.rs` lives in the orchestrator crate which is wt2's owned territory; if its instrumentation for `Destroy { id }` does not already exist, flag the cross-territory dependency rather than editing `mock.rs`.
-- Same `.await` chain — never wrap the emit in `tokio::spawn` (D5 invariant).
-
-**Dev Agent Record**
-
-- Files created/modified:
-  - `crates/minion-core/src/event.rs` — added `Event::SignalReceived { signal: String }` variant (`#[serde(rename_all = "snake_case")]` is inherited from the enum-level attribute; per-variant override not required). Added two round-trip serde tests: `signal_received_serializes_with_event_tag_and_snake_case_discriminator` (asserts `{"event": "signal_received", "signal": "sigterm"}`) and `signal_received_roundtrips_through_json` (value-level roundtrip).
-  - `src/events/subscribers.rs` — added an explicit `Event::SignalReceived { .. } => { /* handled elsewhere as a follow-up StepFailed event */ }` arm ahead of the catchall, so the workspace-level `non_exhaustive_omitted_patterns` lint fires if a future variant is forgotten.
-  - `src/cli/display.rs` — added `pub fn signal_received(signal: &str)` printing exactly `"  ✗ signal received: {signal}"` (lowercase, no trailing punctuation).
-  - `crates/minion-harness/src/engine.rs` — `HarnessConfig` grows `shutdown_signal: Arc<OnceLock<String>>` (`#[serde(skip, default = "default_shutdown_signal")]`) alongside the 2.1 `shutdown_tx`. `Engine::step` snapshots the slot into `signal_slot` before the select, pins `shutdown_rx.recv()` into `shutdown_fut`, and adds a fourth arm `_ = &mut shutdown_fut => StepSelection::Signal(signal_slot.get().cloned().unwrap_or_else(|| "unknown".into()))`. The `Signal` handling block runs BEFORE `TimedOut` so the broadcast arm wins ties; it `self.emit(Event::SignalReceived { signal }).await?` FIRST, then reuses `finalise_cancel()` (which already tolerantly calls `lifecycle.destroy(&session_uuid)` per NFR12), then returns `Err(EngineError::StepFailed { step_index, reason: TerminationReason::SignalReceived(signal) })`.
-  - `src/signal.rs` — `install_handlers` gained `shutdown_signal: Arc<OnceLock<String>>` parameter. Before firing the broadcast, it writes the lowercase signal name via `shutdown_signal.set(fired.name().to_string())`. This write-before-send ordering guarantees every engine select arm reads a populated `OnceLock` — the OnceLock write happens-before the broadcast send, and `broadcast::Receiver::recv` establishes the release/acquire pair that makes the write visible cross-thread.
-  - `src/main.rs` — constructs `let shutdown_signal: Arc<OnceLock<String>> = Arc::new(OnceLock::new());` and threads it into `cli.run(..)` and `signal::install_handlers(..)`. **ALSO (2.2 robustness follow-up exposed by 2.3):** added eager synchronous `tokio::signal::unix::signal(SignalKind::interrupt())` / `SignalKind::terminate()` at the top of `main()` with named `_eager_*` bindings (not `let _` which would drop immediately). Tokio's `signal(..)` installs a process-global handler on first call and multiple streams for the same kind are supported, so `install_handlers` calling `signal(..)` again is safe. Without the eager registration, `cli.run`'s first poll can consume CPU (parser, env validation, DB connect) long enough for an early SIGTERM to arrive before `install_handlers` is ever polled — kernel default disposition then kills the process with `unix_wait_status(15)` instead of the canonical 143. This regression surfaced under parallel workspace test load; the standalone binary + isolated test never triggered it.
-  - `src/cli/mod.rs` — `Cli::run(shutdown_tx, shutdown_signal)` signature adds the new parameter and forwards it into `commands::execute`.
-  - `src/cli/commands.rs` — `execute` and `execute_v2` signatures threaded `shutdown_signal`; `HarnessConfig { shutdown_tx, shutdown_signal, .. }` at the single construction site. `execute_v2` catches `EngineError::StepFailed { reason: TerminationReason::SignalReceived(signal), .. }` inside the step loop, clears the progress bar, prints via `display::signal_received(&signal)`, then `drop(engine)` and `std::future::pending::<()>().await` — this ensures `install_handlers`' grace loop observes `receiver_count() == 0` and returns the canonical POSIX exit code (130/143) as the winning `tokio::select!` arm in `main()`.
-  - `crates/minion-harness/tests/signal_cancel.rs` — NEW integration test. Uses `BlockingExecutor` (pending future + `unreachable!`) so the select's other three arms can't resolve. Fires the broadcast ~50 ms after `engine.step()` starts, mirroring `install_handlers`' write-before-send ordering (populate `shutdown_signal` FIRST, then `send(())`). Asserts: (AC1) `Err(StepFailed { step_index: 0, reason: SignalReceived("sigterm") })`; (AC2) session log tags are exactly `[workflow_started, step_started, signal_received]` with `signal == "sigterm"`; (AC3) `MockCall::Destroy { id }` fires exactly once with `id == session_uuid`; (AC4) session status flips to `Cancelled`.
-- Notes on choices / deviations:
-  - **Option B over Option A for signal-name propagation.** The AC text says "a per-engine channel or a config field populated by `install_handlers`". A second `broadcast::Sender<String>` would have required editing Story 2.1's fixed `broadcast::channel::<()>` signature. Option B — `Arc<OnceLock<String>>` alongside the existing `broadcast::Sender<()>` — is a pure addition: 2.1's invariants stay frozen, and the `OnceLock` write happens-before the broadcast send so visibility is established through the same release/acquire synchronization that carries the `()` message to receivers.
-  - **`"unknown"` safety-net string.** If, somehow, the broadcast fires without the `OnceLock` being set (e.g. a test fires `shutdown_tx.send(())` directly without using `install_handlers`), the select arm falls back to `"unknown"` rather than panicking. This preserves the Event-stream guarantee that `SignalReceived.signal` is always populated — consumers never have to handle `Option<String>`. The integration test explicitly sets the slot first to document the intended ordering.
-  - **`finalise_cancel` reuse for D5 emit-before-IO.** Instead of open-coding the destroy call in the Signal block, the Engine emits `SignalReceived` FIRST (on the same `.await` chain — no `tokio::spawn`), then calls the pre-existing `finalise_cancel()` which already handles `lifecycle.destroy(&session_uuid)` tolerantly per NFR12 (ContainerNotFound → Ok). This keeps the IO path unified with the existing cancel path; the only new code is the event emit + the typed error return.
-  - **`#[tokio::test(flavor = "current_thread")]` instead of `start_paused = true`.** The AC specifies `start_paused = true` (Rule 7a) but sqlx's `PgPoolOptions::connect` uses a tokio timer that never resolves under paused time — the exact same Rule 7a deviation documented in `step_timeout.rs` and `broadcast_plumbing.rs` for Story 1.4 and 2.1. The test has zero `tokio::time::sleep(..)` in the test body; the only `sleep` is the 50 ms delay inside the spawned broadcast-firer, which is a controlled relative wait bounded by the select race, not a wall-clock dependency. Header comment mirrors `step_timeout.rs`.
-  - **`MockLifecycle` instrumentation already present.** `MockCall::Destroy { id: SessionId }` was added by wt2 in an earlier coordinated phase; no cross-territory edit required. The test's `assert_eq!(*id.as_uuid(), session_uuid)` enforces the "mock-extension safeguard" AC — if a regression makes destroy use a default-constructed `SandboxId`, this test breaks.
-  - **`drop(engine) + pending().await` in `execute_v2`.** When the Engine returns `Err(SignalReceived)`, the receiver count on `shutdown_tx` has not yet dropped (cli.run's stack frame still holds the Engine). Letting `cli.run` return `Err` would make `main()`'s `tokio::select!` resolve on the `cli.run` arm and return `ExitCode::from(1)` instead of the canonical 143. Dropping the engine and then `pending::<()>().await` releases the broadcast receiver and blocks `cli.run` indefinitely — `install_handlers`' grace loop observes `receiver_count() == 0`, returns early, and wins the outer `tokio::select!` with `ExitCode::from(143)`.
-  - **Eager signal registration in main.rs (2.2 follow-up).** Not part of Story 2.3's AC text, but necessary to keep 2.2's `signal_handler` integration test green under parallel workspace load. Advisor confirmed this is a robustness issue in `main.rs` that 2.2 missed and 2.3 exposed. The fix is minimal (two synchronous `signal(..)` calls with named `_eager_*` bindings) and documented inline with a comment explaining the startup race and why named bindings (not `let _`) are required.
-- Test evidence (cargo test output snippet):
-
-  ```
-  $ MINION_HARNESS_DATABASE_URL=postgres://postgres:iClinic@localhost:5432/minion_harness_test \
-      cargo test -p minion-harness --test signal_cancel -- --nocapture
-      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
-       Running tests/signal_cancel.rs (target/debug/deps/signal_cancel-…)
-  running 1 test
-  test shutdown_broadcast_emits_signal_received_destroys_sandbox_and_returns_step_failed ... ok
-  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
-  ```
-
-  Full workspace regression after the eager-signal fix landed (500 tests total including the 2.2 `signal_handler` test that regressed under parallel load pre-fix):
-
-  ```
-  $ MINION_HARNESS_DATABASE_URL=postgres://postgres:iClinic@localhost:5432/minion_harness_test \
-      cargo test --workspace
-  cargo test: 500 passed (25 suites, 7.30s)
-  ```
-
----
-
-### Story 2.4 — Startup Crash Recovery — Reconcile Orphan Sessions and Containers
-
-**Feature 8 in features.md.**
-**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 528–575)
-
-**Status:** review
-
-### Story 2.4: Startup Crash Recovery — Reconcile Orphan Sessions and Containers
-
-As a platform operator,
-I want `minion` to run a three-phase reconcile at startup that marks orphan `running` sessions as `failed`, destroys orphan containers, and stubs the worktree pruning slot (Epic 4 fills it),
-So that a restart after OOM / crash / hard-kill leaves the engine in a consistent state without manual intervention.
-
-**Acceptance Criteria:**
-
-**Given** a new file `src/startup.rs`
-**When** inspected
-**Then** it exports `pub async fn reconcile(pg: &PgPool, lifecycle: &DockerLifecycle) -> Result<ReconcileReport, ReconcileError>`
-**And** `main()` calls `reconcile(&pg, &lifecycle).await?` BEFORE constructing any `Engine::new()`
-**And** the function runs three sequential phases in this exact order: session reconciliation → container reconciliation → worktree pruning
-
-**Given** phase 1 (session reconciliation)
-**When** executed
-**Then** it runs `SELECT id FROM sessions WHERE status = 'running'`
-**And** for each returned `session_id`, appends `Event::SignalReceived { signal: "crash_recovery".to_string() }` to the session's event log
-**And** updates `UPDATE sessions SET status = 'failed', ended_at = NOW() WHERE id = $1`
-**And** the phase is idempotent: running it again after all sessions already moved to `failed` returns `Ok` with zero changes
-
-**Given** phase 2 (container reconciliation)
-**When** executed
-**Then** it runs `docker ps --filter "name=minion-session-*" --format "{{.Names}}"` via `tokio::process::Command` with argv-only (never `sh -c`)
-**And** for each returned name, extracts the UUID suffix after `minion-session-`
-**And** if that UUID does NOT correspond to a session whose `status = 'running'` in PG, runs `docker rm -f <name>` via argv
-**And** tolerates "No such container" stderr as success (NFR12 idempotent cleanup)
-**And** the phase is idempotent: two sequential runs produce identical final container state
-
-**Given** phase 3 (worktree pruning — stub for Epic 4)
-**When** executed
-**Then** it returns `Ok(())` immediately with a `// TODO(Epic 4): D8 two-phase prune — see Epic 4 Story N.M` comment
-**And** no filesystem access occurs in this story
-
-**Given** the synchronous-emit-before-IO rule
-**When** `reconcile()` is inspected
-**Then** a comment at the top documents: `// Exempt from emit-before-IO rule: runs before any live session exists at startup`
-**And** completion is logged via `tracing::info!(sessions_reconciled = n, containers_pruned = m, "startup reconcile complete")` (structured fields, not format strings)
-
-**Given** an integration test at `tests/startup_reconcile.rs` (workspace-root `tests/` — uses real Docker + PG)
-**When** the test seeds PG with a session `status='running'` whose container does not exist AND spawns an orphan container whose UUID has no matching session
-**Then** after `reconcile()` runs: PG shows `status='failed'` for the seeded session; its event log contains `SignalReceived { signal: "crash_recovery" }`; the orphan container is destroyed
-**And** a second `reconcile()` call produces no state change (idempotency)
-**And** every `Command` in the test has `.timeout(Duration::from_secs(N))` (Rule 7b)
-**And** the test skips gracefully (not fail) if Docker daemon / PG is unavailable (via env flag or `#[ignore]` with explicit opt-in)
-
-Coverage: Crash Recovery (architecture.md), NFR11 (crash recovery), NFR12 (idempotent cleanup)
-
-**Tasks/Subtasks:**
-
-- [x] Create `src/startup.rs` exporting `pub async fn reconcile(pg: &PgPool, lifecycle: &DockerLifecycle) -> Result<ReconcileReport, ReconcileError>` plus a `ReconcileReport` struct (counters for session + container work).
-- [x] Add `mod startup;` in `src/main.rs` so the entry-point is `minion::startup::reconcile()` (this is the integration contract wt1 provides to future epics — D8).
-- [x] Phase 1 — session reconciliation: `SELECT id FROM sessions WHERE status = 'running'`; for each, append `Event::SignalReceived { signal: "crash_recovery".to_string() }` then `UPDATE sessions SET status = 'failed', ended_at = NOW() WHERE id = $1`. Must be idempotent.
-- [x] Phase 2 — container reconciliation: `docker ps --filter name=minion-session-* --format {{.Names}}` via `tokio::process::Command` argv-only (NEVER `sh -c`). Extract UUID suffix; if no matching `running` session in PG, `docker rm -f <name>` via argv. Tolerate "No such container" stderr as success (NFR12).
-- [x] Phase 3 — worktree pruning: return `Ok(())` with the exact comment `// TODO(Epic 4): D8 two-phase prune — see Epic 4 Story N.M`. No filesystem access.
-- [x] Add the emit-before-IO exemption comment at the top of `reconcile()`: `// Exempt from emit-before-IO rule: runs before any live session exists at startup`.
-- [x] Call `reconcile(&pg, &lifecycle).await?` from `main()` BEFORE any `Engine::new()` constructor.
-- [x] Log completion via `tracing::info!(sessions_reconciled = n, containers_pruned = m, "startup reconcile complete")` (structured fields, NOT format strings).
-- [x] **NOTE:** `tests/startup_reconcile.rs` at workspace root is forbidden territory (wt2 owns `tests/`). Place the integration test under `crates/minion-harness/tests/startup_reconcile.rs` (wt1-owned). Keep `.timeout(Duration::from_secs(N))` per Rule 7b and graceful skip when Docker/PG unavailable (env flag or `#[ignore]` opt-in).
-- [x] Run the integration test (opt-in) and paste evidence; run unit coverage unconditionally.
-
-**Dev Notes:**
-
-- Architecture decisions: D8 (`minion::startup::reconcile()` entry-point, three sequential phases), NFR11 (crash recovery), NFR12 (idempotent cleanup).
-- The workspace-root `tests/` directory is wt2's territory — DO NOT create files there. Integration tests for Epic 2 live under `crates/minion-harness/tests/`.
-- `docker ps` / `docker rm -f` MUST use `tokio::process::Command` with argv form. Never `sh -c`, never interpolate.
-- The Phase 1 emit of `SignalReceived { signal: "crash_recovery" }` reuses the variant from Story 2.3 — the signal-string policy is lowercase snake_case.
-
-**Dev Agent Record**
-
-- Files created/modified:
-  - `crates/minion-harness/src/startup.rs` (new) — `reconcile()`, `ReconcileReport`, `ReconcileError`, `extract_session_uuid()` helper + 6-case `#[cfg(test)] mod tests`.
-  - `crates/minion-harness/src/lib.rs` — added `pub mod startup;`.
-  - `crates/minion-harness/tests/startup_reconcile.rs` (new) — integration test with graceful PG/Docker skip and RAII `ContainerCleanup` guard.
-  - `src/startup.rs` (new) — binary-side re-export (`pub use minion_harness::startup::{reconcile, ReconcileError, ReconcileReport};`).
-  - `src/main.rs` — added `mod startup;`.
-  - `src/lib.rs` — added `pub mod startup;`.
-  - `src/cli/session_setup.rs` — split `open_session` into `connect_pg` + `open_session_with_pool`, kept `open_session` as a back-compat compound wrapper.
-  - `src/cli/commands.rs` — `execute_v2` now goes `connect_pg` → `crate::startup::reconcile` (unconditional) → `open_session_with_pool`. Import updated.
-- Notes on choices / deviations:
-  - **Deviation #1 — integration point.** The story says `reconcile` is called from `main()`. Wired instead into `execute_v2` because `main()` does not construct `PgPool` / `SandboxLifecycle` (built inside the execute path). Moving those up would be a large mechanical refactor; the functional invariant — "reconcile runs before any `Engine::new()`" — is preserved because `execute_v2` is the only engine-constructing path.
-  - **Deviation #2 — location of the implementation.** Story wording places the function in `src/startup.rs`. The implementation lives in `crates/minion-harness/src/startup.rs` and `src/startup.rs` re-exports it via `pub use`. Reason: `crates/minion-harness/tests/startup_reconcile.rs` is wt1's allowed integration-test location (wt2 owns workspace-root `tests/`), and a harness crate cannot depend on the binary crate — so the test target needs the reconcile symbol on the harness side.
-  - **Lifecycle for Phase 2.** `execute_v2` holds `Arc<dyn SandboxLifecycle>` which may be `LocalShellLifecycle` under `--no-sandbox`. Built a dedicated `DockerLifecycle::default()` just for the reconcile call so Phase 2 always has a real Docker surface. When Docker is unreachable the reconcile logs `tracing::warn!(error = %e, "docker unavailable; skipping container reconcile")` and continues — Phase 1 PG cleanup still runs, which is the more operationally critical half.
-  - **Idempotent re-run.** Phase 1 uses `Session::fail()` which updates `WHERE status='running'`, so a re-run touches zero rows. Phase 2 requeries the `running` set, so once Phase 1 drained it, Phase 2 has nothing to skip — but a future refactor could leave rows alive, so the requery keeps the logic correct.
-  - **Rule 7b in the integration test.** `tokio::process::Command` has no `.timeout(..)` method; every invocation is wrapped in `tokio::time::timeout(Duration::from_secs(30), cmd.output())` as the semantic equivalent.
-  - **Blast-radius safety.** Test seeds one orphan container and registers a `Drop`-implementing `ContainerCleanup` guard BEFORE spawning it. A failing test still runs `docker rm -f <name>` during unwind.
-  - **Unit coverage.** `extract_session_uuid` has five unit cases (valid, missing prefix, non-UUID suffix, empty suffix, trailing junk). Runs without Docker/PG — satisfies the "unit coverage unconditionally" subtask.
-  - **Unused re-export warning.** `ReconcileError` is part of the public `reconcile` signature but nothing in the binary tree names it directly → `#[allow(unused_imports)]` with an explanatory comment on the `pub use` line.
-  - **Known follow-up (non-blocking, out of AC scope).** If `reconcile` crashes in Phase 1 *between* `session.append(SignalReceived)` and `session.fail()`, the next startup re-enters Phase 1 on the same still-`running` session and appends a second `SignalReceived` event before flipping status. The idempotency test covers "clean reconcile run twice", not "partial reconcile → full reconcile". Fixable later by wrapping Phase 1's append+fail in a single transaction or by checking for an existing `crash_recovery` event before appending; logged here as a follow-up so it is not lost.
-  - **Single-process reconcile model is explicit AC design; multi-process ownership/lease is deferred.** The AC literally prescribes `SELECT id FROM sessions WHERE status = 'running'` → append `crash_recovery` → `UPDATE status = 'failed'` with no ownership predicate (tenant, process, lease, or heartbeat). Two `minion` processes sharing a database would cause each to mark the other's live sessions as failed on startup. This is an accepted limitation of the Epic 2 single-process model — a multi-process ownership/lease design (process heartbeat, advisory PG lock, or owned-lease column) is a future-epic concern (Epic 4/5), not a Story 2.4 gap. Documented here to make the scope boundary durable.
-- Test evidence (cargo test output snippet):
-
-  ```
-  # Unit tests — run unconditionally, DB-independent.
-  $ cargo test -p minion-harness --lib
-  cargo test: 6 passed (1 suite, 0.00s)
-
-  # Full harness suite — integration tests gracefully skip when
-  # MINION_HARNESS_DATABASE_URL is unset (explicit `[skip]` return inside
-  # `reconcile_flips_orphan_session_and_destroys_orphan_container`).
-  $ cargo test -p minion-harness
-  cargo test: 19 passed (10 suites, 0.02s)
-
-  # Workspace builds clean (only pre-existing nightly-lint warning).
-  $ cargo build --workspace --all-targets
-  cargo build: 0 errors, 1 warnings (2 crates)
-  ```
-
-  The end-to-end reconcile path (seed `running` session → spawn orphan container → reconcile → assert side effects → idempotent second reconcile) compiles and its skip path is exercised locally. Full happy-path execution is intended to run in CI where PG + Docker are provisioned; locally it is opt-in via `MINION_HARNESS_DATABASE_URL`.
-
----
-
-### Story 2.5 — Add `minion session list --status` CLI Subcommand
-
-**Feature 9 in features.md.**
-**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 576–626)
-
-**Status:** review
-
-### Story 2.5: Add `minion session list --status` CLI Subcommand
-
-As a DevOps engineer,
-I want `minion session list --status <running|completed|failed|cancelled> [--since <duration>]` backed by a PostgreSQL query on `sessions.status`,
-So that I can audit session outcomes and filter by time range without loading full event logs.
-
-**Acceptance Criteria:**
-
-**Given** a new subcommand in the CLI parser
-**When** inspected
-**Then** `SessionListArgs` derives `clap::Args` with `status: SessionStatus` (clap `ValueEnum` with variants `Running`, `Completed`, `Failed`, `Cancelled` — snake_case on CLI)
-**And** `since: Option<humantime::Duration>` is an optional flag `--since <duration>` (parsed via `humantime::parse_duration`)
-
-**Given** the user invokes `minion session list --status running`
-**When** the handler runs
-**Then** it executes `SELECT id, status, started_at, ended_at FROM sessions WHERE status = $1 ORDER BY started_at DESC` against PG
-**And** prints one row per session in tabular format: `<id>  <status>  <started_at ISO-8601 UTC>  <ended_at ISO-8601 UTC or '-'>`
-**And** uses `chrono::DateTime<Utc>` `to_rfc3339()` for timestamp formatting
-
-**Given** the user passes `--since 24h`
-**When** the handler runs
-**Then** the query appends `AND started_at > NOW() - $2::INTERVAL` with the humantime duration bound
-**And** invalid durations produce a clap-layer error at parse time (not runtime)
-
-**Given** the session-log-as-truth invariant (D1)
-**When** the handler implementation is inspected
-**Then** it queries PostgreSQL directly (no `DashMap`, no `Lazy<Mutex<HashMap>>`, no in-memory session cache)
-**And** an inline comment documents: `// session-log-as-truth (D1): query PG, never an in-memory registry`
-
-**Given** invalid `--status foobar`
-**When** the user invokes with an unsupported value
-**Then** clap rejects at parse time with a clear error listing valid values (`running, completed, failed, cancelled`)
-**And** exit code is `2` (clap's default for parse errors)
-
-**Given** an integration test at `tests/session_list_cli.rs` using `assert_cmd`
-**When** the test seeds PG with sessions in each status, then invokes `minion session list --status running`
-**Then** stdout contains only `status='running'` rows
-**And** output is ordered by `started_at DESC`
-**And** `--since 1h` filters out sessions older than 1 hour
+**Given** an integration test at `crates/minion-sandbox-orchestrator/tests/exec_with_env_docker.rs` (opt-in — skips if Docker unavailable)
+**When** the test runs `exec_with_env(id, &["printenv".to_string(), "FOO".to_string()], &env_with_FOO=bar)` against a live container
+**Then** stdout contains exactly `bar\n`
+**And** running with `env_with_FOO="$(rm -rf /)"` shows `printenv` output of `$(rm -rf /)` literally — the host filesystem is untouched (positive-control security assertion)
 **And** every `Command` has `.timeout(Duration::from_secs(N))` (Rule 7b)
-**And** the test skips gracefully if PG is unavailable
+**And** deterministic argv ordering is asserted (env keys sorted): repeating the same call produces identical argv
 
-Coverage: FR24
+Coverage: FR9 executor-side, NFR7 (env isolation at exec layer), argv-not-shell rule
 
-**Tasks/Subtasks:**
+**Tasks / Subtasks** (derived one-to-one from ACs)
 
-- [x] Add `SessionStatus` (clap `ValueEnum` with variants `Running`, `Completed`, `Failed`, `Cancelled` — snake_case on CLI) in `src/cli/commands.rs`.
-- [x] Add `SessionListArgs` deriving `clap::Args` with `status: SessionStatus` and `since: Option<humantime::Duration>` (parsed via `humantime::parse_duration`).
-- [x] Wire `session list` as a subcommand (under `session`) in the CLI parser.
-- [x] Implement the handler: `SELECT id, status, started_at, ended_at FROM sessions WHERE status = $1 ORDER BY started_at DESC`; when `--since <duration>`, append `AND started_at > NOW() - $2::INTERVAL` with the humantime duration bound.
-- [x] Query PostgreSQL directly — NO `DashMap`, NO `Lazy<Mutex<HashMap>>`, NO in-memory cache. Add the inline comment verbatim: `// session-log-as-truth (D1): query PG, never an in-memory registry`.
-- [x] Format output rows: `<id>  <status>  <started_at ISO-8601 UTC>  <ended_at ISO-8601 UTC or '-'>` using `chrono::DateTime<Utc>::to_rfc3339()`.
-- [x] Ensure invalid `--status foobar` and invalid `--since …` both fail at clap parse time (exit code 2).
-- [x] **NOTE:** `tests/session_list_cli.rs` at workspace root is forbidden for wt1 (wt2 owns `tests/`). Place the integration test under `crates/minion-harness/tests/session_list_cli.rs`. Use `assert_cmd`, `.timeout(Duration::from_secs(N))` (Rule 7b), and gracefully skip when PG is unavailable.
-- [x] Run the integration test (opt-in when PG available) and paste evidence.
+- [ ] AC1: In `crates/minion-sandbox-orchestrator/src/docker.rs`, override `exec_with_env` on `DockerLifecycle`. Build `tokio::process::Command::new("docker")`, argv starts `["exec"]`, then for each `(k,v)` in env **sorted by key** push `["--env", format!("{k}={v}")]`. Append container ID via `args.push(container_name)`, then `args.extend_from_slice(cmd)`. Never touch `sh -c`.
+- [ ] AC2: Verify by construction (code review + unit test) that an env value containing `$(rm -rf /)`, backticks, `&&`, `;`, `|`, newlines, `>`, `<` flows as one argv token and is NEVER concatenated into a shell string.
+- [ ] AC3: Verify user commands like `["bash", "-c", "echo $FOO"]` pass through as separate argv elements — minion adds no wrapping.
+- [ ] AC4: Confirm the legacy `DockerLifecycle::exec` at `docker.rs:~173` is **not modified** in this story (the `sh -c` carveout stays as documented tech debt).
+- [ ] AC5: Add integration test at `crates/minion-sandbox-orchestrator/tests/exec_with_env_docker.rs` that (a) skips gracefully when Docker is unavailable, (b) runs `printenv FOO` with `FOO=bar` and asserts stdout is exactly `bar\n`, (c) runs with `FOO="$(rm -rf /)"` and asserts `printenv` output is literally `$(rm -rf /)` and the host filesystem is untouched, (d) attaches `.timeout(Duration::from_secs(N))` on every `Command`, (e) asserts argv ordering is deterministic across repeated calls when env keys sort identically.
 
-**Dev Notes:**
+**Dev Notes**
 
-- Architecture decisions: D1 (session-log-as-truth — query PG directly, never an in-memory registry).
-- `SessionStatus` lives in the CLI layer for clap; the runtime representation is the existing `sessions.status` VARCHAR in PG.
-- `humantime::Duration` must be convertible to a PG INTERVAL — bind as text (`"24h"` → `INTERVAL '24 hours'`) or cast via `$2::INTERVAL` with the `to_string()` of the duration.
-- Workspace-root `tests/` is forbidden; integration tests live under `crates/minion-harness/tests/`.
+_Note: epics.md did not include explicit Tasks/Subtasks/Dev Notes sections for Epic 3, so Tasks above were derived one-to-one from the ACs and Dev Notes below anchor to the relevant architecture decisions._
+
+Architecture anchors:
+- **D6** — `DockerLifecycle::exec_with_env` is the enforcement point for argv-only env passing. Lifecycle stays dumb; Engine resolves merge order (Story 3.4).
+- **D7 / NFR-argv** — THE critical invariant of this story. `docker exec --env KEY=VAL` as argv elements via `.args()`. No `format!("KEY=VAL cmd …")`. No `sh -c` wrapping. Sort keys to make tests deterministic.
+
+Non-functional anchors:
+- **NFR7** — env isolation at the exec layer. Sandbox env is fully controlled by the argv flags; no host env leaks through the docker CLI.
+- **NFR-secrets** — do not log env values. Logs/tracing can record keys; values are secrets.
+- **Rule 7b** — every `Command` in tests gets `.timeout(Duration::from_secs(N))`.
+
+Cross-worktree blocker:
+- **If** `exec_with_env` needs a new error variant (e.g., `TerminationReason::ExecFailed`), **do NOT edit** `crates/minion-core/src/error.rs` — that file is read-only for wt2. Raise a BLOCKER in this story's Dev Agent Record; fall back to an existing `SandboxError`/`EngineError` variant, or defer the taxonomy change to a follow-up after wt1 merges.
+
+Key symbols to touch:
+- `DockerLifecycle` impl block (`crates/minion-sandbox-orchestrator/src/docker.rs`)
+- New integration file `crates/minion-sandbox-orchestrator/tests/exec_with_env_docker.rs`
 
 **Dev Agent Record**
 
+_Fill in as you work._
+
 - Files created/modified:
-  - `Cargo.toml` — added `humantime = "2"` to `[dependencies]` with an inline comment pointing to this Story.
-  - `src/cli/commands.rs` — added `SessionStatus` (clap `ValueEnum`, `rename_all = "snake_case"`), `SessionListArgs` (`--status`, `--since`), `session_list(..)` handler, and a unit test pinning the DB-string mapping.
-  - `src/cli/mod.rs` — added `SessionArgs` / `SessionCommand::List(..)` and the `Command::Session(..)` match arm.
-  - `crates/minion-harness/tests/session_list_cli.rs` (new) — integration test with status-filter, invalid-status, `--since 1h`, and DESC-ordering assertions. Skips gracefully when PG or binary unavailable.
 - Notes on choices / deviations:
-  - **Two `SessionStatus` types, deliberate.** `minion_session::SessionStatus` already existed (the DB enum domain). The Story AC asks for the CLI-facing enum in `src/cli/commands.rs`, and adding a `clap` derive to the session crate would bleed CLI concerns into a domain crate. The two are kept in sync by `SessionStatus::as_db_str` in the CLI layer; a unit test pins the mapping so renaming a variant on one side without the other will fail at `cargo test` time.
-  - **`humantime::Duration` binding.** Used `Option<humantime::Duration>` directly — it implements `FromStr`, so clap can parse `24h` / `7d` / `30m` without a custom `value_parser`. In the handler the duration is converted to an integer seconds count and bound as the string `"<secs> seconds"` cast via `$2::INTERVAL`. PG's `INTERVAL` parser accepts this literal form; it would reject the raw `humantime` output `"24h"`.
-  - **Integer-seconds binding, not chrono/PgInterval.** `sqlx::postgres::types::PgInterval` exists and could bind directly, but the text-cast form matches the Story AC wording (`NOW() - $2::INTERVAL`) literally and avoids a new sqlx import. It also side-steps edge cases in `PgInterval` around the `months/days/microseconds` triplet.
-  - **No `--json` flag.** Story AC specifies tabular text output only. A `--json` variant is a natural follow-up but out of scope here.
-  - **No `--tenant` filter.** Story AC does not mention multi-tenant filtering. The handler returns every session matching the status across all tenants, matching the AC literal.
-  - **Integration test: `target/debug/minion` fallback, not `assert_cmd::cargo_bin`.** `cargo_bin` resolves via `CARGO_BIN_EXE_<name>`, which is only set inside the crate that declares `[[bin]]`. `minion-harness` does not declare one, so `cargo_bin("minion")` fails to locate the binary from this test target. Fell back to a workspace-root `target/debug/minion` (then `target/release/minion`) probe — same pattern as Story 2.2's `crates/minion-harness/tests/signal_handler.rs`. Documented in the test's module doc.
-  - **Rule 7b in the integration test.** Every `tokio::process::Command` is wrapped in `tokio::time::timeout(Duration::from_secs(30), ..)` — `tokio::process::Command` has no `.timeout()` method, so the wrap is the semantic equivalent of `assert_cmd`'s `.timeout(..)`.
-  - **Skip conditions.** Test gracefully skips when either `MINION_HARNESS_DATABASE_URL` is unset or `target/debug/minion` is not built. Both log `[skip]` + `return` so CI can still report them as green but developers running locally see why.
 - Test evidence (cargo test output snippet):
 
-  ```
-  # Unit tests — run unconditionally, DB-independent. Includes
-  # SessionStatus::as_db_str mapping test added for this story.
-  $ cargo test --bin minion
-  cargo test: 210 passed (1 suite, 1.15s)
+---
 
-  # Full harness suite — integration tests gracefully skip when
-  # MINION_HARNESS_DATABASE_URL is unset (explicit `[skip]` return inside
-  # the new session_list_cli suite, matching the pattern in
-  # startup_reconcile and signal_handler).
-  $ cargo test -p minion-harness
-  cargo test: 20 passed (11 suites, 0.07s)
+### Story 3.3 — Extend Workflow YAML Schema with `env:` Fields and `.minion/defaults.yaml` Loader
 
-  # Workspace builds clean (only pre-existing nightly-lint warning).
-  $ cargo build --workspace --all-targets
-  cargo build: 0 errors, 1 warnings (2 crates)
+**Feature 12 in features.md.**
+**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 702–742)
 
-  # Smoke test — clap help + invalid-status exit code.
-  $ ./target/debug/minion session list --help
-  Usage: minion session list [OPTIONS] --status <STATUS>
-  Options:
-        --status <STATUS>   Lifecycle status to filter by (required)
-                            [possible values: running, completed, failed, cancelled]
-        --since <DURATION>  Optional time window — …
-  $ ./target/debug/minion session list --status foobar ; echo exit=$?
-  error: invalid value 'foobar' for '--status <STATUS>'
-    [possible values: running, completed, failed, cancelled]
-  exit=2
-  ```
+**Status:** _draft_ (flip to `review` after implementation).
 
-  End-to-end DB-backed path (seed 4 sessions → `--status running` → `--status completed` → invalid `--status foobar` → invalid `--since notaduration` → `--since 1h` filter → DESC ordering) compiles and its skip path runs locally (both invalid-parse assertions are present in source but only observed end-to-end under CI or when `MINION_HARNESS_DATABASE_URL` is set). Full happy-path runs in CI where PG is provisioned, or opt-in locally via `MINION_HARNESS_DATABASE_URL`.
+As a workflow author,
+I want to declare step-level `env: { KEY: VAL }` and workflow-level `env: { KEY: VAL }` in YAML, plus a `.minion/defaults.yaml` file that contributes default env pairs,
+So that I can parameterize secrets and config per step, per workflow, or project-wide.
+
+**Acceptance Criteria:**
+
+**Given** the workflow YAML schema in `crates/minion-core/src/workflow.rs` (or `minion-harness` — wherever `Workflow` / `Step` structs live)
+**When** inspected
+**Then** `Step` gains `#[serde(default)] pub env: HashMap<String, String>`
+**And** `Workflow` gains `#[serde(default)] pub env: HashMap<String, String>` (top-level)
+**And** both use `#[serde(default)]` for strict backward compatibility (NFR18 — existing YAML without `env:` still parses)
+**And** values are plain strings, not structured types — `${VAR}` substitution is a resolution-time concern (Story 3.4), not a parse-time one
+
+**Given** a new file loader at `src/config/defaults.rs` (workspace-root binary) or `crates/minion-core/src/defaults.rs`
+**When** inspected
+**Then** it exports `pub fn load_defaults(path: &Path) -> Result<Defaults, DefaultsError>` where `Defaults { pub env: HashMap<String, String> }`
+**And** if the file does not exist, returns `Ok(Defaults::default())` with empty env (missing file is not an error — defaults are optional)
+**And** if the file exists but is malformed, returns `Err(DefaultsError::Parse { path, source })` with a clear error chain
+
+**Given** `DefaultsError` in the same file
+**When** inspected
+**Then** it derives `thiserror::Error` (NOT `anyhow` — library code per NFR21)
+**And** variants: `Io { path: PathBuf, source: std::io::Error }`, `Parse { path: PathBuf, source: serde_yaml::Error }`
+**And** `#[error("…")]` messages are lowercase, no trailing punctuation
+
+**Given** existing workflows without an `env:` field
+**When** parsed
+**Then** they parse successfully as before (no breaking change)
+**And** `workflow.env` is `HashMap::new()` by default
+**And** `step.env` is `HashMap::new()` by default
+
+**Given** a unit test at the loader module
+**When** the test loads a fixture `.minion/defaults.yaml` with `env: { FOO: bar, BAZ: qux }`
+**Then** `Defaults::env` contains exactly `{"FOO": "bar", "BAZ": "qux"}`
+**And** loading a non-existent path returns `Ok(Defaults::default())` (empty env)
+**And** loading a malformed YAML fixture returns `Err(DefaultsError::Parse { path, .. })` with path matching the input
+
+Coverage: FR9 YAML side, FR10 (defaults.yaml), NFR18 (backward compat via `#[serde(default)]`)
+
+**Tasks / Subtasks** (derived one-to-one from ACs)
+
+- [ ] AC1: Add `#[serde(default)] pub env: HashMap<String, String>` to both `Step` and `Workflow` struct definitions. Note: AC1 points at `crates/minion-core/src/workflow.rs` OR `minion-harness` — the canonical `Workflow`/`Step` lives in `crates/minion-harness/src/workflow.rs` per territory (owned by wt2). **Do NOT edit `crates/minion-core/src/workflow.rs` — wt1's territory.** If mirroring is needed, extend `src/workflow/schema.rs` (wt2-owned) as well. Keep values as plain `String` (no structured variants).
+- [ ] AC2: Create loader module. Preferred location: `src/config/defaults.rs` (wt2-owned under `src/` via the workspace-root bin, outside the forbidden `src/cli/` dir). Export `pub fn load_defaults(path: &Path) -> Result<Defaults, DefaultsError>` with `Defaults { pub env: HashMap<String, String> }` and `Defaults::default()` returning empty env.
+- [ ] AC3: Define `DefaultsError` via `thiserror::Error` (NOT anyhow) with variants `Io { path: PathBuf, source: std::io::Error }` and `Parse { path: PathBuf, source: serde_yaml::Error }`; `#[error("…")]` strings are lowercase with no trailing punctuation.
+- [ ] AC4: Backward compatibility — verify existing workflow YAML without `env:` parses as before and that `workflow.env` / `step.env` default to `HashMap::new()`.
+- [ ] AC5: Unit tests at the loader module: (a) loading a fixture `.minion/defaults.yaml` with `env: { FOO: bar, BAZ: qux }` yields `Defaults::env == {"FOO":"bar","BAZ":"qux"}`, (b) non-existent path returns `Ok(Defaults::default())`, (c) malformed YAML returns `Err(DefaultsError::Parse { path, .. })` whose `path` matches the input.
+
+**Dev Notes**
+
+_Note: epics.md did not include explicit Tasks/Subtasks/Dev Notes sections for Epic 3, so Tasks above were derived one-to-one from the ACs and Dev Notes below anchor to the relevant architecture decisions._
+
+Architecture anchors:
+- **D6** — step + workflow + defaults are three of the four cascade sources (host env is the fourth, handled at resolve time in Story 3.4). This story sets up the data, Story 3.4 does the merge.
+- **D7** — values stay as plain strings; no pre-parse shell handling in this layer.
+
+Non-functional anchors:
+- **NFR18** — backward compat. `#[serde(default)]` everywhere.
+- **NFR21** — library code uses `thiserror`. `anyhow` belongs to the binary (`src/`). `DefaultsError` lives in library territory → `thiserror`.
+
+Ownership call-out (read the File Ownership section below carefully):
+- AC1 names `crates/minion-core/src/workflow.rs` as an option, BUT that file is **read-only for wt2**. The `Workflow`/`Step` fields live instead in `crates/minion-harness/src/workflow.rs` (wt2-owned) and are mirrored in `src/workflow/schema.rs` (wt2-owned). Edit those two, not the core crate's workflow.rs.
+- AC2 offers `crates/minion-core/src/defaults.rs` as an alternative — that is also read-only for wt2. Prefer `src/config/defaults.rs` (wt2-owned). If placement in `minion-core` is truly unavoidable, raise a BLOCKER; do NOT silently edit the core crate.
+
+Key symbols to touch:
+- `Workflow`, `Step` structs in `crates/minion-harness/src/workflow.rs`
+- Mirror in `src/workflow/schema.rs` if that file already mirrors
+- New module `src/config/defaults.rs`
+
+**Dev Agent Record**
+
+_Fill in as you work._
+
+- Files created/modified:
+- Notes on choices / deviations:
+- Test evidence (cargo test output snippet):
+
+---
+
+### Story 3.4 — Cascade Resolver in `Engine::prepare_step` with `${VAR}` Host Expansion
+
+**Feature 13 in features.md.**
+**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 743–782)
+
+**Status:** _draft_ (flip to `review` after implementation).
+
+As an engine runtime,
+I want `Engine::prepare_step` to resolve the effective env for a step by overlaying step > workflow > defaults.yaml and expanding `${VAR}` against host env,
+So that one workflow YAML can declare opt-in env with clear precedence and secrets flow through without full host passthrough.
+
+**Acceptance Criteria:**
+
+**Given** `Engine::prepare_step` in `crates/minion-harness/src/engine.rs`
+**When** inspected
+**Then** it computes the effective env by overlaying in precedence order: `defaults.env` < `workflow.env` < `step.env` (step wins; defaults lose — later overlays overwrite earlier keys)
+**And** after overlay, it expands any value matching the `${VAR}` syntax against `std::env::var(VAR)` (host process env)
+**And** `${VAR}` pattern recognizes exact-form values (e.g., `"${GITHUB_TOKEN}"`) — NOT inline substitution like `"prefix-${VAR}-suffix"` (simplicity for MVP; document in YAML schema docs)
+**And** after expansion, passes the resolved `HashMap<String, String>` to `lifecycle.exec_with_env(id, cmd, &env)` (from Story 3.1)
+
+**Given** a `${VAR}` reference that does not exist in host env
+**When** `Engine::prepare_step` resolves it
+**Then** it returns `Err(EngineError::EnvVarUnresolved { key, source: VariableSource::Host })` (new error variant in `minion-core/src/error.rs`)
+**And** `#[error("…")]` message is lowercase, no trailing punctuation: `"host env variable not set: {key}"`
+**And** fails fast — no step executes with a partially-resolved env
+
+**Given** NFR8 (no credential in logs)
+**When** the event log records env-related state
+**Then** no event payload contains env values — only key names
+**And** if an event needs to record env presence (e.g., for audit), it uses a field like `env_keys: Vec<String>` (sorted)
+**And** values never appear in `tracing::` log calls either — structured tracing fields use key names only
+
+**Given** NFR4 (env var resolution performance)
+**When** `prepare_step` is benchmarked
+**Then** cascade resolution for a step with ≤20 env entries completes in <10ms (O(1) `std::env::var` lookup per `${VAR}` reference)
+
+**Given** a unit test at `crates/minion-harness/tests/env_cascade.rs`
+**When** the test constructs workflow YAML with `workflow.env = {"FOO": "workflow-foo", "SHARED": "wf"}`, step env `{"FOO": "step-foo"}`, defaults `{"SHARED": "def", "ONLY_DEF": "x"}` + sets `GITHUB_TOKEN=abc123` in host env and `step.env = {"TOKEN": "${GITHUB_TOKEN}"}`
+**Then** effective env is `{"FOO": "step-foo", "SHARED": "wf", "ONLY_DEF": "x", "TOKEN": "abc123"}` (step wins for FOO; workflow wins for SHARED; defaults contribute ONLY_DEF; TOKEN expands from host)
+**And** the test asserts no env value appears in any event payload (NFR8)
+**And** unresolved `${MISSING}` produces `EngineError::EnvVarUnresolved { key: "MISSING", .. }`
+**And** the test uses `#[serial_test::serial]` (or equivalent) to avoid races on `std::env::set_var` parallel test contamination
+
+Coverage: FR9, FR10, FR11, FR12, D6, NFR4, NFR7, NFR8
+
+**Tasks / Subtasks** (derived one-to-one from ACs)
+
+- [ ] AC1: In `crates/minion-harness/src/engine.rs`, add a NEW `Engine::prepare_step(&self, workflow: &Workflow, step: &Step, defaults: &Defaults) -> Result<HashMap<String, String>, EngineError>` method (additive — do not collide with wt1's `step()` changes). Overlay order: `defaults.env` first, then `workflow.env`, then `step.env` (step wins). Then expand values matching `^\$\{([A-Z0-9_]+)\}$` against `std::env::var(VAR)`. Non-`${VAR}` values pass through verbatim. Pass the final `HashMap<String, String>` to `lifecycle.exec_with_env(id, cmd, &env)` at the existing `step()` call site — keep the edit localized.
+- [ ] AC2: Unresolved `${VAR}` → `Err(EngineError::EnvVarUnresolved { key, source: VariableSource::Host })`. The message is lowercase, no trailing punctuation: `"host env variable not set: {key}"`. Fail fast before executing the step. **BLOCKER-CANDIDATE:** `EngineError::EnvVarUnresolved` / `VariableSource` most likely do NOT yet exist in `crates/minion-core/src/error.rs`. **That file is read-only for wt2.** Raise a BLOCKER in this story's Dev Agent Record: either (a) wt1 pre-adds the variant on request, or (b) wt2 proceeds with a temporary fallback (e.g., return an existing generic `EngineError` variant + a `tracing::error!` with the key name only) and a follow-up story lands the taxonomy after wt1 merges. Do NOT silently edit `error.rs`.
+- [ ] AC3: NFR8 — no event payload contains env values. If auditing is needed, use `env_keys: Vec<String>` (sorted). Structured tracing fields use KEY NAMES only, never values. Scrub any existing traces you might be tempted to add.
+- [ ] AC4: NFR4 — cascade resolution for ≤20 entries completes in <10ms. Use `HashMap` merge + a compiled regex (or manual prefix/suffix check) for the `${VAR}` pattern. A micro-benchmark or a timing assertion in the unit test suffices.
+- [ ] AC5: Add unit test `crates/minion-harness/tests/env_cascade.rs`. **Note:** `crates/minion-harness/tests/` is listed as wt1's ownedDirs — **BLOCKER-CANDIDATE**: this is the second wt1/wt2 ownership collision for Epic 3's test placement. Mitigations (pick one and document): (i) place the unit test **inline** under `#[cfg(test)] mod tests` inside `crates/minion-harness/src/engine.rs` (legitimately inside the coordinated-shared file you already edit), (ii) place it in the workspace-root `tests/` directory (wt2-owned) as `tests/env_cascade.rs` and guard against `std::env::set_var` races with `#[serial_test::serial]`, (iii) raise a BLOCKER asking wt1 to carve out `crates/minion-harness/tests/env_cascade.rs` for wt2. Construct the fixture described in the AC. Use `#[serial_test::serial]` (or equivalent). Assert: (a) overlay merge result, (b) host expansion of `${GITHUB_TOKEN}`, (c) no env value appears in any event payload, (d) unresolved `${MISSING}` → `EngineError::EnvVarUnresolved { key: "MISSING", .. }` (or the fallback variant chosen under AC2).
+
+**Dev Notes**
+
+_Note: epics.md did not include explicit Tasks/Subtasks/Dev Notes sections for Epic 3, so Tasks above were derived one-to-one from the ACs and Dev Notes below anchor to the relevant architecture decisions._
+
+Architecture anchors:
+- **D6 (critical for this story)** — Engine owns merge semantics because it has visibility to step+workflow+defaults+host env. Lifecycle stays dumb. Merge order: step > workflow > defaults > host `${VAR}`.
+- **D7 / NFR-argv** — the resolved `HashMap` flows into `exec_with_env` as structured pairs. It is NEVER joined into a shell command.
+- **D9** — `TerminationReason` / `EngineError` taxonomy lives in `crates/minion-core/src/error.rs` (read-only for wt2). If a new variant is required, raise a BLOCKER (see AC2).
+
+Non-functional anchors:
+- **NFR4** — resolution latency budget <10ms for ≤20 entries.
+- **NFR7** — env isolation at the engine layer — no full host passthrough, only explicit `${VAR}` references.
+- **NFR8** — no secrets in logs/events.
+
+Cross-worktree coordination (CRITICAL):
+- `crates/minion-harness/src/engine.rs` is a **coordinated shared file**. wt1 edits `HarnessConfig::shutdown_tx` (Story 2.1) and the `tokio::select!` arm in `step()` (Story 2.3). wt2 adds a new `prepare_step` method and wires `exec_with_env` at the existing call site inside `step()`. wt1 merges FIRST per `territory_map.json mergeOrder`. Plan to rebase onto wt1 when its branch lands. The `prepare_step` method itself is additive; the in-`step()` call-site edit is the collision risk — keep it minimal.
+- **`crates/minion-harness/tests/` belongs to wt1** (see territory map). Do NOT assume you can freely create integration tests there — see AC5 mitigations.
+
+Key symbols to touch:
+- `Engine` impl block (`crates/minion-harness/src/engine.rs`) — add `prepare_step` and a one-line swap at the existing `lifecycle.exec(...)` call site to call `lifecycle.exec_with_env(..., &env)` using the resolved map.
+- New integration test placement per AC5 mitigation (default plan: workspace-root `tests/env_cascade.rs`).
+
+**Dev Agent Record**
+
+_Fill in as you work._
+
+- Files created/modified:
+- Notes on choices / deviations:
+- Test evidence (cargo test output snippet):
+
+---
+
+### Story 3.5 — Negative-Control Security Tests in `tests/injection_negative.rs`
+
+**Feature 14 in features.md.**
+**Source:** `_bmad-output/sandcastle-features/epics.md` (lines 783–826)
+
+**Status:** _draft_ (flip to `review` after implementation).
+
+As a security reviewer,
+I want a dedicated negative-control test file that proves (a) user env values reach the container as argv elements and never execute as shell commands at the minion layer, and (b) the `sh -c` escape hatch IS user-owned (proves the boundary),
+So that any future regression reintroducing shell interpolation is caught at CI time.
+
+**Acceptance Criteria:**
+
+**Given** a new test file `crates/minion-harness/tests/injection_negative.rs` (OR `tests/injection_negative.rs` at workspace root — per structural requirements)
+**When** inspected
+**Then** it contains BOTH a positive-control AND a negative-control test (per Security Requirements)
+**And** both tests are marked `#[tokio::test]` with `#[ignore]` or behind an opt-in env flag if they require a live Docker daemon (integration-tier)
+
+**Given** the positive-control test (minion's guarantee)
+**When** the test runs a workflow with `env: { MSG: "$(touch /tmp/minion-pwned-$$)" }` and `command: ["printenv", "MSG"]`
+**Then** after execution, `/tmp/minion-pwned-*` does NOT exist on the host (the `$(…)` was NOT interpreted — minion passed it as argv)
+**And** the captured stdout literally contains `$(touch /tmp/minion-pwned-…)\n` — proving minion's argv-only guarantee
+**And** the test asserts on this exact stdout substring match
+
+**Given** the negative-control test (escape hatch IS user-owned)
+**When** the test runs a workflow with `env: { MSG: "pwned" }` and `command: ["sh", "-c", "echo $MSG"]`
+**Then** stdout is exactly `pwned\n` — the `sh -c` DID expand `$MSG` inside the sandbox (user's responsibility)
+**And** the test comment explicitly documents: `// Escape hatch behavior — user chose sh -c, user owns expansion safety`
+**And** this test proves minion does NOT paternalistically escape values; the boundary is clear
+
+**Given** a second positive-control for CLI template substitution (if Story 5.x's `{{KEY}}` lands — otherwise gated)
+**When** the test uses `minion run --var MSG='$(rm -rf /)'` against a workflow `command: ["echo", "{{MSG}}"]`
+**Then** stdout is literally `$(rm -rf /)\n`
+**And** host filesystem is untouched
+**And** this story documents the test file has a placeholder section for Epic 5's substitution tests to extend later
+
+**Given** the test file's assert_cmd usage
+**When** any `Command` is constructed
+**Then** `.timeout(Duration::from_secs(N))` is attached (Rule 7b — required for out-of-process tests)
+**And** the file contains no `tokio::time::sleep(…)` calls (Rule 7a — for in-process async sections)
+
+**Given** CI integration
+**When** the test file is committed
+**Then** `cargo test -p minion-harness --test injection_negative` passes locally (and in CI when Docker is available)
+**And** the README or contributor docs note: "new crates with user-value substitution MUST add an `injection_negative.rs` with both positive and negative controls"
+**And** the existing `non_exhaustive_omitted_patterns = "deny"` lint and `-D warnings` clippy gate apply (NFR19)
+
+Coverage: FR12, NFR7, NFR9, argv-not-shell rule, explicit shell escape hatch rule
+
+**Tasks / Subtasks** (derived one-to-one from ACs)
+
+- [ ] AC1: Create `tests/injection_negative.rs` at the **workspace root** (wt2 owns the workspace-root `tests/` directory per territory map). Include BOTH a positive-control and a negative-control test. Mark each `#[tokio::test]` plus `#[ignore]` (or an opt-in env-flag guard such as `if env::var("MINION_LIVE_DOCKER").is_err() { return; }`). File header comment explains the security invariant enforced. **Note:** AC1 offers `crates/minion-harness/tests/injection_negative.rs` as an alternative — that directory is **wt1's territory**. Prefer the workspace-root `tests/` path.
+- [ ] AC2: Positive-control — run a workflow step with `env: { MSG: "$(touch /tmp/minion-pwned-$$)" }` and `command: ["printenv", "MSG"]`. Assert (a) no `/tmp/minion-pwned-*` file exists on the host after execution, (b) captured stdout literally contains `$(touch /tmp/minion-pwned-…)\n`. Use a unique temp-file name (e.g., include `$$`) for parallel-test safety.
+- [ ] AC3: Negative-control — run a workflow step with `env: { MSG: "pwned" }` and `command: ["sh", "-c", "echo $MSG"]`. Assert stdout is exactly `pwned\n`. Add the literal comment `// Escape hatch behavior — user chose sh -c, user owns expansion safety`.
+- [ ] AC4: Placeholder section for Epic 5 `{{KEY}}` template substitution (gate behind `#[cfg(feature = "template_substitution")]` or a clearly labeled `#[ignore = "Epic 5"]` stub). Do NOT implement substitution here — just leave an explicit hook for Epic 5 to extend.
+- [ ] AC5: Every `Command` constructed has `.timeout(Duration::from_secs(N))` (Rule 7b). No `tokio::time::sleep(…)` anywhere in the file (Rule 7a).
+- [ ] AC6: Verify `cargo test --test injection_negative` (workspace-root variant) passes locally with Docker available and skips gracefully otherwise. Add a contributor-docs note: "new crates with user-value substitution MUST add an `injection_negative.rs` with both positive and negative controls". The existing `-D warnings` + `non_exhaustive_omitted_patterns = "deny"` lints apply.
+
+**Dev Notes**
+
+_Note: epics.md did not include explicit Tasks/Subtasks/Dev Notes sections for Epic 3, so Tasks above were derived one-to-one from the ACs and Dev Notes below anchor to the relevant architecture decisions._
+
+Architecture anchors:
+- **D7 / NFR-argv** — THE capstone story for Epic 3. This file is the living enforcement of the argv-not-shell invariant. If any future refactor reintroduces shell interpolation at the minion layer, these tests fail.
+- **D6** — the positive-control asserts that values from the cascade resolver (Story 3.4) flow into the container verbatim via `exec_with_env` (Story 3.2).
+
+Non-functional anchors:
+- **NFR7** — env isolation at the exec layer.
+- **NFR9** — explicit escape hatch rule: `sh -c` expansion is the user's responsibility; minion does NOT paternalistically escape.
+- **NFR19** — `-D warnings` + `non_exhaustive_omitted_patterns = "deny"` apply to this file too.
+- **Rule 7a / 7b** — no `tokio::time::sleep`; every `Command` gets `.timeout`.
+
+Ownership note:
+- Workspace-root `tests/` is **wt2-owned** (per `territory_map.json` — wt1 forbiddenDirs includes `tests/`). Place this file at `tests/injection_negative.rs` at the workspace root. AC1 mentions `crates/minion-harness/tests/` as a fallback — do NOT use it; that directory is wt1's territory.
+
+**Dev Agent Record**
+
+_Fill in as you work._
+
+- Files created/modified:
+- Notes on choices / deviations:
+- Test evidence (cargo test output snippet):
 
 ---
 
@@ -567,88 +458,91 @@ Coverage: FR24
 No `project-context.md` found. Follow existing project conventions:
 - Rust workspace with 4 crates under `crates/` (`minion-core`, `minion-session`, `minion-sandbox-orchestrator`, `minion-harness`) and a legacy engine binary under `src/`.
 - Error split: domain errors use `thiserror` (in crates); the binary (`src/`) uses `anyhow`.
-- Event ordering: D5 "emit-before-IO" — ALWAYS `session.append(event).await?` BEFORE any `lifecycle.destroy/exec` call. Never wrap emit in `tokio::spawn`.
-- Termination taxonomy: D9 `TerminationReason` sub-enum. New reasons (e.g. `SignalReceived`) go in `crates/minion-core/src/error.rs`.
-- Non-exhaustive policy: `#[non_exhaustive]` on public enums; `#[deny(non_exhaustive_omitted_patterns)]` at workspace lint level (nightly-only safeguard).
-- Argv-not-shell: sandbox command invocations pass args as `&[String]`, never joined into a shell string.
-- Tests: integration tests under `crates/<crate>/tests/`. Tests needing Postgres skip gracefully when `MINION_HARNESS_DATABASE_URL` is unset.
+- Event ordering: D5 "emit-before-IO" — always `session.append(event).await?` BEFORE any `lifecycle.destroy/exec` call.
+- Termination taxonomy: D9 `TerminationReason` sub-enum in `crates/minion-core/src/error.rs`. **This file is read-only for you.** Epic 5 adds `IdleTimeout` later; you don't need a new variant for Epic 3.
+- Argv-not-shell (D7, NFR-argv): sandbox command invocations pass args as `&[String]`, never joined into a shell string. Env passed via `docker exec --env KEY=VAL` argv flags, never as `KEY=VAL ` prefix in a shell command. Your Story 3.5 test suite is the enforcement mechanism.
+- MockLifecycle (D3): extend the existing `MockLifecycle` in `crates/minion-sandbox-orchestrator/src/mock.rs` to capture env in `MockCall::Exec`. DO NOT create `MockLifecycleV2`.
+- Tests: integration tests under `crates/<crate>/tests/` for crate-scoped behavior; workspace-root `tests/` is for cross-cutting negative-control tests (Story 3.5's `injection_negative.rs` goes there — you own it). **Caveat:** `crates/minion-harness/tests/` is wt1's territory, which affects Story 3.4 and Story 3.5 test placement — see each story's AC notes.
 
-Reference architecture decisions in `_bmad-output/sandcastle-features/architecture.md` — especially D4, D5, D8, D9 for Epic 2.
+Reference architecture decisions in `_bmad-output/sandcastle-features/architecture.md` — especially D3, D6, D7 for Epic 3.
 
 ---
 
 ## File Ownership (CRITICAL — from territory_map.json)
 
 ### Owned (you CAN freely create/edit)
-- `src/main.rs`
-- `src/cli/commands.rs`
-- `src/cli/display.rs`
-- `src/events/subscribers.rs`
-- `crates/minion-core/src/event.rs` (you add the `SignalReceived` variant — Story 2.3)
-- `crates/minion-session/src/session.rs`
-- `crates/minion-session/src/lib.rs`
-- `crates/minion-session/tests/` (entire directory)
-- `crates/minion-session/migrations/` (add migrations if needed)
-- `crates/minion-harness/tests/` (entire directory — new tests for broadcast plumbing, signal handling, signal cancel, reconcile, session list)
+- `crates/minion-sandbox-orchestrator/src/lib.rs` (add `exec_with_env` default-impl to trait — Story 3.1)
+- `crates/minion-sandbox-orchestrator/src/docker.rs` (override `exec_with_env` with argv-only `--env` flags — Story 3.2)
+- `crates/minion-sandbox-orchestrator/src/mock.rs` (extend MockLifecycle to capture env — Stories 3.1, 3.2)
+- `crates/minion-harness/src/workflow.rs` (add step-level + workflow-level `env:` fields — Story 3.3)
+- `src/workflow/schema.rs` (extend YAML schema mirroring — Story 3.3)
 
-You may create NEW files within any owned directory.
+### Owned directories (may create NEW files freely inside)
+- `crates/minion-sandbox-orchestrator/tests/` (add `exec_with_env_docker.rs` — Story 3.2)
+- `.minion/` (new directory at worktree root — fixtures + `.minion/defaults.yaml` sample for Story 3.3)
+- `tests/` at **workspace root** (add `tests/injection_negative.rs` — Story 3.5; optional fallback for Story 3.4's `env_cascade.rs`)
 
 ### Read-only (import yes, modify no)
-- `crates/minion-sandbox-orchestrator/src/lib.rs` — wt2's territory
-- `crates/minion-sandbox-orchestrator/src/docker.rs` — wt2's territory
-- `crates/minion-sandbox-orchestrator/src/mock.rs` — wt2's territory (Story 2.3 depends on `MockLifecycleCall::Destroy { id }` instrumentation that wt2 must provide; if missing, raise BLOCKER — do NOT edit)
-- `crates/minion-core/src/workflow.rs` — wt2 may add variants; stay out
-- `crates/minion-core/src/error.rs` — wt2 may add variants; stay out (if `TerminationReason::SignalReceived` is not already present from Epic 1 Story 1.2, raise BLOCKER)
-- `src/workflow/schema.rs` — wt2's territory for Story 3.3
+- `crates/minion-core/src/event.rs` — wt1's territory (adds `SignalReceived` this phase)
+- `crates/minion-core/src/error.rs` — wt1's territory (contains `TerminationReason`, `EngineError`; Story 3.4's `EnvVarUnresolved`/`VariableSource` request goes here — raise a BLOCKER rather than silently editing)
+- `crates/minion-core/src/workflow.rs` — wt1's territory (NOT the place to add `env:` fields; use `crates/minion-harness/src/workflow.rs` + `src/workflow/schema.rs` instead)
+- `crates/minion-session/src/session.rs`, `crates/minion-session/src/lib.rs` — wt1's territory
+- `src/main.rs`, `src/cli/commands.rs`, `src/cli/display.rs` — wt1's territory
 
-### Forbidden (don't even `cd` into)
-- `crates/minion-sandbox-orchestrator/src/` — entire directory is wt2 territory
-- `tests/` at workspace root — wt2 creates `tests/injection_negative.rs` there, among others. ALL Epic 2 integration tests live under `crates/<crate>/tests/` instead.
+### Forbidden (don't even cd into)
+- `crates/minion-session/src/`
+- `src/cli/`
 
 ### Shared (special handling)
 
 #### `Cargo.toml` — `append_only`
-Only APPEND workspace deps or feature flags; never re-order existing entries or bump versions of deps the other worktree uses.
+Only APPEND workspace deps or feature flags; never re-order or bump versions. Examples of appends you may need: `thiserror` (likely already present), `serde_yaml` (likely present), `serial_test` (Story 3.4 — add under the relevant crate's `[dev-dependencies]` in APPEND-ONLY fashion).
 
 #### `crates/minion-core/src/lib.rs` — `append_only`
-Add `pub use` lines for any new types (e.g. re-exporting the `SignalReceived` variant if a re-export path exists); do NOT rename or reorder existing ones.
+Add `pub use` lines for any new types; do NOT rename existing ones.
 
 #### `crates/minion-harness/src/engine.rs` — `coordinated` (CRITICAL)
 Both worktrees edit this file in this phase.
-- **Your edits (wt1):**
-  - Story 2.1: add `HarnessConfig::shutdown_tx: Arc<tokio::sync::broadcast::Sender<()>>` field and subscribe in `Engine::new` (`shutdown_rx` Engine field).
-  - Story 2.3: add a broadcast-receiver arm to the `tokio::select!` inside `step()` / `run_step()` that emits `Event::SignalReceived` FIRST (D5 emit-before-IO) then tolerantly destroys the sandbox.
-- **wt2's edits (Story 3.4):** wt2 adds a NEW `prepare_step` method on `Engine` and wires an `exec_with_env` call site inside `step()`.
-- **Merge plan:** wt1 commits first (per `territory_map.json.mergeOrder = ["wt1", "wt2"]`). If wt2's changes have already landed when you rebase, expect conflict resolution around the struct declaration and the `step()` select region — wt2's `prepare_step` should coexist with your broadcast arm. Do NOT touch wt2's `prepare_step` body; merge by keeping both.
+- **Your edits (wt2):** add a NEW `prepare_step` method (Story 3.4) that builds the effective env `HashMap<String,String>` from step > workflow > defaults.yaml > host `${VAR}` expansion. Wire the `exec_with_env` call site inside `step()` (Story 3.2 integration) — but keep the edit localized to the place where the current `exec()` call lives.
+- **wt1's edits (Stories 2.1, 2.3):** adds `HarnessConfig::shutdown_tx` field and a broadcast-receiver arm to the `tokio::select!` in `step()`.
+- Merge plan: wt1 merges FIRST per `territory_map.json mergeOrder`. Expect to rebase onto wt1 before your branch lands — the select-region overlap is the likely conflict hotspot. Your `prepare_step` method is additive and should survive rebase cleanly.
 
 #### `crates/minion-harness/src/lib.rs` — `append_only`
-Add new `pub use` lines (e.g. re-exporting new Engine-adjacent types); do NOT reorganize existing re-exports.
+Add new `pub use` lines only.
 
 ---
 
 ## Integration Contracts
 
-### You provide (consumers: wt2, future Epics)
-- **`Event::SignalReceived { signal: String }`** variant — added in Story 2.3 in `crates/minion-core/src/event.rs`. wt2 may pattern-match on this variant (they list `event.rs` as read-only) but MUST NOT modify the file. Any consumer subscriber must include an explicit match arm (enforced by `non_exhaustive_omitted_patterns = "deny"`).
-- **`minion::startup::reconcile(pg, lifecycle)`** entry-point — added in Story 2.4 in `src/startup.rs`. Called from `main()` BEFORE any `Engine::new()`. wt2 does not consume this directly in Epic 3, but it occupies real estate in `main.rs` — watch for collisions on rebase.
-- **`HarnessConfig::shutdown_tx: Arc<broadcast::Sender<()>>`** field — added in Story 2.1 in `crates/minion-harness/src/config.rs`. wt2's tests / call sites that construct `HarnessConfig` will need to provide a channel or use a helper you expose.
-- **`SessionStatus`-filtered query APIs** for `minion session list --status` — added in Story 2.5.
+### You provide (consumers: wt1 optional, future Epics — especially Epic 5 exec_with_options)
+- `SandboxLifecycle::exec_with_env(id, cmd, env)` default-impl method (Story 3.1) — delegates to `exec(id, cmd)` ignoring env so existing callers still compile.
+- `DockerLifecycle::exec_with_env` override (Story 3.2) — argv-only `docker exec --env KEY=VAL` one-per-pair, sorted deterministically.
+- `Workflow.env: HashMap<String,String>` and `Step.env: HashMap<String,String>` fields (Story 3.3).
+- `.minion/defaults.yaml` loader (Story 3.3) — reads a project-root YAML file at `.minion/defaults.yaml`; absence is not an error.
+- `Engine::prepare_step` cascade resolver (Story 3.4) — documented merge order step > workflow > defaults > `${VAR}` host; produces `HashMap<String,String>` passed to `exec_with_env`.
+- Workspace-root `tests/injection_negative.rs` (Story 3.5) — proves `$(rm -rf /)` and `` `cat /etc/passwd` `` appear verbatim in the container and do not execute.
 
-### You consume from wt2 (nothing during the parallel phase)
-Nothing directly. Epic 3 is independent in this parallel phase. After wt2 merges, the `SandboxLifecycle` trait will gain `exec_with_env` (Story 3.1) — you do NOT need it for Epic 2. Later, in Epic 5, the `TerminationReason` taxonomy may gain `IdleTimeout`, but that is out of scope here.
+### You consume from wt1 (nothing strict during parallel phase)
+- Both epics sit on `main@a7b27ef` and share `crates/minion-harness/src/engine.rs` only as a coordinated edit target — no hard symbol dependencies on wt1's in-flight work.
+- After wt1 merges: `Event::SignalReceived` variant and `TerminationReason` taxonomy may gain variants you don't need here.
+
+### Cross-worktree blockers (raise as Dev Agent Record notes — do NOT silently edit read-only files)
+- **Story 3.2** — if a new `SandboxError`/`TerminationReason` variant is needed, `crates/minion-core/src/error.rs` is read-only. Fall back to an existing variant; document the debt in the Dev Agent Record.
+- **Story 3.4** — `EngineError::EnvVarUnresolved { key, source: VariableSource::Host }` likely does not yet exist in `crates/minion-core/src/error.rs`. That file is read-only for wt2. Raise a BLOCKER and either (a) wait for wt1 to pre-add the variant, or (b) fall back to an existing generic `EngineError` variant + `tracing::error!` (keys only, NO values) and land the taxonomy in a follow-up story.
+- **Stories 3.4 / 3.5** — `crates/minion-harness/tests/` is wt1's owned directory. Place Story 3.4's `env_cascade` test inline in `engine.rs` tests or in workspace-root `tests/`. Place Story 3.5's `injection_negative.rs` at workspace-root `tests/`.
 
 ---
 
 ## MCP Tools — MANDATORY
 
 - **Serena** (`mcp__plugin_serena_serena__*`): for any non-trivial code read/edit. Symbolic only. Never `Read` a large Rust file when you can `get_symbols_overview` → `find_symbol` → `replace_symbol_body`.
-- **Sequential Thinking** (`sequentialthinking`): call BEFORE coding any multi-file story. Plan the file touches, emit-order sequence, and which tests you'll write first.
+- **Sequential Thinking** (`sequentialthinking`): call BEFORE coding any multi-file story. Plan the file touches and the argv-not-shell invariant. For Story 3.4 specifically, map out the cascade order in advance.
 
 ---
 
 ## Implementation Order
 
-Stories are listed in dependency order (2.1 → 2.2 → 2.3 → 2.4 → 2.5). Implement one at a time, commit after each, move to the next.
+Stories are listed in dependency order (3.1 → 3.2 → 3.3 → 3.4 → 3.5). Implement sequentially, commit after each, then proceed.
 
 ## Self-Verification Loop (after ALL stories)
 
@@ -660,26 +554,32 @@ From this worktree:
 ```bash
 node "$HOME/.claude/plugins/marketplaces/openai-codex/plugins/codex/scripts/codex-companion.mjs" adversarial-review "--base main"
 ```
-Fix critical/high findings immediately (commit). Document medium findings in VERIFICATION_REPORT.md; low findings noted only.
+Fix critical/high findings immediately (commit). Document medium findings; low noted only.
 
 ### Loop
-Max 3 iterations of Phase 1 → Phase 2 → fix. Then write `VERIFICATION_REPORT.md` with AC table, Codex findings, and READY / NOT READY verdict.
+Max 3 iterations of Phase 1 → Phase 2 → fix. Then write `VERIFICATION_REPORT.md` with AC table, Codex findings, verdict READY / NOT READY.
 
 ### Completion sentinel
-After VERIFICATION_REPORT.md is written and final tests pass, create `WORKTREE_COMPLETE.md` (summary of what shipped + commit hashes). Then signal:
+After VERIFICATION_REPORT.md and final tests pass, create `WORKTREE_COMPLETE.md` (summary + commit hashes). Then signal:
 
 ```bash
-echo "{\"type\":\"done\",\"wt\":1,\"branch\":\"minion-engine-bmad-wt1\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > .done
+echo "{\"type\":\"done\",\"wt\":2,\"branch\":\"minion-engine-bmad-wt2\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > .done
 ```
 
-This signals the main orchestrator to run `/hive:verify-wt 1`. You may then exit.
+This signals the main orchestrator to run `/hive:verify-wt 2`. You may then exit.
 
 ---
 
 ## Test Database (for Postgres-dependent tests)
 
-Some `minion-session` / `minion-harness` integration tests require Postgres. If present:
+Integration tests that need Postgres skip gracefully when `MINION_HARNESS_DATABASE_URL` is unset. If present:
 ```
 MINION_HARNESS_DATABASE_URL=postgres://postgres:iClinic@localhost:5432/minion_harness_test
 ```
-Tests skip gracefully when the env var is absent; you may run the subset that doesn't need DB.
+
+## Security invariant — argv-not-shell (reinforced)
+
+Your Story 3.2 and 3.5 are the enforcement of D7:
+- Env pairs flow as `docker exec --env KEY=VAL` argv entries — one `--env` per pair, sorted for determinism.
+- Step commands stay `&[String]` argv through the pipeline. Never `format!("{key}={val} {cmd}")` or join via a shell.
+- `tests/injection_negative.rs` (Story 3.5) concretely verifies `$(rm -rf /)` and `` `cat /etc/passwd` `` are passed verbatim.

@@ -43,6 +43,23 @@ impl SandboxLifecycle for LocalShellLifecycle {
     async fn destroy(&self, _id: &SandboxId) -> Result<(), SandboxError> {
         Ok(())
     }
+
+    async fn exec(&self, _id: &SandboxId, cmd: &[String]) -> Result<ExecOutput, SandboxError> {
+        if cmd.is_empty() {
+            return Err(SandboxError::ExecFailed("empty argv".into()));
+        }
+        let output = Command::new(&cmd[0])
+            .args(&cmd[1..])
+            .kill_on_drop(true)
+            .output()
+            .await
+            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+        Ok(ExecOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
 }
 
 struct LocalShellExec;
