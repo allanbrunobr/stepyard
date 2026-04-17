@@ -120,7 +120,7 @@ Key symbols to touch (use Serena `find_symbol` / `replace_symbol_body`):
 **Feature 11 in features.md.**
 **Source:** `_bmad-output/sandcastle-features/epics.md` (lines 662–701)
 
-**Status:** _draft_ (flip to `review` after implementation).
+**Status:** _review_
 
 As an engine maintainer,
 I want `DockerLifecycle` to override `exec_with_env` with `docker exec --env K=V` argv-only invocations (one `--env` per key-value pair),
@@ -190,11 +190,21 @@ Key symbols to touch:
 
 **Dev Agent Record**
 
-_Fill in as you work._
-
 - Files created/modified:
+  - `crates/minion-sandbox-orchestrator/src/docker.rs` — override `exec_with_env` on `DockerLifecycle`. Builds argv as `["exec"] + [("--env","K=V")×N sorted by key] + [container_name] + cmd`. No `sh -c` anywhere. Keys sorted via `sort_by(|a,b| a.0.cmp(b.0))` for deterministic ordering. Emits `tracing::debug!` with env **keys only** (NFR-secrets / NFR8). Legacy `DockerExec::exec(&str)` via `ExecFn` unchanged per AC4.
+  - `crates/minion-sandbox-orchestrator/tests/exec_with_env_docker.rs` — new integration test file, `MINION_TEST_DOCKER=1` gated. Three tests:
+    1. `exec_with_env_injects_env_var_verbatim` — positive control: `printenv FOO` with `FOO=bar` returns `bar\n` exactly.
+    2. `exec_with_env_passes_shell_metacharacters_as_literal_string` — security control: `FOO="$(rm -rf /)"` reaches `printenv` as literal `$(rm -rf /)\n`; `/etc/passwd` still present in container after.
+    3. `exec_with_env_deterministic_ordering_on_repeated_calls` — env keys `B, A, C` in the map produce sorted env output `A=one\nB=two\nC=three\n` across two calls.
+  - Every `Command` + `exec_with_env` future is wrapped in `tokio::time::timeout(Duration::from_secs(20), ...)` per Rule 7b; no `tokio::time::sleep` anywhere.
 - Notes on choices / deviations:
+  - The test creates its own alpine container inline (via `docker run -d`) rather than going through `DockerLifecycle::create`, because the test needs a known container name derived from a controlled `session_id` to call `exec_with_env` with an exact `SandboxId::from(session_id)`.
+  - Sort stability: `HashMap` iter is unordered, so the impl collects pairs then sorts by key. Determinism is needed both for test repeatability and for future log/trace comparability.
+  - No new error variants needed — all failure paths funnel through existing `SandboxError::ExecFailed`.
 - Test evidence (cargo test output snippet):
+  - `MINION_TEST_DOCKER=1 cargo test -p minion-sandbox-orchestrator --test exec_with_env_docker` → 3 passed (3.13s). All three tests exercised against a real `alpine:latest` container.
+  - `cargo test -p minion-sandbox-orchestrator` (no Docker) → 13 passed across 4 suites (gated Docker tests skip gracefully).
+  - `cargo clippy --workspace --all-targets -- -D warnings` → 0 errors, 1 warning (pre-existing unstable-lint warning).
 
 ---
 
