@@ -32,7 +32,7 @@
 ## Feature 6: Install SIGINT/SIGTERM Handlers and Graceful Shutdown Deadline
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.2] As a platform operator, I want the minion binary to intercept SIGINT/SIGTERM, fire the broadcast channel, wait up to shutdown_grace_s for in-flight engines, then exit with the canonical signal exit code, so that container cleanup starts within 1s and never hits the kernel's 30s SIGKILL deadline. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 5
-- Status: in_progress
+- Status: done
 
 ## Feature 7: Emit SignalReceived Event and Destroy Container on Broadcast
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.3] As an engine maintainer, I want each Engine to select! on the broadcast receiver, synchronously emit Event::SignalReceived, then idempotently destroy its sandbox container, so that SIGTERM/SIGINT cancellation produces an auditable session record before the process exits. Source: _bmad-output/sandcastle-features/epics.md
