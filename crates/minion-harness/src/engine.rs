@@ -9,21 +9,52 @@ use chrono::Utc;
 use minion_core::Event;
 use minion_sandbox_orchestrator::SandboxLifecycle;
 use minion_session::{Session, SessionError, SessionId, SessionStatus};
+use tokio::sync::broadcast;
 
 use crate::executor::{SandboxStepExecutor, StepExecutor};
 use crate::workflow::Workflow;
 
+/// Default grace period (in seconds) for in-flight engines to wrap up after a
+/// shutdown broadcast fires. D2: matches the architecture-decided 10s budget
+/// (NFR1 keeps cleanup well under the kernel's 30s SIGKILL deadline).
+fn default_shutdown_grace_s() -> u64 {
+    10
+}
+
+/// Build a throwaway shutdown broadcast sender. Real production wiring flows
+/// the sender down from `main()` — this helper keeps `HarnessConfig::default`
+/// and serde-deserialised configs ergonomic for tests without breaking the
+/// "only `main()` owns the real Sender" invariant.
+fn default_shutdown_tx() -> Arc<broadcast::Sender<()>> {
+    let (tx, _) = broadcast::channel::<()>(16);
+    Arc::new(tx)
+}
+
 /// Runtime configuration for the harness.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct HarnessConfig {
     /// Tenant key used for new sessions (maps to `sessions.tenant_id`).
     pub tenant_id: String,
+    /// Per-process shutdown broadcast. Constructed once in `main()` and
+    /// cloned into every `HarnessConfig`; `Engine::new` calls `.subscribe()`
+    /// on it to obtain its own `Receiver`. Never serialised — the
+    /// `#[serde(skip, default = …)]` attribute reconstructs a disconnected
+    /// sender if a `HarnessConfig` is deserialised (configs loaded from YAML
+    /// are rewired by `main()` before any engine spawns).
+    #[serde(skip, default = "default_shutdown_tx")]
+    pub shutdown_tx: Arc<broadcast::Sender<()>>,
+    /// Seconds the signal handler waits after broadcasting before forcing a
+    /// non-zero exit. D2 default 10s.
+    #[serde(default = "default_shutdown_grace_s")]
+    pub shutdown_grace_s: u64,
 }
 
 impl Default for HarnessConfig {
     fn default() -> Self {
         Self {
             tenant_id: "default".into(),
+            shutdown_tx: default_shutdown_tx(),
+            shutdown_grace_s: default_shutdown_grace_s(),
         }
     }
 }
@@ -105,6 +136,13 @@ pub struct Engine {
     cancel: CancelToken,
     #[allow(dead_code)]
     config: HarnessConfig,
+    /// Receiver handed out by `config.shutdown_tx.subscribe()` at construction
+    /// time. Story 2.3 reads from it inside `step()`'s `tokio::select!` to fold
+    /// SIGINT/SIGTERM into the same cancel path as `CancelToken`. `#[allow]`
+    /// while Story 2.3 lands — the field is load-bearing even before the
+    /// select arm exists.
+    #[allow(dead_code)]
+    shutdown_rx: broadcast::Receiver<()>,
     /// First-step timestamp. Plain `Option` is Send-safe and `&mut self` on
     /// every public mutator means we never need a lock here.
     started_at: Option<Instant>,
@@ -133,6 +171,7 @@ impl Engine {
         lifecycle: Arc<dyn SandboxLifecycle>,
         executor: Arc<dyn StepExecutor>,
     ) -> Self {
+        let shutdown_rx = config.shutdown_tx.subscribe();
         Self {
             session,
             executor,
@@ -140,6 +179,7 @@ impl Engine {
             workflow,
             cancel: CancelToken::default(),
             config,
+            shutdown_rx,
             started_at: None,
         }
     }
