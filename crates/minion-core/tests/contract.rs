@@ -7,7 +7,7 @@
 //! * EventSubscriber is dyn-compatible.
 
 use chrono::TimeZone;
-use minion_core::{EngineError, Event, EventSubscriber};
+use minion_core::{EngineError, Event, EventSubscriber, TerminationReason};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -116,12 +116,14 @@ fn engine_error_display_messages_are_stable() {
     );
     assert_eq!(EngineError::Cancelled.to_string(), "cancelled");
     assert_eq!(
-        EngineError::Step {
-            step_name: "review".into(),
-            message: "timeout".into()
+        EngineError::StepFailed {
+            step_index: 2,
+            reason: TerminationReason::StepTimeout {
+                configured_ms: 5000
+            },
         }
         .to_string(),
-        "step `review` failed: timeout"
+        "step 2 failed: step timeout after 5000ms"
     );
 }
 
