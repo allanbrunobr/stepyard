@@ -5,6 +5,7 @@
 //! `SandboxConfig` and will be folded in during Story 2.3 when the harness
 //! refactor unifies sandbox config with lifecycle.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -152,6 +153,56 @@ impl SandboxLifecycle for DockerLifecycle {
         for arg in cmd {
             docker_args.push(arg);
         }
+        let output = Command::new("docker")
+            .args(&docker_args)
+            .output()
+            .await
+            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+        Ok(ExecOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
+
+    async fn exec_with_env(
+        &self,
+        id: &SandboxId,
+        cmd: &[String],
+        env: &HashMap<String, String>,
+    ) -> Result<ExecOutput, SandboxError> {
+        // Argv-only enforcement point (D7, NFR-argv). Every env pair goes as
+        // a separate `--env K=V` argv element — never concatenated into a
+        // shell string. Keys sorted for deterministic argv ordering so tests
+        // can assert on repeatability.
+        let name = Self::container_name(*id.as_uuid());
+        let mut pairs: Vec<(&String, &String)> = env.iter().collect();
+        pairs.sort_by(|a, b| a.0.cmp(b.0));
+        let env_values: Vec<String> = pairs
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+
+        let mut docker_args: Vec<&str> = Vec::with_capacity(2 + env_values.len() * 2 + 1 + cmd.len());
+        docker_args.push("exec");
+        for value in &env_values {
+            docker_args.push("--env");
+            docker_args.push(value);
+        }
+        docker_args.push(&name);
+        for arg in cmd {
+            docker_args.push(arg);
+        }
+
+        // NFR-secrets (NFR8): log keys only, never values.
+        let keys: Vec<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
+        tracing::debug!(
+            container = %name,
+            env_keys = ?keys,
+            argc = docker_args.len(),
+            "docker exec_with_env"
+        );
+
         let output = Command::new("docker")
             .args(&docker_args)
             .output()
