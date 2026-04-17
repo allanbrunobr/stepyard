@@ -126,6 +126,7 @@ pub struct DashboardSubscriber {
     target: String,
     repo: Option<String>,
     user_name: String,
+    #[allow(dead_code)]
     sandbox_mode: String,
     state: Mutex<DashboardState>,
 }
@@ -268,6 +269,13 @@ impl EventSubscriber for DashboardSubscriber {
                 let mut state = self.state.lock().unwrap();
                 state.send_handle = Some(handle);
             }
+            Event::StepTimeoutFired { .. } => {
+                // Story 1.3: handled explicitly so the workspace
+                // `non_exhaustive_omitted_patterns` lint has a real
+                // opportunity to fire if a future variant is missed.
+                // Dashboard payload is emitted by the subsequent
+                // StepFailed event, so nothing to accumulate here.
+            }
             // Sandbox events — not needed for dashboard payload
             _ => {}
         }
@@ -277,6 +285,7 @@ impl EventSubscriber for DashboardSubscriber {
 impl DashboardSubscriber {
     /// Wait for the pending dashboard POST to complete.
     /// Call this before process exit to ensure the event is delivered.
+    #[allow(dead_code)]
     pub async fn flush(&self) {
         let handle = {
             let mut state = self.state.lock().unwrap();

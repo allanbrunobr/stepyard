@@ -69,4 +69,56 @@ pub enum Event {
         sandbox_id: String,
         timestamp: DateTime<Utc>,
     },
+    /// A step hit its configured wall-clock timeout. Emitted immediately
+    /// before the engine tears the sandbox down (Story 1.4 emit-before-IO
+    /// ordering). `timestamp` is intentionally absent — D5's
+    /// timeout-fired family carries only the structural facts the engine
+    /// knows at firing time; wall-clock attribution happens via the
+    /// surrounding `StepFailed` event (Story 1.4) or the session log.
+    StepTimeoutFired {
+        step_index: u32,
+        configured_ms: u64,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn step_timeout_fired_serializes_with_event_tag_and_snake_case_discriminator() {
+        let event = Event::StepTimeoutFired {
+            step_index: 2,
+            configured_ms: 300_000,
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "step_timeout_fired",
+                "step_index": 2,
+                "configured_ms": 300_000,
+            })
+        );
+    }
+
+    #[test]
+    fn step_timeout_fired_roundtrips_through_json() {
+        let original = Event::StepTimeoutFired {
+            step_index: 7,
+            configured_ms: 5_000,
+        };
+        let s = serde_json::to_string(&original).unwrap();
+        let back: Event = serde_json::from_str(&s).unwrap();
+        match back {
+            Event::StepTimeoutFired {
+                step_index,
+                configured_ms,
+            } => {
+                assert_eq!(step_index, 7);
+                assert_eq!(configured_ms, 5_000);
+            }
+            other => panic!("roundtrip produced unexpected variant: {other:?}"),
+        }
+    }
 }

@@ -91,6 +91,18 @@ pub fn workflow_failed(step_name: &str, message: &str) {
     );
 }
 
+/// Render a `StepTimeoutFired` event in the lowercase, structured form
+/// agreed for Story 1.3. Called by the engine when it wraps a step in
+/// `tokio::time::timeout` (Story 1.4).
+pub fn step_timeout_fired(step_index: u32, configured_ms: u64) {
+    println!(
+        "  {} step {} timed out after {}ms",
+        "✗".red(),
+        step_index,
+        configured_ms
+    );
+}
+
 /// Display a map item position, e.g. "Item 2/5: filename.rs"
 pub fn map_item(current: usize, total: usize, name: &str) {
     println!(

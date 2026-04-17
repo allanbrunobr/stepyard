@@ -213,6 +213,7 @@ struct WorkflowListEntry {
     status: String,
     started_at: String,
     #[serde(default)]
+    #[allow(dead_code)]
     duration_ms: Option<u64>,
 }
 
@@ -246,8 +247,8 @@ async fn status_cmd(cfg: &RemoteConfig, workflow: Option<String>, limit: u32) ->
         return Ok(());
     }
     println!(
-        "{:<38}  {:<22}  {:<18}  {:<10}  {}",
-        "RUN_ID", "WORKFLOW", "TARGET", "STATUS", "STARTED"
+        "{:<38}  {:<22}  {:<18}  {:<10}  STARTED",
+        "RUN_ID", "WORKFLOW", "TARGET", "STATUS"
     );
     for entry in body.data {
         let target = entry.target.unwrap_or_default();

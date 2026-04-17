@@ -21,7 +21,6 @@ pub mod proxy;
 
 pub use config::{SandboxConfig, SandboxMode};
 pub use docker::DockerSandbox;
-pub use proxy::ApiProxy;
 
 use anyhow::{bail, Result};
 

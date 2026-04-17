@@ -7,10 +7,28 @@ members = [
     "crates/minion-harness",
 ]
 
+# Story 1.3 — force consumers of `#[non_exhaustive]` enums across the
+# workspace (most importantly `Event`, `EngineError`, `TerminationReason`
+# in minion-core) to handle every variant explicitly. The lint only
+# fires when a match lists all current variants without a wildcard and
+# misses one that was added later; that's exactly the silent-breakage
+# case we want to catch.
+[workspace.lints.rust]
+non_exhaustive_omitted_patterns = "deny"
+
+[lints]
+workspace = true
+
 [package]
 name = "minion-engine"
 version = "0.7.6"
 edition = "2021"
+# Story 1.3 AC: workspace pins ≥1.74. `non_exhaustive_omitted_patterns`
+# itself remains unstable on stable Rust (rust-lang/rust#89554) and only
+# actively fires on nightly; on stable it's a no-op the compiler logs as
+# an unknown-lint warning. MSRV is 1.82 because the existing codebase
+# uses `Option::is_none_or` (stable since 1.82).
+rust-version = "1.82"
 description = "AI workflow engine that orchestrates Claude Code CLI — automate code review, refactoring, and PR creation with YAML workflows"
 license = "MIT"
 repository = "https://github.com/allanbrunobr/minion-engine"

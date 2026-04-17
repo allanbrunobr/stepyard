@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -18,10 +18,10 @@ use super::session_setup::open_session;
 /// Resolve a workflow path with fallback chain:
 /// 1. As-is (if the file exists — developer running from repo or absolute path)
 /// 2. `~/.minion/workflows/<filename>` (cargo install users)
-fn resolve_workflow_path(path: &PathBuf) -> anyhow::Result<PathBuf> {
+fn resolve_workflow_path(path: &Path) -> anyhow::Result<PathBuf> {
     // If the file exists as specified, use it
     if path.exists() {
-        return Ok(path.clone());
+        return Ok(path.to_path_buf());
     }
 
     // Try ~/.minion/workflows/<filename>
