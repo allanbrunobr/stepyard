@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use anyhow::{bail, Context};
 use clap::Args;
+use tokio::sync::broadcast;
 
 use crate::engine::{Engine, EngineOptions};
 use crate::sandbox::{self, SandboxMode};
@@ -136,6 +137,7 @@ async fn execute_v2(
     args: ExecuteArgs,
     workflow: crate::workflow::schema::WorkflowDef,
     sandbox_mode: SandboxMode,
+    shutdown_tx: Arc<broadcast::Sender<()>>,
 ) -> anyhow::Result<()> {
     use minion_harness::{Engine as HarnessEngine, HarnessConfig, StepOutcome};
     use minion_sandbox_orchestrator::{DockerLifecycle, LocalShellLifecycle, SandboxLifecycle};
@@ -153,6 +155,8 @@ async fn execute_v2(
 
     let config = HarnessConfig {
         tenant_id: std::env::var("MINION_TENANT").unwrap_or_else(|_| "default".into()),
+        shutdown_tx,
+        ..HarnessConfig::default()
     };
 
     let mut engine = HarnessEngine::new(config, session, harness_workflow.clone(), lifecycle);
@@ -242,7 +246,10 @@ async fn execute_v2(
     }
 }
 
-pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
+pub async fn execute(
+    args: ExecuteArgs,
+    shutdown_tx: Arc<broadcast::Sender<()>>,
+) -> anyhow::Result<()> {
     let workflow_path = resolve_workflow_path(&args.workflow)?;
 
     let mut workflow = parser::parse_file(&workflow_path)
@@ -318,7 +325,7 @@ pub async fn execute(args: ExecuteArgs) -> anyhow::Result<()> {
             if args.dry_run {
                 bail!("--engine v2 does not support --dry-run yet (Story 2.4)");
             }
-            return execute_v2(args, workflow, sandbox_mode).await;
+            return execute_v2(args, workflow, sandbox_mode, shutdown_tx).await;
         }
         other => bail!("unknown --engine value `{other}` (expected `v1` or `v2`)"),
     }

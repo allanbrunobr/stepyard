@@ -6,7 +6,10 @@ mod remote;
 mod session_setup;
 mod setup;
 
+use std::sync::Arc;
+
 use clap::{Args, Parser, Subcommand};
+use tokio::sync::broadcast;
 
 #[derive(Parser)]
 #[command(
@@ -104,9 +107,13 @@ enum SlackCommand {
 }
 
 impl Cli {
-    pub async fn run(self) -> anyhow::Result<()> {
+    /// Dispatch the parsed subcommand. `shutdown_tx` is the per-process
+    /// broadcast channel owned by `main()`; command paths that construct a
+    /// `HarnessConfig` clone it in so every `Engine` subscribes to the same
+    /// sender (Story 2.1 — D1/D4).
+    pub async fn run(self, shutdown_tx: Arc<broadcast::Sender<()>>) -> anyhow::Result<()> {
         match self.command {
-            Command::Execute(args) => commands::execute(args).await,
+            Command::Execute(args) => commands::execute(args, shutdown_tx).await,
             Command::Validate(args) => commands::validate(args).await,
             Command::List => commands::list().await,
             Command::Init(args) => commands::init(args).await,

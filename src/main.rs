@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use clap::Parser;
+use tokio::sync::broadcast;
 use tracing_subscriber::EnvFilter;
 
 mod claude;
@@ -27,9 +30,15 @@ async fn main() {
         .without_time()
         .init();
 
+    // D4 per-process shutdown channel. Only `main()` owns the `Sender`; every
+    // `Engine` calls `config.shutdown_tx.subscribe()` (Story 2.1). Stories 2.2
+    // and 2.3 wire signal handlers + the `select!` arm that consumes it.
+    let (tx, _) = broadcast::channel::<()>(16);
+    let shutdown_tx = Arc::new(tx);
+
     let cli = Cli::parse();
 
-    if let Err(e) = cli.run().await {
+    if let Err(e) = cli.run(shutdown_tx).await {
         eprintln!("\x1b[31merror:\x1b[0m {e:#}");
         std::process::exit(1);
     }

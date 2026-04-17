@@ -7,72 +7,72 @@
 ## Feature 1: Fix Cancel Cleanup to Destroy Correct Container
 - Description: [Epic 1: Stuck-Agent Termination & Cancel Correctness, Story 1.1] As a platform operator, I want finalise_cancel() to pass the active session's UUID to lifecycle.destroy() (not SandboxId::default()), so that cancels free resources immediately and never orphan containers. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: none
-- Status: pending
+- Status: done
 
 ## Feature 2: Introduce TerminationReason Sub-Enum and StepFailed Error
 - Description: [Epic 1: Stuck-Agent Termination & Cancel Correctness, Story 1.2] As an engine maintainer, I want a single EngineError::StepFailed { step_index, reason: TerminationReason } variant, so that every step-termination path reports its cause through one taxonomy without sibling variants proliferating. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 1
-- Status: pending
+- Status: done
 
 ## Feature 3: Add StepTimeoutFired Event and Workspace non_exhaustive_omitted_patterns Lint
 - Description: [Epic 1: Stuck-Agent Termination & Cancel Correctness, Story 1.3] As an engine maintainer, I want the first StepTimeoutFired variant and the workspace-wide non_exhaustive_omitted_patterns = deny lint, so that future event variants ship without silent breakage in subscribers and display code. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 2
-- Status: pending
+- Status: done
 
 ## Feature 4: Enforce Step Timeout via tokio::time::timeout Wrapper
 - Description: [Epic 1: Stuck-Agent Termination & Cancel Correctness, Story 1.4] As a workflow author, I want the engine to enforce the step timeout YAML field via tokio::time::timeout, so that a stuck agent never runs past its wall-clock deadline and the session log records exactly why it stopped. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 3
-- Status: pending
+- Status: done
 
 ## Feature 5: Thread Cancel Broadcast Channel Through Engine Construction
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.1] As an engine maintainer, I want a per-process broadcast::Sender<()> in main() and a broadcast::Receiver<()> on every Engine subscribed via HarnessConfig::shutdown_tx, so that later stories wire signal handlers and crash-recovery without introducing a runtime registry. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 4
-- Status: pending
+- Status: done
 
 ## Feature 6: Install SIGINT/SIGTERM Handlers and Graceful Shutdown Deadline
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.2] As a platform operator, I want the minion binary to intercept SIGINT/SIGTERM, fire the broadcast channel, wait up to shutdown_grace_s for in-flight engines, then exit with the canonical signal exit code, so that container cleanup starts within 1s and never hits the kernel's 30s SIGKILL deadline. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 5
-- Status: pending
+- Status: in_progress
 
 ## Feature 7: Emit SignalReceived Event and Destroy Container on Broadcast
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.3] As an engine maintainer, I want each Engine to select! on the broadcast receiver, synchronously emit Event::SignalReceived, then idempotently destroy its sandbox container, so that SIGTERM/SIGINT cancellation produces an auditable session record before the process exits. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 6
-- Status: pending
+- Status: in_progress
 
 ## Feature 8: Startup Crash Recovery — Reconcile Orphan Sessions and Containers
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.4] As a platform operator, I want minion to run a three-phase reconcile at startup that marks orphan running sessions as failed, destroys orphan containers, and stubs the worktree pruning slot, so that a restart after OOM/crash/hard-kill leaves the engine consistent without manual intervention. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 7
-- Status: pending
+- Status: in_progress
 
 ## Feature 9: Add minion session list --status CLI Subcommand
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.5] As a DevOps engineer, I want minion session list --status <running|completed|failed|cancelled> [--since <duration>] backed by a PostgreSQL query on sessions.status, so that I can audit session outcomes and filter by time range without loading full event logs. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 8
-- Status: pending
+- Status: in_progress
 
 ## Feature 10: Extend SandboxLifecycle Trait with exec_with_env Default-Impl Method
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.1] As an engine maintainer, I want SandboxLifecycle to gain exec_with_env(id, cmd, env) as a default-impl method delegating to exec(id, cmd) (ignoring env), so that Epic 3 can inject env vars via the new method without changing the existing exec signature. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 4
-- Status: pending
+- Status: in_progress
 
 ## Feature 11: Implement DockerLifecycle::exec_with_env with Argv-Only --env Flags
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.2] As an engine maintainer, I want DockerLifecycle to override exec_with_env with docker exec --env K=V argv-only invocations (one --env per pair, sorted), so that env vars pass as argv elements and are never shell-interpolated (argv-not-shell rule). Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 10
-- Status: pending
+- Status: in_progress
 
 ## Feature 12: Extend Workflow YAML Schema with env: Fields and .minion/defaults.yaml Loader
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.3] As a workflow author, I want step-level env: {KEY: VAL} and workflow-level env: {KEY: VAL} in YAML plus a .minion/defaults.yaml file contributing default env pairs, so that I can parameterize secrets and config per step, per workflow, or project-wide. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 11
-- Status: pending
+- Status: in_progress
 
 ## Feature 13: Cascade Resolver in Engine::prepare_step with ${VAR} Host Expansion
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.4] As an engine runtime, I want Engine::prepare_step to resolve the effective env by overlaying step > workflow > defaults.yaml and expanding ${VAR} against host env, so that one workflow YAML declares opt-in env with clear precedence and secrets flow through without full host passthrough. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 12
-- Status: pending
+- Status: in_progress
 
 ## Feature 14: Negative-Control Security Tests in tests/injection_negative.rs
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.5] As a security reviewer, I want a dedicated negative-control test file proving user env values reach the container as argv (never executed as shell) and that sh -c IS user-owned, so that any future regression reintroducing shell interpolation is caught at CI time. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 13
-- Status: pending
+- Status: in_progress
 
 ## Feature 15: Define WorkspaceManager Trait and GitWorktreeManager Skeleton
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.1] As an engine maintainer, I want a WorkspaceManager trait in minion-sandbox-orchestrator/src/workspace.rs and a GitWorktreeManager struct with stub method bodies, so that subsequent stories fill in prepare/finalize/prune against a stable trait contract without a new crate. Source: _bmad-output/sandcastle-features/epics.md
