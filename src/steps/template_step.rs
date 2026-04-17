@@ -81,6 +81,7 @@ mod tests {
             outputs: None,
             output_type: None,
             async_exec: None,
+            env: HashMap::new(),
         }
     }
 

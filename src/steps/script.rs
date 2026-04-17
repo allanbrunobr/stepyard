@@ -191,6 +191,7 @@ mod tests {
             outputs: None,
             output_type: None,
             async_exec: None,
+            env: HashMap::new(),
         }
     }
 
@@ -273,6 +274,7 @@ mod tests {
             outputs: None,
             output_type: None,
             async_exec: None,
+            env: HashMap::new(),
         };
         let config = StepConfig::default();
         let ctx = Context::new(String::new(), HashMap::new());

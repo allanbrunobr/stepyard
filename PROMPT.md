@@ -213,7 +213,7 @@ Key symbols to touch:
 **Feature 12 in features.md.**
 **Source:** `_bmad-output/sandcastle-features/epics.md` (lines 702–742)
 
-**Status:** _draft_ (flip to `review` after implementation).
+**Status:** _review_
 
 As a workflow author,
 I want to declare step-level `env: { KEY: VAL }` and workflow-level `env: { KEY: VAL }` in YAML, plus a `.minion/defaults.yaml` file that contributes default env pairs,
@@ -256,11 +256,11 @@ Coverage: FR9 YAML side, FR10 (defaults.yaml), NFR18 (backward compat via `#[ser
 
 **Tasks / Subtasks** (derived one-to-one from ACs)
 
-- [ ] AC1: Add `#[serde(default)] pub env: HashMap<String, String>` to both `Step` and `Workflow` struct definitions. Note: AC1 points at `crates/minion-core/src/workflow.rs` OR `minion-harness` — the canonical `Workflow`/`Step` lives in `crates/minion-harness/src/workflow.rs` per territory (owned by wt2). **Do NOT edit `crates/minion-core/src/workflow.rs` — wt1's territory.** If mirroring is needed, extend `src/workflow/schema.rs` (wt2-owned) as well. Keep values as plain `String` (no structured variants).
-- [ ] AC2: Create loader module. Preferred location: `src/config/defaults.rs` (wt2-owned under `src/` via the workspace-root bin, outside the forbidden `src/cli/` dir). Export `pub fn load_defaults(path: &Path) -> Result<Defaults, DefaultsError>` with `Defaults { pub env: HashMap<String, String> }` and `Defaults::default()` returning empty env.
-- [ ] AC3: Define `DefaultsError` via `thiserror::Error` (NOT anyhow) with variants `Io { path: PathBuf, source: std::io::Error }` and `Parse { path: PathBuf, source: serde_yaml::Error }`; `#[error("…")]` strings are lowercase with no trailing punctuation.
-- [ ] AC4: Backward compatibility — verify existing workflow YAML without `env:` parses as before and that `workflow.env` / `step.env` default to `HashMap::new()`.
-- [ ] AC5: Unit tests at the loader module: (a) loading a fixture `.minion/defaults.yaml` with `env: { FOO: bar, BAZ: qux }` yields `Defaults::env == {"FOO":"bar","BAZ":"qux"}`, (b) non-existent path returns `Ok(Defaults::default())`, (c) malformed YAML returns `Err(DefaultsError::Parse { path, .. })` whose `path` matches the input.
+- [x] AC1: Add `#[serde(default)] pub env: HashMap<String, String>` to both `Step` and `Workflow` struct definitions. Note: AC1 points at `crates/minion-core/src/workflow.rs` OR `minion-harness` — the canonical `Workflow`/`Step` lives in `crates/minion-harness/src/workflow.rs` per territory (owned by wt2). **Do NOT edit `crates/minion-core/src/workflow.rs` — wt1's territory.** If mirroring is needed, extend `src/workflow/schema.rs` (wt2-owned) as well. Keep values as plain `String` (no structured variants).
+- [x] AC2: Create loader module. Preferred location: `src/config/defaults.rs` (wt2-owned under `src/` via the workspace-root bin, outside the forbidden `src/cli/` dir). Export `pub fn load_defaults(path: &Path) -> Result<Defaults, DefaultsError>` with `Defaults { pub env: HashMap<String, String> }` and `Defaults::default()` returning empty env.
+- [x] AC3: Define `DefaultsError` via `thiserror::Error` (NOT anyhow) with variants `Io { path: PathBuf, source: std::io::Error }` and `Parse { path: PathBuf, source: serde_yaml::Error }`; `#[error("…")]` strings are lowercase with no trailing punctuation.
+- [x] AC4: Backward compatibility — verify existing workflow YAML without `env:` parses as before and that `workflow.env` / `step.env` default to `HashMap::new()`.
+- [x] AC5: Unit tests at the loader module: (a) loading a fixture `.minion/defaults.yaml` with `env: { FOO: bar, BAZ: qux }` yields `Defaults::env == {"FOO":"bar","BAZ":"qux"}`, (b) non-existent path returns `Ok(Defaults::default())`, (c) malformed YAML returns `Err(DefaultsError::Parse { path, .. })` whose `path` matches the input.
 
 **Dev Notes**
 
@@ -285,11 +285,21 @@ Key symbols to touch:
 
 **Dev Agent Record**
 
-_Fill in as you work._
-
 - Files created/modified:
+  - `crates/minion-harness/src/workflow.rs` — added `#[serde(default)] pub env: HashMap<String, String>` to `Step` and `Workflow`; added `Step::with_env(env)` builder; default `env: HashMap::new()` in constructors.
+  - `src/workflow/schema.rs` — mirror: added `#[serde(default)] #[allow(dead_code)] pub env: HashMap<String, String>` to `WorkflowDef` and `StepDef`.
+  - `src/config/env_defaults.rs` — NEW module: `Defaults { env: HashMap<String, String> }`, `DefaultsError { Io, Parse }` via `thiserror`, `load_defaults(path)` with missing→default/malformed→Parse/io→Io contract. 4 unit tests using `tempfile::TempDir`.
+  - `src/config/mod.rs` — `pub mod env_defaults;` + re-exports renamed (`load_env_defaults`, `EnvDefaults`, `EnvDefaultsError`) to avoid collision with existing `load_defaults()` for `WorkflowConfig`. `#[allow(unused_imports)]` until Story 3.4 consumes them.
+  - `src/steps/{agent,call,chat,cmd,gate,map,parallel,script,template_step}.rs` — added `env: HashMap::new(),` to all StepDef construction sites in tests (9 files, 14+ sites) to accommodate the new field.
 - Notes on choices / deviations:
-- Test evidence (cargo test output snippet):
+  - **Name collision avoided**: `src/config/defaults.rs` already owns `WorkflowConfig` loading (agent/chat/global layers). Created a separate `env_defaults.rs` module per advisor-reviewed separation of concerns — env layer is a different type and different cascade source (D6). Re-exports use renamed aliases (`load_env_defaults` etc.) so both modules can coexist at `crate::config::…`.
+  - **Dead-code allowances**: `Defaults`, `DefaultsError`, `load_defaults`, and the re-exports have `#[allow(dead_code)]` / `#[allow(unused_imports)]` because Story 3.4 is the intended consumer; this is a clean intermediate state, not a design compromise.
+  - **Schema mirror required**: `src/workflow/schema.rs` (wt2-owned binary) mirrors `crates/minion-harness/src/workflow.rs` (wt2-owned library). Added the field in both places to keep them in sync. `#[allow(dead_code)]` on the mirror field matches the existing pattern on the `outputs` mirror field.
+  - **StepDef callers**: 14+ test-only construction sites broke when the new field was added. Fixed with per-file `replace_all` on `async_exec: None,\n        }` pattern; covered both `}` and `};` endings by prefix-matching.
+- Test evidence:
+  - `cargo test --lib config::env_defaults` → `4 passed, 209 filtered out (1 suite, 0.00s)`
+  - `cargo test --workspace --lib` → `5 + 213 + 0 + 4 + 0 = 222 passed, 0 failed`
+  - `cargo clippy --all-targets -- -D warnings` → clean (only pre-existing `unknown_lints: non_exhaustive_omitted_patterns` warnings unrelated to this story)
 
 ---
 
