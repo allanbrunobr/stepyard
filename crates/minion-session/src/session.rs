@@ -72,6 +72,9 @@ impl std::fmt::Debug for Session {
     }
 }
 
+/// sqlx row tuple for `SELECT id, workflow_id, tenant_id, status, started_at, ended_at FROM sessions`.
+type SessionRow = (Uuid, Uuid, String, String, DateTime<Utc>, Option<DateTime<Utc>>);
+
 impl Session {
     /// Create a new session row in the database with status `running`.
     ///
@@ -113,7 +116,7 @@ impl Session {
     /// - [`SessionError::NotFound`] if no row matches.
     /// - [`SessionError::Database`] on SQL failure.
     pub async fn load(pool: &PgPool, id: SessionId) -> Result<Self, SessionError> {
-        let row: Option<(Uuid, Uuid, String, String, DateTime<Utc>, Option<DateTime<Utc>>)> =
+        let row: Option<SessionRow> =
             sqlx::query_as(
                 r#"
                 SELECT id, workflow_id, tenant_id, status, started_at, ended_at

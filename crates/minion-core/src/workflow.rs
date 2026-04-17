@@ -17,15 +17,10 @@ use serde::{Deserialize, Serialize};
 /// `V1` is the original 0.7.x schema. `V2` is the post-engine-v2 schema (Story
 /// 5.3 ships the parser change). 180-day backward compatibility is enforced
 /// by the parser (ADR-012).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkflowVersion {
+    #[default]
     V1,
     V2,
-}
-
-impl Default for WorkflowVersion {
-    fn default() -> Self {
-        Self::V1
-    }
 }
