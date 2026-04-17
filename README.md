@@ -499,6 +499,10 @@ cargo test
 
 Workflow YAML files live in `workflows/` — the fastest way to contribute is adding or improving a workflow template. Language-specific prompt templates are in `prompts/`.
 
+### Security testing conventions
+
+New crates or layers that flow user-supplied values into a subprocess command line (env values, CLI `--var`, templated args) MUST add an `injection_negative.rs` integration test containing BOTH a positive-control (asserting the value reaches the child verbatim, not interpreted by a host shell) AND a negative-control (asserting an explicit `sh -c` escape hatch is user-owned and not over-escaped by minion). See `tests/injection_negative.rs` for the canonical pattern. Live-Docker tests are gated by `MINION_TEST_DOCKER=1` so CI without a daemon skips them gracefully.
+
 ---
 
 ## Project Structure

@@ -410,7 +410,7 @@ Key symbols to touch:
 **Feature 14 in features.md.**
 **Source:** `_bmad-output/sandcastle-features/epics.md` (lines 783–826)
 
-**Status:** _draft_ (flip to `review` after implementation).
+**Status:** _review_
 
 As a security reviewer,
 I want a dedicated negative-control test file that proves (a) user env values reach the container as argv elements and never execute as shell commands at the minion layer, and (b) the `sh -c` escape hatch IS user-owned (proves the boundary),
@@ -456,12 +456,12 @@ Coverage: FR12, NFR7, NFR9, argv-not-shell rule, explicit shell escape hatch rul
 
 **Tasks / Subtasks** (derived one-to-one from ACs)
 
-- [ ] AC1: Create `tests/injection_negative.rs` at the **workspace root** (wt2 owns the workspace-root `tests/` directory per territory map). Include BOTH a positive-control and a negative-control test. Mark each `#[tokio::test]` plus `#[ignore]` (or an opt-in env-flag guard such as `if env::var("MINION_LIVE_DOCKER").is_err() { return; }`). File header comment explains the security invariant enforced. **Note:** AC1 offers `crates/minion-harness/tests/injection_negative.rs` as an alternative — that directory is **wt1's territory**. Prefer the workspace-root `tests/` path.
-- [ ] AC2: Positive-control — run a workflow step with `env: { MSG: "$(touch /tmp/minion-pwned-$$)" }` and `command: ["printenv", "MSG"]`. Assert (a) no `/tmp/minion-pwned-*` file exists on the host after execution, (b) captured stdout literally contains `$(touch /tmp/minion-pwned-…)\n`. Use a unique temp-file name (e.g., include `$$`) for parallel-test safety.
-- [ ] AC3: Negative-control — run a workflow step with `env: { MSG: "pwned" }` and `command: ["sh", "-c", "echo $MSG"]`. Assert stdout is exactly `pwned\n`. Add the literal comment `// Escape hatch behavior — user chose sh -c, user owns expansion safety`.
-- [ ] AC4: Placeholder section for Epic 5 `{{KEY}}` template substitution (gate behind `#[cfg(feature = "template_substitution")]` or a clearly labeled `#[ignore = "Epic 5"]` stub). Do NOT implement substitution here — just leave an explicit hook for Epic 5 to extend.
-- [ ] AC5: Every `Command` constructed has `.timeout(Duration::from_secs(N))` (Rule 7b). No `tokio::time::sleep(…)` anywhere in the file (Rule 7a).
-- [ ] AC6: Verify `cargo test --test injection_negative` (workspace-root variant) passes locally with Docker available and skips gracefully otherwise. Add a contributor-docs note: "new crates with user-value substitution MUST add an `injection_negative.rs` with both positive and negative controls". The existing `-D warnings` + `non_exhaustive_omitted_patterns = "deny"` lints apply.
+- [x] AC1: Create `tests/injection_negative.rs` at the **workspace root** (wt2 owns the workspace-root `tests/` directory per territory map). Include BOTH a positive-control and a negative-control test. Mark each `#[tokio::test]` plus `#[ignore]` (or an opt-in env-flag guard such as `if env::var("MINION_LIVE_DOCKER").is_err() { return; }`). File header comment explains the security invariant enforced. **Note:** AC1 offers `crates/minion-harness/tests/injection_negative.rs` as an alternative — that directory is **wt1's territory**. Prefer the workspace-root `tests/` path.
+- [x] AC2: Positive-control — run a workflow step with `env: { MSG: "$(touch /tmp/minion-pwned-$$)" }` and `command: ["printenv", "MSG"]`. Assert (a) no `/tmp/minion-pwned-*` file exists on the host after execution, (b) captured stdout literally contains `$(touch /tmp/minion-pwned-…)\n`. Use a unique temp-file name (e.g., include `$$`) for parallel-test safety.
+- [x] AC3: Negative-control — run a workflow step with `env: { MSG: "pwned" }` and `command: ["sh", "-c", "echo $MSG"]`. Assert stdout is exactly `pwned\n`. Add the literal comment `// Escape hatch behavior — user chose sh -c, user owns expansion safety`.
+- [x] AC4: Placeholder section for Epic 5 `{{KEY}}` template substitution (gate behind `#[cfg(feature = "template_substitution")]` or a clearly labeled `#[ignore = "Epic 5"]` stub). Do NOT implement substitution here — just leave an explicit hook for Epic 5 to extend.
+- [x] AC5: Every `Command` constructed has `.timeout(Duration::from_secs(N))` (Rule 7b). No `tokio::time::sleep(…)` anywhere in the file (Rule 7a).
+- [x] AC6: Verify `cargo test --test injection_negative` (workspace-root variant) passes locally with Docker available and skips gracefully otherwise. Add a contributor-docs note: "new crates with user-value substitution MUST add an `injection_negative.rs` with both positive and negative controls". The existing `-D warnings` + `non_exhaustive_omitted_patterns = "deny"` lints apply.
 
 **Dev Notes**
 
@@ -482,11 +482,47 @@ Ownership note:
 
 **Dev Agent Record**
 
-_Fill in as you work._
-
 - Files created/modified:
+  - `tests/injection_negative.rs` (NEW) — workspace-root integration test, wt2-owned territory.
+  - `README.md` — added "Security testing conventions" subsection under Contributing (AC6 contributor-docs note).
+
 - Notes on choices / deviations:
+  - **Gating: env flag only, no `#[ignore]`.** AC1 offered `#[ignore]` OR an env-flag guard. Chose env-flag-only (`MINION_TEST_DOCKER=1`) matching the convention already established in `crates/minion-sandbox-orchestrator/tests/exec_with_env_docker.rs`. With `#[ignore]` in addition, AC6's phrasing (`cargo test --test injection_negative passes locally with Docker available`) would require the reader to remember `--ignored`; env-flag-only makes the default invocation either run-or-skip based purely on environment capability.
+  - **Layer choice: DockerLifecycle direct, not Engine.** Tests drive `DockerLifecycle::exec_with_env` rather than the full Engine pipeline. The argv-not-shell invariant lives at the Lifecycle layer (Story 3.2); the upstream plumbing (Stories 3.3–3.4) has its own tests. Going through Engine would force a Session+Postgres dependency without strengthening the negative-control signal. AC2/AC3 describe inputs in "workflow" terms, which I read as logical shape (env + command) rather than Engine-entry mandate.
+  - **AC6 command deviation: `cargo test --test injection_negative` (not `-p minion-harness`).** The AC text says `cargo test -p minion-harness --test injection_negative`, but that command is wrong for the workspace-root placement (Dev Notes deliberately route us there per territory map). The correct command at the root is `cargo test --test injection_negative` (which implicitly resolves to the root crate `minion-engine`). Documented here so reviewers know the deviation is intentional and territory-driven, not an AC miss.
+  - **AC4 placeholder: `#[ignore = "Epic 5 …"]` + empty body, not `panic!`.** AC4 offered `#[cfg(feature = "template_substitution")]` OR `#[ignore = "Epic 5"]` stub. Chose the ignore-stub form with an empty body — a `panic!` body combined with `#[ignore]` would detonate if any future CI ever ran `cargo test --ignored`, which defeats the "placeholder / hook" intent. Empty body + ignored + named ignore-reason gives implementers a grep-able hook (`git grep epic_5_cli_var_substitution`) without a landmine. The doc-comment on that test explicitly lays out the Epic 5 AC so an implementer can fill it in without re-reading Story 3.5.
+  - **Marker uniqueness: per-test `Uuid::new_v4()`, not `$$`/PID.** AC2 example `/tmp/minion-pwned-$$` uses a shell PID substitution. We're not in a shell, and `std::process::id()` is stable across tests in a single `cargo test` invocation — two tests would collide. Per-test fresh UUID is collision-safe under arbitrary rerun patterns.
+
 - Test evidence (cargo test output snippet):
+
+  **Without Docker (graceful skip):**
+  ```
+  $ cargo test --test injection_negative
+  running 3 tests
+  test epic_5_cli_var_substitution_positive_control_placeholder ... ignored, Epic 5 — CLI template substitution not yet implemented
+  test negative_control_user_owned_sh_c_expansion ... ok
+  test positive_control_host_filesystem_untouched ... ok
+
+  test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out
+  ```
+
+  **With live Docker (MINION_TEST_DOCKER=1, --test-threads=1):**
+  ```
+  $ MINION_TEST_DOCKER=1 cargo test --test injection_negative -- --test-threads=1
+  running 3 tests
+  test epic_5_cli_var_substitution_positive_control_placeholder ... ignored, Epic 5 — CLI template substitution not yet implemented
+  test negative_control_user_owned_sh_c_expansion ... ok
+  test positive_control_host_filesystem_untouched ... ok
+
+  test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.56s
+  ```
+
+  **Lint gate:**
+  ```
+  $ cargo clippy --all-targets -- -D warnings
+  Finished `dev` profile [unoptimized + debuginfo] target(s)
+  ```
+  (Only pre-existing `non_exhaustive_omitted_patterns` unknown-lint warnings — unrelated to this story.)
 
 ---
 
