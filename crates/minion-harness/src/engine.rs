@@ -1,6 +1,7 @@
 //! The [`Engine`] type — step/resume/cancel loop over a [`Session`] and a
 //! [`SandboxLifecycle`].
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -11,8 +12,9 @@ use minion_sandbox_orchestrator::SandboxLifecycle;
 use minion_session::{Session, SessionError, SessionId, SessionStatus};
 use tokio::sync::broadcast;
 
+use crate::defaults::Defaults;
 use crate::executor::{SandboxStepExecutor, StepExecutor};
-use crate::workflow::Workflow;
+use crate::workflow::{Step, Workflow};
 
 /// Default grace period (in seconds) for in-flight engines to wrap up after a
 /// shutdown broadcast fires. D2: matches the architecture-decided 10s budget
@@ -164,6 +166,10 @@ pub struct Engine {
     /// First-step timestamp. Plain `Option` is Send-safe and `&mut self` on
     /// every public mutator means we never need a lock here.
     started_at: Option<Instant>,
+    /// Cascade resolver's weakest layer (Story 3.4). Attached via
+    /// [`Engine::with_defaults`]; empty by default so existing callers keep
+    /// compiling.
+    defaults: Defaults,
 }
 
 impl Engine {
@@ -199,7 +205,34 @@ impl Engine {
             config,
             shutdown_rx,
             started_at: None,
+            defaults: Defaults::default(),
         }
+    }
+
+    /// Attach `.minion/defaults.yaml` defaults to this engine (Story 3.4).
+    /// The cascade resolver overlays these below `workflow.env` and
+    /// `step.env`. Builder-style so call sites stay compact.
+    pub fn with_defaults(mut self, defaults: Defaults) -> Self {
+        self.defaults = defaults;
+        self
+    }
+
+    /// Resolve the effective env for `step` by overlaying
+    /// `defaults.env` < `workflow.env` < `step.env` and expanding any
+    /// exact-form `${VAR}` values against the host process env
+    /// (`std::env::var`). Returns [`EngineError::InvalidState`] if a
+    /// referenced host variable is not set — fails fast so no step runs
+    /// with a partially-resolved env (Story 3.4 AC2).
+    ///
+    /// The AC's documented signature takes `&Defaults` as a parameter; we
+    /// store defaults on the `Engine` instead (per the builder
+    /// [`Engine::with_defaults`]) so the call site in [`Engine::step`]
+    /// stays a single-line swap. Behavior is identical.
+    pub fn prepare_step(
+        &self,
+        step: &Step,
+    ) -> Result<HashMap<String, String>, EngineError> {
+        resolve_env(&self.defaults, &self.workflow.env, &step.env)
     }
 
     /// Handle to cancel this engine from another task. Keep a clone before
@@ -315,6 +348,31 @@ impl Engine {
             return Ok(StepOutcome::Cancelled);
         }
 
+        // Resolve env BEFORE the exec select. Failure here is a user-config
+        // problem (missing `${VAR}`), not a sandbox/timeout problem — emit
+        // StepFailed with the resolution error and stop. Fail-fast per AC2:
+        // no step runs with a partial env.
+        let resolved_env = match self.prepare_step(step) {
+            Ok(env) => env,
+            Err(e) => {
+                let error = e.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: "cmd".into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: true,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
         // Race the step against the cancel token and the optional step
         // timeout. Cancel gives SIGTERM-during-long-command a ~100 ms abort
         // window (Story 2.4 AC). Timeout is Story 1.4 AC: a step configured
@@ -334,7 +392,7 @@ impl Engine {
         // holding another reference to `self`.
         let signal_slot = self.config.shutdown_signal.clone();
         let selection = {
-            let exec_fut = executor.execute(session_uuid, &step_clone);
+            let exec_fut = executor.execute_with_env(session_uuid, &step_clone, &resolved_env);
             let cancel_fut = async {
                 while !cancel_token.is_cancelled() {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -649,4 +707,70 @@ enum StepSelection {
     /// lowercase signal name read from `HarnessConfig::shutdown_signal` at
     /// the moment the select arm resolved.
     Signal(String),
+}
+
+/// Overlay `defaults` < `workflow_env` < `step_env` (later layers win) and
+/// expand any exact-form `${VAR}` value against the host process env.
+///
+/// Exposed as a free function so it is trivially unit-testable without
+/// spinning up a full `Engine` (which needs a Postgres-backed `Session`).
+/// [`Engine::prepare_step`] is a one-line delegate over this.
+///
+/// # Pattern
+///
+/// Matches values satisfying `^\$\{[A-Z0-9_]+\}$`. Inline expansions like
+/// `"prefix-${VAR}-suffix"` are NOT recognized in MVP (Story 3.4 scope)
+/// and pass through verbatim.
+///
+/// # Errors
+///
+/// Returns [`EngineError::InvalidState`] when a `${VAR}` reference has no
+/// matching host variable. Message format is locked:
+/// `"host env variable not set: {key}"` (lowercase, no trailing
+/// punctuation) so any future taxonomy rename is a pure string
+/// substitution.
+pub fn resolve_env(
+    defaults: &Defaults,
+    workflow_env: &HashMap<String, String>,
+    step_env: &HashMap<String, String>,
+) -> Result<HashMap<String, String>, EngineError> {
+    // Clone the weakest layer, then overlay stronger layers on top so
+    // later-inserted keys win. `HashMap::extend` on duplicate keys
+    // overwrites — matches the step > workflow > defaults precedence.
+    let mut env = defaults.env.clone();
+    env.extend(workflow_env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    env.extend(step_env.iter().map(|(k, v)| (k.clone(), v.clone())));
+
+    for v in env.values_mut() {
+        // Copy the captured var name out of `v` before mutating `v`.
+        let var_name_opt = parse_host_var(v.as_str()).map(str::to_string);
+        if let Some(var_name) = var_name_opt {
+            let resolved = std::env::var(&var_name).map_err(|_| {
+                EngineError::InvalidState(format!("host env variable not set: {var_name}"))
+            })?;
+            *v = resolved;
+        }
+    }
+    Ok(env)
+}
+
+/// Match the exact-form `${VAR}` pattern and return the inner key.
+///
+/// Returns `Some("VAR")` when `value` is exactly `${...}` and the inner
+/// characters are all uppercase ASCII, digits, or underscores. Returns
+/// `None` otherwise — those values pass through unmodified by
+/// [`resolve_env`].
+fn parse_host_var(value: &str) -> Option<&str> {
+    let inner = value.strip_prefix("${").and_then(|s| s.strip_suffix('}'))?;
+    if inner.is_empty() {
+        return None;
+    }
+    let valid = inner
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    if valid {
+        Some(inner)
+    } else {
+        None
+    }
 }
