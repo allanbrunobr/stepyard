@@ -37,7 +37,7 @@
 ## Feature 7: Emit SignalReceived Event and Destroy Container on Broadcast
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.3] As an engine maintainer, I want each Engine to select! on the broadcast receiver, synchronously emit Event::SignalReceived, then idempotently destroy its sandbox container, so that SIGTERM/SIGINT cancellation produces an auditable session record before the process exits. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 6
-- Status: in_progress
+- Status: done
 
 ## Feature 8: Startup Crash Recovery — Reconcile Orphan Sessions and Containers
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.4] As a platform operator, I want minion to run a three-phase reconcile at startup that marks orphan running sessions as failed, destroys orphan containers, and stubs the worktree pruning slot, so that a restart after OOM/crash/hard-kill leaves the engine consistent without manual intervention. Source: _bmad-output/sandcastle-features/epics.md

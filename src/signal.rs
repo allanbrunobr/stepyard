@@ -12,7 +12,7 @@
 //! the Engine's responsibility via Story 2.3.
 
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use tokio::signal::unix::{signal, SignalKind};
@@ -51,8 +51,17 @@ impl FiredSignal {
 /// This future never resolves on its own — `main()` races it against
 /// `Cli::run(..)` via `tokio::select!`, so a clean workflow completion wins
 /// and this future is simply dropped.
+///
+/// `shutdown_signal` (Story 2.3 — Option B) carries the lowercase signal
+/// name (`"sigint"` / `"sigterm"`) to every engine's
+/// `HarnessConfig::shutdown_signal`. It is populated **before** the
+/// broadcast fires, so by the time a `step()` select arm resolves the name
+/// is already readable (the `OnceLock` write happens-before the broadcast
+/// send, and `broadcast::Receiver::recv` establishes the release/acquire
+/// pair that makes that write visible cross-thread).
 pub async fn install_handlers(
     shutdown_tx: Arc<broadcast::Sender<()>>,
+    shutdown_signal: Arc<OnceLock<String>>,
     grace_s: u64,
 ) -> ExitCode {
     let mut sigint = match signal(SignalKind::interrupt()) {
@@ -78,6 +87,12 @@ pub async fn install_handlers(
     };
 
     tracing::info!(signal = fired.name(), "shutdown signal received");
+
+    // Populate the shared signal-name slot BEFORE firing the broadcast so
+    // every engine select arm reads a populated `OnceLock`. `.set` returns
+    // `Err` only on a second set — harmless here since we fire once per
+    // process lifetime.
+    let _ = shutdown_signal.set(fired.name().to_string());
 
     // Best-effort broadcast — no receivers is fine (engines may have already
     // exited). `SendError` is intentionally discarded per D2/NFR10.

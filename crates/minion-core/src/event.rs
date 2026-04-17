@@ -79,6 +79,13 @@ pub enum Event {
         step_index: u32,
         configured_ms: u64,
     },
+    /// A SIGINT / SIGTERM (or startup reconcile — Story 2.4) interrupted
+    /// the engine. Emitted synchronously **before** the sandbox is destroyed
+    /// (D5 emit-before-IO). `signal` is lowercase snake_case: `"sigint"`,
+    /// `"sigterm"`, or `"crash_recovery"`.
+    SignalReceived {
+        signal: String,
+    },
 }
 
 #[cfg(test)]
@@ -117,6 +124,36 @@ mod tests {
             } => {
                 assert_eq!(step_index, 7);
                 assert_eq!(configured_ms, 5_000);
+            }
+            other => panic!("roundtrip produced unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn signal_received_serializes_with_event_tag_and_snake_case_discriminator() {
+        let event = Event::SignalReceived {
+            signal: "sigterm".into(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "signal_received",
+                "signal": "sigterm",
+            })
+        );
+    }
+
+    #[test]
+    fn signal_received_roundtrips_through_json() {
+        let original = Event::SignalReceived {
+            signal: "sigint".into(),
+        };
+        let s = serde_json::to_string(&original).unwrap();
+        let back: Event = serde_json::from_str(&s).unwrap();
+        match back {
+            Event::SignalReceived { signal } => {
+                assert_eq!(signal, "sigint");
             }
             other => panic!("roundtrip produced unexpected variant: {other:?}"),
         }

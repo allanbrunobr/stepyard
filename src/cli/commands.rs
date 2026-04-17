@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::{bail, Context};
@@ -138,8 +138,11 @@ async fn execute_v2(
     workflow: crate::workflow::schema::WorkflowDef,
     sandbox_mode: SandboxMode,
     shutdown_tx: Arc<broadcast::Sender<()>>,
+    shutdown_signal: Arc<OnceLock<String>>,
 ) -> anyhow::Result<()> {
-    use minion_harness::{Engine as HarnessEngine, HarnessConfig, StepOutcome};
+    use minion_harness::{
+        Engine as HarnessEngine, EngineError, HarnessConfig, StepOutcome, TerminationReason,
+    };
     use minion_sandbox_orchestrator::{DockerLifecycle, LocalShellLifecycle, SandboxLifecycle};
 
     let harness_workflow = harness_adapter::adapt(&workflow)
@@ -156,6 +159,7 @@ async fn execute_v2(
     let config = HarnessConfig {
         tenant_id: std::env::var("MINION_TENANT").unwrap_or_else(|_| "default".into()),
         shutdown_tx,
+        shutdown_signal,
         ..HarnessConfig::default()
     };
 
@@ -181,10 +185,32 @@ async fn execute_v2(
         let pb = upcoming.map(|s| display::step_start(&s.name, "cmd"));
         let step_start_time = Instant::now();
 
-        let outcome = engine
-            .step()
-            .await
-            .context("minion_harness::Engine::step failed")?;
+        // Story 2.3: intercept `SignalReceived` **before** the `?` converts
+        // it into an anyhow error. If we let the error propagate, `cli.run`
+        // resolves fast and wins `main()`'s `tokio::select!` → exit code 1
+        // instead of the canonical 130/143 from `install_handlers`. Render
+        // the signal line, drop the engine (releases its broadcast
+        // receiver so the grace-loop's `receiver_count()` drops to zero),
+        // then park this future forever so the signal-handlers arm wins.
+        let outcome = match engine.step().await {
+            Ok(o) => o,
+            Err(EngineError::StepFailed {
+                reason: TerminationReason::SignalReceived(signal),
+                ..
+            }) => {
+                if let Some(pb) = pb {
+                    pb.finish_and_clear();
+                }
+                display::signal_received(&signal);
+                drop(engine);
+                std::future::pending::<()>().await;
+                unreachable!("pending never resolves — install_handlers wins main's select!")
+            }
+            Err(e) => {
+                return Err(anyhow::Error::new(e)
+                    .context("minion_harness::Engine::step failed"));
+            }
+        };
 
         match outcome {
             StepOutcome::StepCompleted { step_name } => {
@@ -230,6 +256,7 @@ async fn execute_v2(
 pub async fn execute(
     args: ExecuteArgs,
     shutdown_tx: Arc<broadcast::Sender<()>>,
+    shutdown_signal: Arc<OnceLock<String>>,
 ) -> anyhow::Result<()> {
     let workflow_path = resolve_workflow_path(&args.workflow)?;
 
@@ -306,7 +333,7 @@ pub async fn execute(
             if args.dry_run {
                 bail!("--engine v2 does not support --dry-run yet (Story 2.4)");
             }
-            return execute_v2(args, workflow, sandbox_mode, shutdown_tx).await;
+            return execute_v2(args, workflow, sandbox_mode, shutdown_tx, shutdown_signal).await;
         }
         other => bail!("unknown --engine value `{other}` (expected `v1` or `v2`)"),
     }

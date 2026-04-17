@@ -2,7 +2,7 @@
 //! [`SandboxLifecycle`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -30,6 +30,15 @@ fn default_shutdown_tx() -> Arc<broadcast::Sender<()>> {
     Arc::new(tx)
 }
 
+/// Build an empty shared signal-name slot. `install_handlers` populates it
+/// with `"sigint"` / `"sigterm"` (or `"crash_recovery"` in Story 2.4) before
+/// firing the broadcast; each engine reads it via its `tokio::select!` arm
+/// (Story 2.3 Option B — avoids widening the `broadcast::channel<()>` generic
+/// and touching Story 2.1's frozen signature).
+fn default_shutdown_signal() -> Arc<OnceLock<String>> {
+    Arc::new(OnceLock::new())
+}
+
 /// Runtime configuration for the harness.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct HarnessConfig {
@@ -47,6 +56,14 @@ pub struct HarnessConfig {
     /// non-zero exit. D2 default 10s.
     #[serde(default = "default_shutdown_grace_s")]
     pub shutdown_grace_s: u64,
+    /// Shared signal-name slot (Story 2.3 — Option B). `main()` constructs a
+    /// single `Arc<OnceLock<String>>` and clones it into this field; the
+    /// signal handler (`src/signal.rs`) calls `.set("sigint" | "sigterm")`
+    /// **before** firing `shutdown_tx.send(())`, so by the time this engine
+    /// sees the broadcast, the name is already populated. The `OnceLock`
+    /// guarantees read-your-write across threads without a lock.
+    #[serde(skip, default = "default_shutdown_signal")]
+    pub shutdown_signal: Arc<OnceLock<String>>,
 }
 
 impl Default for HarnessConfig {
@@ -55,6 +72,7 @@ impl Default for HarnessConfig {
             tenant_id: "default".into(),
             shutdown_tx: default_shutdown_tx(),
             shutdown_grace_s: default_shutdown_grace_s(),
+            shutdown_signal: default_shutdown_signal(),
         }
     }
 }
@@ -310,6 +328,11 @@ impl Engine {
         let step_clone = step.clone();
         let cancel_token = self.cancel.clone();
         let step_index = progress.completed_steps as u32;
+        // Snapshot the signal-name slot before the `tokio::select!` borrows
+        // `self.shutdown_rx`. Cloning an `Arc` doesn't touch the OnceLock —
+        // we just need a reader handle the select arm can read without
+        // holding another reference to `self`.
+        let signal_slot = self.config.shutdown_signal.clone();
         let selection = {
             let exec_fut = executor.execute(session_uuid, &step_clone);
             let cancel_fut = async {
@@ -323,16 +346,52 @@ impl Engine {
                     None => std::future::pending::<()>().await,
                 }
             };
+            let shutdown_rx = &mut self.shutdown_rx;
+            let shutdown_fut = shutdown_rx.recv();
             tokio::pin!(exec_fut);
             tokio::pin!(cancel_fut);
             tokio::pin!(timeout_fut);
+            tokio::pin!(shutdown_fut);
             tokio::select! {
                 r = &mut exec_fut => StepSelection::Done(r),
                 _ = &mut cancel_fut => StepSelection::Cancelled,
                 _ = &mut timeout_fut => StepSelection::TimedOut,
+                // The result (`Ok(())` | `Err(Lagged|Closed)`) is ignored: any
+                // resolution of this broadcast arm means shutdown has been
+                // initiated by `src/signal.rs`, so we take the signal path.
+                // The name slot is populated *before* the broadcast fires
+                // (Story 2.3 install_handlers ordering), so `.get()` is
+                // guaranteed to return `Some` here.
+                _ = &mut shutdown_fut => StepSelection::Signal(
+                    signal_slot
+                        .get()
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".into()),
+                ),
             }
         };
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Signal landed first: emit SignalReceived BEFORE tearing the
+        // sandbox down (D5 emit-before-IO), then finalise the session as
+        // cancelled and return a typed StepFailed error carrying the
+        // TerminationReason::SignalReceived taxonomy (D9). `finalise_cancel`
+        // already does `lifecycle.destroy(&session_uuid)` tolerantly
+        // followed by `session.cancel()` — reuse it rather than duplicate
+        // the destroy call. Matches the emit-before-IO shape of the
+        // StepTimeoutFired block directly below.
+        if let StepSelection::Signal(ref signal) = selection {
+            let signal = signal.clone();
+            self.emit(Event::SignalReceived {
+                signal: signal.clone(),
+            })
+            .await?;
+            self.finalise_cancel().await?;
+            return Err(EngineError::StepFailed {
+                step_index,
+                reason: minion_core::TerminationReason::SignalReceived(signal),
+            });
+        }
 
         // Timeout landed first. D5 emit-before-IO ordering: persist both
         // facts to the session log BEFORE tearing the sandbox down.
@@ -389,6 +448,7 @@ impl Engine {
                 return Ok(StepOutcome::Cancelled);
             }
             StepSelection::TimedOut => unreachable!("handled above"),
+            StepSelection::Signal(_) => unreachable!("handled above"),
         };
 
         match exec_result {
@@ -570,4 +630,8 @@ enum StepSelection {
     Cancelled,
     /// The configured wall-clock timeout elapsed before the executor returned.
     TimedOut,
+    /// The per-process shutdown broadcast fired (Story 2.3). Payload is the
+    /// lowercase signal name read from `HarnessConfig::shutdown_signal` at
+    /// the moment the select arm resolved.
+    Signal(String),
 }

@@ -103,6 +103,12 @@ pub fn step_timeout_fired(step_index: u32, configured_ms: u64) {
     );
 }
 
+/// Render a `SignalReceived` event (Story 2.3). `signal` is lowercase
+/// snake_case: `"sigint"`, `"sigterm"`, or `"crash_recovery"`.
+pub fn signal_received(signal: &str) {
+    println!("  {} signal received: {}", "✗".red(), signal);
+}
+
 /// Display a map item position, e.g. "Item 2/5: filename.rs"
 pub fn map_item(current: usize, total: usize, name: &str) {
     println!(

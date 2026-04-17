@@ -6,7 +6,7 @@ mod remote;
 mod session_setup;
 mod setup;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use clap::{Args, Parser, Subcommand};
 use tokio::sync::broadcast;
@@ -110,10 +110,16 @@ impl Cli {
     /// Dispatch the parsed subcommand. `shutdown_tx` is the per-process
     /// broadcast channel owned by `main()`; command paths that construct a
     /// `HarnessConfig` clone it in so every `Engine` subscribes to the same
-    /// sender (Story 2.1 — D1/D4).
-    pub async fn run(self, shutdown_tx: Arc<broadcast::Sender<()>>) -> anyhow::Result<()> {
+    /// sender (Story 2.1 — D1/D4). `shutdown_signal` is the shared
+    /// signal-name slot populated by the signal handler before the
+    /// broadcast fires (Story 2.3 — Option B).
+    pub async fn run(
+        self,
+        shutdown_tx: Arc<broadcast::Sender<()>>,
+        shutdown_signal: Arc<OnceLock<String>>,
+    ) -> anyhow::Result<()> {
         match self.command {
-            Command::Execute(args) => commands::execute(args, shutdown_tx).await,
+            Command::Execute(args) => commands::execute(args, shutdown_tx, shutdown_signal).await,
             Command::Validate(args) => commands::validate(args).await,
             Command::List => commands::list().await,
             Command::Init(args) => commands::init(args).await,
