@@ -45,6 +45,11 @@ pub enum StepOutcome {
 }
 
 /// Domain errors from the harness.
+///
+/// `StepFailed` mirrors the shape of [`minion_core::EngineError::StepFailed`]
+/// so timeout / cancel / signal termination reasons funnel through a single
+/// taxonomy (D9). Callers can match on `reason` instead of listing sibling
+/// variants.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -56,6 +61,12 @@ pub enum EngineError {
 
     #[error("invalid state: {0}")]
     InvalidState(String),
+
+    #[error("step {step_index} failed: {reason}")]
+    StepFailed {
+        step_index: u32,
+        reason: minion_core::TerminationReason,
+    },
 }
 
 /// Clone-friendly cancel flag tied to a session. Shared with [`Engine`].
@@ -221,45 +232,84 @@ impl Engine {
             return Ok(StepOutcome::Cancelled);
         }
 
-        // Race the step against the cancel token so SIGTERM during a long
-        // command (e.g. `sleep 30`) aborts within ~100 ms instead of waiting
-        // for the command to complete (Story 2.4 AC: cancel within 5 s).
-        // Clone Arcs so the exec future does not borrow `self` — we need
-        // `&mut self` afterwards to finalise the session.
+        // Race the step against the cancel token and the optional step
+        // timeout. Cancel gives SIGTERM-during-long-command a ~100 ms abort
+        // window (Story 2.4 AC). Timeout is Story 1.4 AC: a step configured
+        // with `timeout: N` in YAML is aborted at N ms of wall clock. When
+        // `step.timeout` is `None` the timeout branch is `pending` forever
+        // so the select degenerates to the old two-arm shape. Clone Arcs so
+        // the exec future does not borrow `self` — we need `&mut self`
+        // afterwards to finalise the session.
         let executor = self.executor.clone();
         let session_uuid = *self.session.id().as_uuid();
         let step_clone = step.clone();
         let cancel_token = self.cancel.clone();
-        let exec_result = {
+        let step_index = progress.completed_steps as u32;
+        let selection = {
             let exec_fut = executor.execute(session_uuid, &step_clone);
             let cancel_fut = async {
                 while !cancel_token.is_cancelled() {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             };
+            let timeout_fut = async {
+                match step_clone.timeout {
+                    Some(ms) => tokio::time::sleep(std::time::Duration::from_millis(ms)).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
             tokio::pin!(exec_fut);
             tokio::pin!(cancel_fut);
+            tokio::pin!(timeout_fut);
             tokio::select! {
-                r = &mut exec_fut => Some(r),
-                _ = &mut cancel_fut => None,
+                r = &mut exec_fut => StepSelection::Done(r),
+                _ = &mut cancel_fut => StepSelection::Cancelled,
+                _ = &mut timeout_fut => StepSelection::TimedOut,
             }
         };
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Cancel landed mid-step: drop the exec future, emit StepFailed and
-        // finalise the session as cancelled.
-        let Some(exec_result) = exec_result else {
-            self.emit(Event::StepFailed {
-                step_name: step.name.clone(),
-                step_type: "cmd".into(),
-                error: "Cancelled".into(),
-                duration_ms,
-                timestamp: Utc::now(),
-                sandboxed: true,
+        // Timeout landed first: emit StepTimeoutFired BEFORE tearing the
+        // sandbox down (D5 emit-before-IO), then finalise the session as
+        // failed and return a typed StepFailed error carrying the
+        // TerminationReason::StepTimeout taxonomy (D9). The dashboard
+        // synthesises a failure signal from that Err at the binary boundary;
+        // emitting a separate Event::StepFailed here would double-count.
+        if let StepSelection::TimedOut = selection {
+            let configured_ms = step.timeout.expect("TimedOut requires step.timeout.is_some()");
+            self.emit(Event::StepTimeoutFired {
+                step_index,
+                configured_ms,
             })
             .await?;
-            self.finalise_cancel().await?;
-            return Ok(StepOutcome::Cancelled);
+            let sandbox_id =
+                minion_sandbox_orchestrator::SandboxId::from(*self.session.id().as_uuid());
+            let _ = self.lifecycle.destroy(&sandbox_id).await;
+            self.finalise_fail().await?;
+            return Err(EngineError::StepFailed {
+                step_index,
+                reason: minion_core::TerminationReason::StepTimeout { configured_ms },
+            });
+        }
+
+        // Cancel landed mid-step: drop the exec future, emit StepFailed and
+        // finalise the session as cancelled.
+        let exec_result = match selection {
+            StepSelection::Done(r) => r,
+            StepSelection::Cancelled => {
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: "cmd".into(),
+                    error: "Cancelled".into(),
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: true,
+                })
+                .await?;
+                self.finalise_cancel().await?;
+                return Ok(StepOutcome::Cancelled);
+            }
+            StepSelection::TimedOut => unreachable!("handled above"),
         };
 
         match exec_result {
@@ -432,4 +482,14 @@ struct Progress {
     completed_steps: usize,
     has_failure: bool,
     last_failed_step: Option<String>,
+}
+
+/// Which branch of the `step` loop's `tokio::select!` fired first.
+enum StepSelection {
+    /// The executor returned a result (either `Ok(output)` or `Err(e)`).
+    Done(Result<minion_sandbox_orchestrator::ExecOutput, minion_sandbox_orchestrator::SandboxError>),
+    /// The cancel token was flipped mid-step.
+    Cancelled,
+    /// The configured wall-clock timeout elapsed before the executor returned.
+    TimedOut,
 }

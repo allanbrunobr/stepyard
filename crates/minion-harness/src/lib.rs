@@ -33,3 +33,7 @@ mod workflow;
 pub use engine::{CancelToken, Engine, EngineError, HarnessConfig, StepOutcome};
 pub use executor::StepExecutor;
 pub use workflow::{Step, Workflow};
+
+// Re-export so callers matching on `EngineError::StepFailed.reason` don't
+// need to import minion-core directly (Story 1.4).
+pub use minion_core::TerminationReason;

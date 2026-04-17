@@ -34,6 +34,10 @@ pub struct Step {
     pub name: String,
     /// Shell command to run inside the sandbox.
     pub command: String,
+    /// Wall-clock step timeout in milliseconds. Absent = no timeout.
+    /// YAML field name is `timeout` to match the Story 1.4 workflow schema.
+    #[serde(rename = "timeout", default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
 }
 
 impl Step {
@@ -41,6 +45,13 @@ impl Step {
         Self {
             name: name.into(),
             command: command.into(),
+            timeout: None,
         }
+    }
+
+    /// Builder variant that attaches a wall-clock timeout (milliseconds).
+    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
+        self.timeout = Some(timeout_ms);
+        self
     }
 }
