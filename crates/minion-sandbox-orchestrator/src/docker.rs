@@ -141,6 +141,29 @@ impl SandboxLifecycle for DockerLifecycle {
         Ok(())
     }
 
+    async fn exec(&self, id: &SandboxId, cmd: &[String]) -> Result<ExecOutput, SandboxError> {
+        // The harness convention (Story 2.x) maps SandboxId back to
+        // session_id by construction (`SandboxId::from(session_id.as_uuid())`),
+        // so we can recover the container name here. This is the argv entry
+        // point — the legacy `sh -c` path stays on [`DockerExec`] (Sandbox
+        // handle carveout).
+        let name = Self::container_name(*id.as_uuid());
+        let mut docker_args: Vec<&str> = vec!["exec", &name];
+        for arg in cmd {
+            docker_args.push(arg);
+        }
+        let output = Command::new("docker")
+            .args(&docker_args)
+            .output()
+            .await
+            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+        Ok(ExecOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
+
     async fn reuse_or_create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
         let name = Self::container_name(session_id);
         if let Some(_cid) = Self::find_container(&name).await? {
