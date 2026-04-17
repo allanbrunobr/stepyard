@@ -408,11 +408,13 @@ impl Engine {
 
     async fn finalise_cancel(&mut self) -> Result<(), EngineError> {
         if self.session.status() == SessionStatus::Running {
-            // Tear down the sandbox — cattle, no regrets.
-            let _ = self
-                .lifecycle
-                .destroy(&minion_sandbox_orchestrator::SandboxId::default())
-                .await;
+            // Tear down the sandbox — cattle, no regrets. The SandboxId is
+            // derived from the session UUID so the backend can locate the
+            // right container (and so MockLifecycle assertions match the
+            // session identity, not a fresh random UUID).
+            let sandbox_id =
+                minion_sandbox_orchestrator::SandboxId::from(*self.session.id().as_uuid());
+            let _ = self.lifecycle.destroy(&sandbox_id).await;
             self.session.cancel().await?;
         }
         Ok(())
