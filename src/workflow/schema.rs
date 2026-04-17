@@ -27,6 +27,11 @@ pub struct WorkflowDef {
     #[serde(default)]
     pub scopes: HashMap<String, ScopeDef>,
     pub steps: Vec<StepDef>,
+    /// Workflow-level env vars (Story 3.3 mirror). Cascade resolver in
+    /// Story 3.4 merges step > workflow > defaults > host `${VAR}`.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub env: HashMap<String, String>,
 }
 
 /// Config block with 4 layers
@@ -132,6 +137,12 @@ pub struct StepDef {
     // async execution flag (named async_exec to avoid Rust keyword conflict)
     #[serde(default)]
     pub async_exec: Option<bool>,
+
+    /// Step-level env vars (Story 3.3 mirror). Highest precedence in the
+    /// cascade (Story 3.4): step > workflow > defaults > host `${VAR}`.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub env: HashMap<String, String>,
 }
 
 /// All supported step types in a workflow.
