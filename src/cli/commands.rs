@@ -161,28 +161,9 @@ async fn execute_v2(
 
     let mut engine = HarnessEngine::new(config, session, harness_workflow.clone(), lifecycle);
 
-    // Wire SIGINT (Ctrl-C) and SIGTERM to engine cancellation. Story 2.4 AC:
-    // SIGTERM flips the session to `cancelled` in under 5 s.
-    let cancel = engine.cancel_token();
-    tokio::spawn(async move {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{signal, SignalKind};
-            let mut term = match signal(SignalKind::terminate()) {
-                Ok(s) => s,
-                Err(_) => return,
-            };
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = term.recv() => {}
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = tokio::signal::ctrl_c().await;
-        }
-        cancel.cancel();
-    });
+    // Signal interception lives in `src/signal.rs` (Story 2.2). `main()` races
+    // that future against `cli.run(..)` via `tokio::select!`; no per-command
+    // spawn. Story 2.3 wires the broadcast receiver arm inside `Engine::step`.
 
     display::workflow_start(&workflow.name);
     let wf_start = Instant::now();

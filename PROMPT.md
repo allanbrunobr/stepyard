@@ -152,14 +152,14 @@ Coverage: FR5, D2, NFR1, NFR10
 
 **Tasks/Subtasks:**
 
-- [ ] Create `src/signal.rs` exporting `pub async fn install_handlers(shutdown_tx: Arc<tokio::sync::broadcast::Sender<()>>, grace_s: u64) -> ExitCode`.
-- [ ] Use `tokio::signal::unix::signal(SignalKind::interrupt())` and `SignalKind::terminate()` — NOT `tokio::signal::ctrl_c()` (Unix-only per D2).
-- [ ] On signal fire: `let _ = shutdown_tx.send(());` (ignore `SendError`). Record which signal fired (for exit code selection).
-- [ ] Enforce the grace deadline: wait up to `shutdown_grace_s` for in-flight engines; then return `ExitCode::from(130)` for SIGINT or `ExitCode::from(143)` for SIGTERM.
-- [ ] Audit the handler body — NO Postgres pool access, NO direct `docker rm -f`, side effects limited to broadcast `send` + wall-clock measurement (NFR10).
-- [ ] **NOTE:** `tests/signal_handler.rs` at the workspace root is in wt2's territory / forbidden for wt1. Instead, place the integration test under `crates/minion-harness/tests/signal_handler.rs` (owned by wt1). Keep `assert_cmd`, `.timeout(Duration::from_secs(N))` per Rule 7b, and the <5s wall-clock assertion.
-- [ ] Wire `install_handlers` into `main()` so its returned `ExitCode` drives process exit.
-- [ ] Run `cargo test -p minion-harness --test signal_handler` (gated / skipping if env prevents spawning the binary) and capture evidence.
+- [x] Create `src/signal.rs` exporting `pub async fn install_handlers(shutdown_tx: Arc<tokio::sync::broadcast::Sender<()>>, grace_s: u64) -> ExitCode`.
+- [x] Use `tokio::signal::unix::signal(SignalKind::interrupt())` and `SignalKind::terminate()` — NOT `tokio::signal::ctrl_c()` (Unix-only per D2).
+- [x] On signal fire: `let _ = shutdown_tx.send(());` (ignore `SendError`). Record which signal fired (for exit code selection).
+- [x] Enforce the grace deadline: wait up to `shutdown_grace_s` for in-flight engines; then return `ExitCode::from(130)` for SIGINT or `ExitCode::from(143)` for SIGTERM.
+- [x] Audit the handler body — NO Postgres pool access, NO direct `docker rm -f`, side effects limited to broadcast `send` + wall-clock measurement (NFR10).
+- [x] **NOTE:** `tests/signal_handler.rs` at the workspace root is in wt2's territory / forbidden for wt1. Instead, place the integration test under `crates/minion-harness/tests/signal_handler.rs` (owned by wt1). Keep `assert_cmd`, `.timeout(Duration::from_secs(N))` per Rule 7b, and the <5s wall-clock assertion.
+- [x] Wire `install_handlers` into `main()` so its returned `ExitCode` drives process exit.
+- [x] Run `cargo test -p minion-harness --test signal_handler` (gated / skipping if env prevents spawning the binary) and capture evidence.
 
 **Dev Notes:**
 
@@ -170,11 +170,44 @@ Coverage: FR5, D2, NFR1, NFR10
 
 **Dev Agent Record**
 
-_Fill this in as you work._
-
 - Files created/modified:
+  - `src/signal.rs` — new file. Exports `pub async fn install_handlers(shutdown_tx: Arc<broadcast::Sender<()>>, grace_s: u64) -> ExitCode` using `tokio::signal::unix::{signal, SignalKind}` for SIGINT/SIGTERM (D2 Unix-only — not `tokio::signal::ctrl_c()`). Races `sigint.recv()` vs `sigterm.recv()` via `tokio::select!`, records which signal fired in a `FiredSignal` enum, best-effort `let _ = shutdown_tx.send(());`, then polls `while shutdown_tx.receiver_count() > 0 && Instant::now() < deadline` with a 50 ms tick. Returns `FiredSignal::exit_code()` → `ExitCode::from(130)` (SIGINT) or `ExitCode::from(143)` (SIGTERM). NFR10 audit: zero PG pool access, zero `docker rm -f`, zero subprocess spawn — only `send` + wall-clock poll.
+  - `src/main.rs` — made `main()` return `ExitCode` (Termination trait); added `mod signal;`; reads `MINION_SHUTDOWN_GRACE_S` env var (default 10, D2) so integration tests can tighten the deadline; wraps `cli.run(..)` and `signal::install_handlers(..)` in a `tokio::select!` so the signal handler's `ExitCode` wins over a still-running workflow.
+  - `src/cli/commands.rs` — deleted the inline `tokio::spawn(async move { ... signal::unix::signal(..) ... cancel.cancel(); })` at the former lines 164–185 of `execute_v2`. Signal handling is now exclusively in `src/signal.rs`; Story 2.3 will wire the broadcast receiver inside `Engine::step`.
+  - `crates/minion-harness/Cargo.toml` — appended `assert_cmd = "2"`, `tempfile = "3"`, `wait-timeout = "0.2"` to `[dev-dependencies]` (append-only per territory rules).
+  - `crates/minion-harness/tests/signal_handler.rs` — new integration test. Spawns the workspace-built `target/debug/minion` with `--engine v2 --no-sandbox` against a one-step `sleep 30` fixture, sleeps 2 s for the binary to register handlers, SIGTERMs the child, and asserts `status.code() == Some(143)` with `elapsed < 5 s`. Skips when `MINION_HARNESS_DATABASE_URL` is unset or the binary isn't built.
 - Notes on choices / deviations:
+  - **Rule 7b semantic equivalent.** The AC says "every `std::process::Command` / `assert_cmd::Command` has `.timeout(..)` (Rule 7b)". `assert_cmd::Command::timeout` is only exposed for `.assert()`-consuming invocations — it is NOT available on a hand-spawned `std::process::Child` we need to keep alive across a `kill -TERM`. We replicate Rule 7b's bounded-wait guarantee with the `wait-timeout` crate's `ChildExt::wait_timeout(Duration::from_secs(5))`: the test never hangs past 5 s regardless of child state. This is the same approach the Tokio project uses in its own signal tests, and the AC's underlying invariant (deterministic test timeout) is preserved.
+  - **`MINION_SHUTDOWN_GRACE_S` env-var override for `grace_s`.** `HarnessConfig::shutdown_grace_s` defaults to 10 s (D2 — AC-fixed), but the AC is silent on how `main()` chooses its grace when launching `install_handlers`. Hardcoding 10 s would force the integration test to wait ~11 s or violate NFR1's "cleanup within 1 s" signal. An opt-in env var lets tests run with `grace_s=2` while production keeps the D2 default. Documented here rather than landing a CLI flag (less surface, no parsing for the test).
+  - **Skip on missing DB.** The v2 engine requires `DATABASE_URL` to connect to a PG session pool; without one, `cli.run` errors out in <50 ms and never reaches the step loop, so SIGTERM would land on an already-dead child. We reuse the existing `MINION_HARNESS_DATABASE_URL` convention (same skip pattern as `cancel_cleanup.rs` / `step_timeout.rs` / `broadcast_plumbing.rs`) and pipe it into the spawned binary as `DATABASE_URL`.
+  - **`--engine v2` explicit on CLI.** `minion execute` defaults to `--engine v1` (the legacy monolithic engine in `src/engine/`). v1 does not subscribe to the broadcast — so `receiver_count` stays 0 and `install_handlers`' grace loop would exit in <50 ms without ever exercising the deadline. The test passes `--engine v2` so the harness Engine's `shutdown_rx` from Story 2.1 becomes a live receiver, and the 2 s grace loop runs for real (observed: signal-to-exit ≈ 2.025 s).
+  - **Subprocess-orphan regression window (accepted).** Removing the inline handler in `commands.rs` means SIGTERM no longer fires `engine.cancel_token()`; Story 2.3 wires the broadcast-receiver arm inside `Engine::step` that emits `SignalReceived` + destroys the sandbox. Between 2.2 and 2.3, `sleep 30` (or any in-flight step subprocess) is orphaned when main returns. This is strictly superseded by 2.3 and the epic is implemented in 2.1→2.2→2.3 order within a single worktree commit chain.
 - Test evidence (cargo test output snippet):
+
+  ```
+  $ MINION_HARNESS_DATABASE_URL=postgres://postgres:iClinic@localhost:5432/minion_harness_test \
+      cargo test -p minion-harness --test signal_handler -- --nocapture
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 1.05s
+       Running tests/signal_handler.rs (target/debug/deps/signal_handler-…)
+  running 1 test
+  [info] signal-to-exit elapsed: 2.025666687s, exit status: ExitStatus(unix_wait_status(36608))
+  test sigterm_yields_exit_143_within_grace ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s
+  ```
+
+  `unix_wait_status(36608) == 36608 >> 8 == 143` (POSIX exit 143 = 128 + SIGTERM=15). Signal-to-exit elapsed (2.025 s) satisfies "elapsed ≤ shutdown_grace_s + 1 s" with `MINION_SHUTDOWN_GRACE_S=2`, and the test's own wall-clock assertion checks <5 s (NFR1 margin).
+
+  Full harness regression after the edits:
+
+  ```
+  $ cargo test -p minion-harness
+  test result: ok. 1 passed; 0 failed; ... (broadcast_plumbing)
+  test result: ok. 1 passed; 0 failed; ... (cancel_cleanup)
+  test result: ok. 2 passed; 0 failed; ... (exec_with_env)
+  test result: ok. 1 passed; 0 failed; ... (signal_handler)
+  test result: ok. 4 passed; 0 failed; ... (harness unit)
+  test result: ok. 2 passed; 0 failed; ... (step_timeout)
+  ```
 
 ---
 
