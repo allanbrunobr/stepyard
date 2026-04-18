@@ -18,6 +18,7 @@ mod sandbox;
 mod signal;
 #[cfg(feature = "slack")]
 mod slack;
+mod startup;
 mod steps;
 mod workflow;
 

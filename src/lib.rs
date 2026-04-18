@@ -10,5 +10,6 @@ pub mod prompts;
 pub mod sandbox;
 #[cfg(feature = "slack")]
 pub mod slack;
+pub mod startup;
 pub mod steps;
 pub mod workflow;

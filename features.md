@@ -42,7 +42,7 @@
 ## Feature 8: Startup Crash Recovery — Reconcile Orphan Sessions and Containers
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.4] As a platform operator, I want minion to run a three-phase reconcile at startup that marks orphan running sessions as failed, destroys orphan containers, and stubs the worktree pruning slot, so that a restart after OOM/crash/hard-kill leaves the engine consistent without manual intervention. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 7
-- Status: in_progress
+- Status: done
 
 ## Feature 9: Add minion session list --status CLI Subcommand
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.5] As a DevOps engineer, I want minion session list --status <running|completed|failed|cancelled> [--since <duration>] backed by a PostgreSQL query on sessions.status, so that I can audit session outcomes and filter by time range without loading full event logs. Source: _bmad-output/sandcastle-features/epics.md
