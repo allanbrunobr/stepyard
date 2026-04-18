@@ -28,6 +28,7 @@
 
 mod engine;
 mod executor;
+pub mod startup;
 mod workflow;
 
 pub use engine::{CancelToken, Engine, EngineError, HarnessConfig, StepOutcome};

@@ -14,7 +14,7 @@ use crate::workflow::validator;
 use super::display;
 use super::harness_adapter;
 use super::init_templates;
-use super::session_setup::open_session;
+use super::session_setup::{connect_pg, open_session, open_session_with_pool};
 
 /// Resolve a workflow path with fallback chain:
 /// 1. As-is (if the file exists — developer running from repo or absolute path)
@@ -148,7 +148,22 @@ async fn execute_v2(
     let harness_workflow = harness_adapter::adapt(&workflow)
         .map_err(|e| anyhow::anyhow!("cannot run workflow on --engine v2: {e}"))?;
 
-    let session = open_session(&workflow.name, args.json).await?;
+    let pool = connect_pg(args.json).await?;
+
+    // D8 startup reconcile (Story 2.4). Runs unconditionally before any
+    // engine is constructed. Uses a dedicated `DockerLifecycle::default()`
+    // because the runtime lifecycle may be `LocalShellLifecycle` when
+    // `--no-sandbox` is set, and Phase 2 still has to scan real Docker.
+    // When Docker is unreachable, the reconcile logs a warning via
+    // `tracing::warn!` and Phase 1 (PG session cleanup) still runs.
+    let reconcile_lifecycle = DockerLifecycle::default();
+    let reconcile_report: crate::startup::ReconcileReport =
+        crate::startup::reconcile(&pool, &reconcile_lifecycle)
+            .await
+            .context("startup reconcile failed")?;
+    tracing::debug!(?reconcile_report, "startup reconcile report");
+
+    let session = open_session_with_pool(&pool, &workflow.name).await?;
 
     let lifecycle: Arc<dyn SandboxLifecycle> = if sandbox_mode == SandboxMode::Disabled {
         Arc::new(LocalShellLifecycle::new())
