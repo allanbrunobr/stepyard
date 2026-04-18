@@ -3,7 +3,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::{bail, Context};
-use clap::Args;
+use chrono::{DateTime, Utc};
+use clap::{Args, ValueEnum};
 use tokio::sync::broadcast;
 
 use crate::engine::{Engine, EngineOptions};
@@ -124,6 +125,45 @@ pub struct InitArgs {
 pub struct InspectArgs {
     /// Path to the workflow YAML file
     pub workflow: PathBuf,
+}
+
+/// CLI-layer session status filter (Story 2.5, FR24).
+///
+/// Separate from `minion_session::SessionStatus` so clap's `ValueEnum` derive
+/// does not leak into the session crate; the two are kept in sync through
+/// [`SessionStatus::as_db_str`]. Variant names match the DB check constraint
+/// exactly (`running | completed | failed | cancelled`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[clap(rename_all = "snake_case")]
+pub enum SessionStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl SessionStatus {
+    /// Label matching the `sessions.status` DB check constraint.
+    fn as_db_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Args)]
+pub struct SessionListArgs {
+    /// Lifecycle status to filter by (required).
+    #[arg(long, value_enum)]
+    pub status: SessionStatus,
+
+    /// Optional time window — include only sessions started within the given
+    /// duration from now. Accepts human-friendly strings: `24h`, `7d`, `30m`.
+    #[arg(long, value_name = "DURATION")]
+    pub since: Option<humantime::Duration>,
 }
 
 /// `--engine v2` path — drives the workflow through
@@ -1201,6 +1241,69 @@ pub async fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `minion session list --status <status> [--since <duration>]` — FR24 / Story 2.5.
+///
+/// Queries PG directly for the requested status filter, printing one
+/// whitespace-separated row per session:
+/// `<id>  <status>  <started_at ISO-8601 UTC>  <ended_at ISO-8601 UTC or '-'>`.
+///
+/// `--since` binds a `"<seconds> seconds"` string cast to `INTERVAL` via the
+/// `$2::INTERVAL` cast — PG's `INTERVAL` parser accepts that literal form
+/// (`humantime` emits `24h`, which PG would reject).
+pub async fn session_list(args: SessionListArgs) -> anyhow::Result<()> {
+    // session-log-as-truth (D1): query PG, never an in-memory registry
+    let pool = connect_pg(false).await?;
+
+    let status_str = args.status.as_db_str();
+
+    let rows: Vec<(uuid::Uuid, String, DateTime<Utc>, Option<DateTime<Utc>>)> = if let Some(since) =
+        args.since
+    {
+        let interval_str = format!("{} seconds", std::time::Duration::from(since).as_secs());
+        sqlx::query_as(
+            r#"
+            SELECT id, status, started_at, ended_at
+            FROM sessions
+            WHERE status = $1 AND started_at > NOW() - $2::INTERVAL
+            ORDER BY started_at DESC
+            "#,
+        )
+        .bind(status_str)
+        .bind(interval_str)
+        .fetch_all(&pool)
+        .await
+        .context("failed to list sessions")?
+    } else {
+        sqlx::query_as(
+            r#"
+            SELECT id, status, started_at, ended_at
+            FROM sessions
+            WHERE status = $1
+            ORDER BY started_at DESC
+            "#,
+        )
+        .bind(status_str)
+        .fetch_all(&pool)
+        .await
+        .context("failed to list sessions")?
+    };
+
+    for (id, status, started_at, ended_at) in rows {
+        let ended = ended_at
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "{}  {}  {}  {}",
+            id,
+            status,
+            started_at.to_rfc3339(),
+            ended,
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1214,5 +1317,13 @@ mod tests {
     #[test]
     fn extract_failed_step_returns_none_on_no_match() {
         assert_eq!(extract_failed_step("some other error"), None);
+    }
+
+    #[test]
+    fn session_status_as_db_str_matches_db_constraint() {
+        assert_eq!(SessionStatus::Running.as_db_str(), "running");
+        assert_eq!(SessionStatus::Completed.as_db_str(), "completed");
+        assert_eq!(SessionStatus::Failed.as_db_str(), "failed");
+        assert_eq!(SessionStatus::Cancelled.as_db_str(), "cancelled");
     }
 }

@@ -47,7 +47,7 @@
 ## Feature 9: Add minion session list --status CLI Subcommand
 - Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.5] As a DevOps engineer, I want minion session list --status <running|completed|failed|cancelled> [--since <duration>] backed by a PostgreSQL query on sessions.status, so that I can audit session outcomes and filter by time range without loading full event logs. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 8
-- Status: in_progress
+- Status: done
 
 ## Feature 10: Extend SandboxLifecycle Trait with exec_with_env Default-Impl Method
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.1] As an engine maintainer, I want SandboxLifecycle to gain exec_with_env(id, cmd, env) as a default-impl method delegating to exec(id, cmd) (ignoring env), so that Epic 3 can inject env vars via the new method without changing the existing exec signature. Source: _bmad-output/sandcastle-features/epics.md

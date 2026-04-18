@@ -56,6 +56,8 @@ enum Command {
     Setup,
     /// Manage default configuration (model, provider, timeouts)
     Config(ConfigArgs),
+    /// Inspect sessions stored in PostgreSQL (Story 2.5, FR24)
+    Session(SessionArgs),
     /// Slack bot integration (requires: cargo install minion-engine --features slack)
     #[cfg(feature = "slack")]
     Slack(SlackArgs),
@@ -86,6 +88,18 @@ enum ConfigCommand {
     },
     /// Show where config files are located and which ones exist
     Path,
+}
+
+#[derive(Args)]
+pub struct SessionArgs {
+    #[command(subcommand)]
+    command: SessionCommand,
+}
+
+#[derive(Subcommand)]
+enum SessionCommand {
+    /// List sessions filtered by lifecycle status
+    List(commands::SessionListArgs),
 }
 
 #[cfg(feature = "slack")]
@@ -130,6 +144,9 @@ impl Cli {
                 ConfigCommand::Init => commands::config_init().await,
                 ConfigCommand::Set { key, value } => commands::config_set(&key, &value).await,
                 ConfigCommand::Path => commands::config_path().await,
+            },
+            Command::Session(args) => match args.command {
+                SessionCommand::List(a) => commands::session_list(a).await,
             },
             #[cfg(feature = "slack")]
             Command::Slack(args) => match args.command {

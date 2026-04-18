@@ -444,7 +444,7 @@ Coverage: Crash Recovery (architecture.md), NFR11 (crash recovery), NFR12 (idemp
 **Feature 9 in features.md.**
 **Source:** `_bmad-output/sandcastle-features/epics.md` (lines 576–626)
 
-**Status:** Draft
+**Status:** review
 
 ### Story 2.5: Add `minion session list --status` CLI Subcommand
 
@@ -492,15 +492,15 @@ Coverage: FR24
 
 **Tasks/Subtasks:**
 
-- [ ] Add `SessionStatus` (clap `ValueEnum` with variants `Running`, `Completed`, `Failed`, `Cancelled` — snake_case on CLI) in `src/cli/commands.rs`.
-- [ ] Add `SessionListArgs` deriving `clap::Args` with `status: SessionStatus` and `since: Option<humantime::Duration>` (parsed via `humantime::parse_duration`).
-- [ ] Wire `session list` as a subcommand (under `session`) in the CLI parser.
-- [ ] Implement the handler: `SELECT id, status, started_at, ended_at FROM sessions WHERE status = $1 ORDER BY started_at DESC`; when `--since <duration>`, append `AND started_at > NOW() - $2::INTERVAL` with the humantime duration bound.
-- [ ] Query PostgreSQL directly — NO `DashMap`, NO `Lazy<Mutex<HashMap>>`, NO in-memory cache. Add the inline comment verbatim: `// session-log-as-truth (D1): query PG, never an in-memory registry`.
-- [ ] Format output rows: `<id>  <status>  <started_at ISO-8601 UTC>  <ended_at ISO-8601 UTC or '-'>` using `chrono::DateTime<Utc>::to_rfc3339()`.
-- [ ] Ensure invalid `--status foobar` and invalid `--since …` both fail at clap parse time (exit code 2).
-- [ ] **NOTE:** `tests/session_list_cli.rs` at workspace root is forbidden for wt1 (wt2 owns `tests/`). Place the integration test under `crates/minion-harness/tests/session_list_cli.rs`. Use `assert_cmd`, `.timeout(Duration::from_secs(N))` (Rule 7b), and gracefully skip when PG is unavailable.
-- [ ] Run the integration test (opt-in when PG available) and paste evidence.
+- [x] Add `SessionStatus` (clap `ValueEnum` with variants `Running`, `Completed`, `Failed`, `Cancelled` — snake_case on CLI) in `src/cli/commands.rs`.
+- [x] Add `SessionListArgs` deriving `clap::Args` with `status: SessionStatus` and `since: Option<humantime::Duration>` (parsed via `humantime::parse_duration`).
+- [x] Wire `session list` as a subcommand (under `session`) in the CLI parser.
+- [x] Implement the handler: `SELECT id, status, started_at, ended_at FROM sessions WHERE status = $1 ORDER BY started_at DESC`; when `--since <duration>`, append `AND started_at > NOW() - $2::INTERVAL` with the humantime duration bound.
+- [x] Query PostgreSQL directly — NO `DashMap`, NO `Lazy<Mutex<HashMap>>`, NO in-memory cache. Add the inline comment verbatim: `// session-log-as-truth (D1): query PG, never an in-memory registry`.
+- [x] Format output rows: `<id>  <status>  <started_at ISO-8601 UTC>  <ended_at ISO-8601 UTC or '-'>` using `chrono::DateTime<Utc>::to_rfc3339()`.
+- [x] Ensure invalid `--status foobar` and invalid `--since …` both fail at clap parse time (exit code 2).
+- [x] **NOTE:** `tests/session_list_cli.rs` at workspace root is forbidden for wt1 (wt2 owns `tests/`). Place the integration test under `crates/minion-harness/tests/session_list_cli.rs`. Use `assert_cmd`, `.timeout(Duration::from_secs(N))` (Rule 7b), and gracefully skip when PG is unavailable.
+- [x] Run the integration test (opt-in when PG available) and paste evidence.
 
 **Dev Notes:**
 
@@ -511,11 +511,53 @@ Coverage: FR24
 
 **Dev Agent Record**
 
-_Fill this in as you work._
-
 - Files created/modified:
+  - `Cargo.toml` — added `humantime = "2"` to `[dependencies]` with an inline comment pointing to this Story.
+  - `src/cli/commands.rs` — added `SessionStatus` (clap `ValueEnum`, `rename_all = "snake_case"`), `SessionListArgs` (`--status`, `--since`), `session_list(..)` handler, and a unit test pinning the DB-string mapping.
+  - `src/cli/mod.rs` — added `SessionArgs` / `SessionCommand::List(..)` and the `Command::Session(..)` match arm.
+  - `crates/minion-harness/tests/session_list_cli.rs` (new) — integration test with status-filter, invalid-status, `--since 1h`, and DESC-ordering assertions. Skips gracefully when PG or binary unavailable.
 - Notes on choices / deviations:
+  - **Two `SessionStatus` types, deliberate.** `minion_session::SessionStatus` already existed (the DB enum domain). The Story AC asks for the CLI-facing enum in `src/cli/commands.rs`, and adding a `clap` derive to the session crate would bleed CLI concerns into a domain crate. The two are kept in sync by `SessionStatus::as_db_str` in the CLI layer; a unit test pins the mapping so renaming a variant on one side without the other will fail at `cargo test` time.
+  - **`humantime::Duration` binding.** Used `Option<humantime::Duration>` directly — it implements `FromStr`, so clap can parse `24h` / `7d` / `30m` without a custom `value_parser`. In the handler the duration is converted to an integer seconds count and bound as the string `"<secs> seconds"` cast via `$2::INTERVAL`. PG's `INTERVAL` parser accepts this literal form; it would reject the raw `humantime` output `"24h"`.
+  - **Integer-seconds binding, not chrono/PgInterval.** `sqlx::postgres::types::PgInterval` exists and could bind directly, but the text-cast form matches the Story AC wording (`NOW() - $2::INTERVAL`) literally and avoids a new sqlx import. It also side-steps edge cases in `PgInterval` around the `months/days/microseconds` triplet.
+  - **No `--json` flag.** Story AC specifies tabular text output only. A `--json` variant is a natural follow-up but out of scope here.
+  - **No `--tenant` filter.** Story AC does not mention multi-tenant filtering. The handler returns every session matching the status across all tenants, matching the AC literal.
+  - **Integration test: `target/debug/minion` fallback, not `assert_cmd::cargo_bin`.** `cargo_bin` resolves via `CARGO_BIN_EXE_<name>`, which is only set inside the crate that declares `[[bin]]`. `minion-harness` does not declare one, so `cargo_bin("minion")` fails to locate the binary from this test target. Fell back to a workspace-root `target/debug/minion` (then `target/release/minion`) probe — same pattern as Story 2.2's `crates/minion-harness/tests/signal_handler.rs`. Documented in the test's module doc.
+  - **Rule 7b in the integration test.** Every `tokio::process::Command` is wrapped in `tokio::time::timeout(Duration::from_secs(30), ..)` — `tokio::process::Command` has no `.timeout()` method, so the wrap is the semantic equivalent of `assert_cmd`'s `.timeout(..)`.
+  - **Skip conditions.** Test gracefully skips when either `MINION_HARNESS_DATABASE_URL` is unset or `target/debug/minion` is not built. Both log `[skip]` + `return` so CI can still report them as green but developers running locally see why.
 - Test evidence (cargo test output snippet):
+
+  ```
+  # Unit tests — run unconditionally, DB-independent. Includes
+  # SessionStatus::as_db_str mapping test added for this story.
+  $ cargo test --bin minion
+  cargo test: 210 passed (1 suite, 1.15s)
+
+  # Full harness suite — integration tests gracefully skip when
+  # MINION_HARNESS_DATABASE_URL is unset (explicit `[skip]` return inside
+  # the new session_list_cli suite, matching the pattern in
+  # startup_reconcile and signal_handler).
+  $ cargo test -p minion-harness
+  cargo test: 20 passed (11 suites, 0.07s)
+
+  # Workspace builds clean (only pre-existing nightly-lint warning).
+  $ cargo build --workspace --all-targets
+  cargo build: 0 errors, 1 warnings (2 crates)
+
+  # Smoke test — clap help + invalid-status exit code.
+  $ ./target/debug/minion session list --help
+  Usage: minion session list [OPTIONS] --status <STATUS>
+  Options:
+        --status <STATUS>   Lifecycle status to filter by (required)
+                            [possible values: running, completed, failed, cancelled]
+        --since <DURATION>  Optional time window — …
+  $ ./target/debug/minion session list --status foobar ; echo exit=$?
+  error: invalid value 'foobar' for '--status <STATUS>'
+    [possible values: running, completed, failed, cancelled]
+  exit=2
+  ```
+
+  End-to-end DB-backed path (seed 4 sessions → `--status running` → `--status completed` → invalid `--status foobar` → invalid `--since notaduration` → `--since 1h` filter → DESC ordering) compiles and its skip path runs locally (both invalid-parse assertions are present in source but only observed end-to-end under CI or when `MINION_HARNESS_DATABASE_URL` is set). Full happy-path runs in CI where PG is provisioned, or opt-in locally via `MINION_HARNESS_DATABASE_URL`.
 
 ---
 

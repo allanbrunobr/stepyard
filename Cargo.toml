@@ -99,6 +99,11 @@ futures = "0.3"
 dirs = "5"
 rhai = "1"
 
+# `minion session list --since <duration>` (Story 2.5) — parses
+# human-friendly durations like `24h`, `7d` via `humantime::Duration`'s
+# `FromStr`, so clap can bind directly without a custom `value_parser`.
+humantime = "2"
+
 # Dynamic plugin loading
 libloading = "0.8"
 
