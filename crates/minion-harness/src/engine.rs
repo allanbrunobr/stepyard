@@ -372,18 +372,33 @@ impl Engine {
         };
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Signal landed first: emit SignalReceived BEFORE tearing the
-        // sandbox down (D5 emit-before-IO), then finalise the session as
-        // cancelled and return a typed StepFailed error carrying the
-        // TerminationReason::SignalReceived taxonomy (D9). `finalise_cancel`
-        // already does `lifecycle.destroy(&session_uuid)` tolerantly
-        // followed by `session.cancel()` — reuse it rather than duplicate
-        // the destroy call. Matches the emit-before-IO shape of the
-        // StepTimeoutFired block directly below.
+        // Signal landed first. D5 emit-before-IO ordering: persist both
+        // facts to the session log BEFORE tearing the sandbox down.
+        //   1. SignalReceived — the structural fact that a shutdown
+        //      broadcast resolved this select arm, with signal name.
+        //   2. StepFailed — the terminal fact that this step is done and
+        //      the session is now terminal. progress_from_log() treats
+        //      step_failed as the terminal marker; without it a reloaded
+        //      engine after SIGINT/SIGTERM could advance past a signalled
+        //      session. Symmetric with the step-timeout and fast-path
+        //      cancel terminality fixes (architecture.md §D9 + NFR13).
+        // Only after both events are appended do we call finalise_cancel
+        // (destroys the sandbox via destroy_by_session and flips the
+        // session status to Cancelled). Return a typed StepFailed error
+        // carrying the TerminationReason::SignalReceived taxonomy (D9).
         if let StepSelection::Signal(ref signal) = selection {
             let signal = signal.clone();
             self.emit(Event::SignalReceived {
                 signal: signal.clone(),
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: "cmd".into(),
+                error: format!("Signal: {signal}"),
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: true,
             })
             .await?;
             self.finalise_cancel().await?;

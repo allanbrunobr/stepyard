@@ -150,8 +150,13 @@ async fn shutdown_broadcast_emits_signal_received_destroys_sandbox_and_returns_s
         .collect();
     assert_eq!(
         tags,
-        vec!["workflow_started", "step_started", "signal_received"],
-        "expected workflow_started → step_started → signal_received, got {tags:?}"
+        vec![
+            "workflow_started",
+            "step_started",
+            "signal_received",
+            "step_failed",
+        ],
+        "expected workflow_started → step_started → signal_received → step_failed, got {tags:?}"
     );
 
     let received = events
@@ -159,6 +164,23 @@ async fn shutdown_broadcast_emits_signal_received_destroys_sandbox_and_returns_s
         .find(|e| e.payload.get("event").and_then(|v| v.as_str()) == Some("signal_received"))
         .expect("signal_received present");
     assert_eq!(received.payload["signal"], "sigterm");
+
+    // The trailing step_failed entry is what progress_from_log() treats
+    // as terminal on reload — without it a restarted engine could advance
+    // past a signalled session (architecture.md §D9 + NFR13).
+    let failed = events
+        .iter()
+        .find(|e| e.payload.get("event").and_then(|v| v.as_str()) == Some("step_failed"))
+        .expect("step_failed present");
+    assert_eq!(failed.payload["step_name"], "blocked-step");
+    assert!(
+        failed.payload["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Signal"),
+        "step_failed.error should mention the signal, got {:?}",
+        failed.payload["error"]
+    );
 
     // ── AC3: sandbox teardown via destroy(session_uuid) ────────────────
     let calls = mock.calls().await;
