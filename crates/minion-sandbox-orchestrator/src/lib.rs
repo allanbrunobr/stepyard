@@ -48,7 +48,28 @@ pub trait SandboxLifecycle: Send + Sync {
 
     /// Tear down the sandbox with `id`. Safe to call on an already-destroyed
     /// sandbox — implementations should return `Ok(())` in that case.
+    ///
+    /// The harness prefers [`SandboxLifecycle::destroy_by_session`] for
+    /// cancel/timeout/signal cleanup because backends like Docker cannot map
+    /// an opaque [`SandboxId`] back to the container they created — only the
+    /// session UUID carries that identity across the trait boundary.
     async fn destroy(&self, id: &SandboxId) -> Result<(), SandboxError>;
+
+    /// Tear down every sandbox bound to this `session_id`. This is the
+    /// teardown path the harness uses on cancel, timeout, and signal — the
+    /// session UUID is what the backend can use to locate real resources
+    /// (e.g. Docker looks up `minion-session-<uuid>`).
+    ///
+    /// The default implementation converts the UUID into a [`SandboxId`]
+    /// and delegates to [`SandboxLifecycle::destroy`]. Backends whose
+    /// [`SandboxLifecycle::destroy`] cannot find the real resource from a
+    /// [`SandboxId`] alone MUST override this (see `DockerLifecycle`).
+    ///
+    /// Safe to call when no sandbox exists for the session — destruction is
+    /// idempotent.
+    async fn destroy_by_session(&self, session_id: Uuid) -> Result<(), SandboxError> {
+        self.destroy(&SandboxId::from(session_id)).await
+    }
 
     /// Return the live sandbox for this session if one already exists,
     /// otherwise create a new one. The default impl just calls `create` —

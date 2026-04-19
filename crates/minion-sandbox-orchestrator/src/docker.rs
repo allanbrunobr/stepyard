@@ -114,11 +114,30 @@ impl SandboxLifecycle for DockerLifecycle {
     }
 
     async fn destroy(&self, id: &SandboxId) -> Result<(), SandboxError> {
-        // We only have the SandboxId here; the container name includes the
-        // *session* id. The harness (Story 2.3) will track the mapping. For
-        // now, destroy-by-SandboxId is only reachable via MockLifecycle; a
-        // real Docker teardown happens via `destroy_by_session`.
+        // The container name includes the *session* id; a bare SandboxId
+        // cannot address the running container. Callers should route teardown
+        // through `SandboxLifecycle::destroy_by_session`. Left as a warning
+        // (not an error) to preserve the trait's `destroy`-is-idempotent
+        // contract for mock-backed callers.
         tracing::warn!(sandbox_id = %id, "DockerLifecycle::destroy called without session id — use destroy_by_session");
+        Ok(())
+    }
+
+    async fn destroy_by_session(&self, session_id: Uuid) -> Result<(), SandboxError> {
+        let name = Self::container_name(session_id);
+        let output = Command::new("docker")
+            .args(["rm", "-f", &name])
+            .output()
+            .await
+            .map_err(|e| SandboxError::BackendUnavailable(e.to_string()))?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            // `docker rm -f` on a non-existent container is not an error for
+            // our purposes — destroy is idempotent.
+            if !err.contains("No such container") {
+                return Err(SandboxError::DestroyFailed(err));
+            }
+        }
         Ok(())
     }
 
@@ -136,29 +155,6 @@ impl SandboxLifecycle for DockerLifecycle {
             });
         }
         self.create(session_id).await
-    }
-}
-
-impl DockerLifecycle {
-    /// Teardown helper that actually works in practice — the harness knows
-    /// the session id and can call this directly. `destroy` on the trait
-    /// alone is kept for MockLifecycle parity.
-    pub async fn destroy_by_session(&self, session_id: Uuid) -> Result<(), SandboxError> {
-        let name = Self::container_name(session_id);
-        let output = Command::new("docker")
-            .args(["rm", "-f", &name])
-            .output()
-            .await
-            .map_err(|e| SandboxError::BackendUnavailable(e.to_string()))?;
-        if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            // `docker rm -f` on a non-existent container is not an error
-            // for our purposes — destroy is idempotent.
-            if !err.contains("No such container") {
-                return Err(SandboxError::DestroyFailed(err));
-            }
-        }
-        Ok(())
     }
 }
 
