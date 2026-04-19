@@ -30,7 +30,7 @@
 use std::collections::HashSet;
 
 use minion_core::Event;
-use minion_sandbox_orchestrator::DockerLifecycle;
+use minion_sandbox_orchestrator::{DockerLifecycle, SandboxLifecycle};
 use minion_session::{Session, SessionError, SessionId};
 use sqlx::PgPool;
 use tokio::process::Command;
