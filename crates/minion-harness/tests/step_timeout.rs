@@ -3,9 +3,13 @@
 //!
 //! 1. Emit [`Event::StepTimeoutFired`] with `{step_index, configured_ms}`
 //!    BEFORE tearing the sandbox down (D5 emit-before-IO ordering).
-//! 2. Call `lifecycle.destroy(&session_uuid)`.
-//! 3. Flip the session status to `failed` (via `finalise_fail`).
-//! 4. Return `Err(EngineError::StepFailed { reason: StepTimeout { configured_ms } })`
+//! 2. Emit [`Event::StepFailed`] so `progress_from_log()` treats the step
+//!    as terminal on replay (architecture.md §D9 + NFR13). Without this a
+//!    reloaded engine could advance past a timed-out step.
+//! 3. Call `lifecycle.destroy_by_session(session_uuid)` so the backend
+//!    removes the real container (DockerLifecycle override).
+//! 4. Flip the session status to `failed` (via `finalise_fail`).
+//! 5. Return `Err(EngineError::StepFailed { reason: StepTimeout { configured_ms } })`
 //!    carrying the D9 termination taxonomy.
 //!
 //! Uses a custom [`StepExecutor`] that parks forever on `std::future::pending`
@@ -114,13 +118,12 @@ async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
     }
 
     // ── AC2: event ordering (emit-before-IO, D5) ───────────────────────
-    // The session log records events in append order. A StepTimeoutFired
-    // entry existing is evidence the emit completed; the MockLifecycle
-    // Destroy call existing is evidence the IO happened. The engine emits
-    // the event via `session.append(...).await?` BEFORE it calls
-    // `lifecycle.destroy(...).await` — this is enforced statically by the
-    // code path in `Engine::step`. Observing both side-effects here
-    // guarantees neither was skipped.
+    // The session log records events in append order. Both the structural
+    // fact (StepTimeoutFired) and the terminal fact (StepFailed) must be
+    // persisted BEFORE the sandbox destroy IO. Observing both events plus
+    // the MockLifecycle Destroy call below guarantees the emit-before-IO
+    // ordering and that progress_from_log() will see the step as terminal
+    // on replay (architecture.md §D9 + NFR13).
     let events = engine.session().replay().await.expect("replay");
     let tags: Vec<&str> = events
         .iter()
@@ -128,8 +131,13 @@ async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
         .collect();
     assert_eq!(
         tags,
-        vec!["workflow_started", "step_started", "step_timeout_fired"],
-        "expected exactly workflow_started → step_started → step_timeout_fired, got {tags:?}"
+        vec![
+            "workflow_started",
+            "step_started",
+            "step_timeout_fired",
+            "step_failed",
+        ],
+        "expected workflow_started → step_started → step_timeout_fired → step_failed, got {tags:?}"
     );
 
     // The StepTimeoutFired payload carries step_index + configured_ms.
@@ -139,6 +147,22 @@ async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
         .expect("step_timeout_fired present");
     assert_eq!(fired.payload["step_index"], 0);
     assert_eq!(fired.payload["configured_ms"], configured_ms);
+
+    // The StepFailed payload carries the step name and a human-readable
+    // error derived from the timeout (no PII / command text leak).
+    let failed = events
+        .iter()
+        .find(|e| e.payload.get("event").and_then(|v| v.as_str()) == Some("step_failed"))
+        .expect("step_failed present");
+    assert_eq!(failed.payload["step_name"], "slow-step");
+    assert!(
+        failed.payload["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("timed out"),
+        "step_failed.error should mention the timeout, got {:?}",
+        failed.payload["error"]
+    );
 
     // ── AC3: sandbox teardown via destroy(session_uuid) ────────────────
     let calls = mock.calls().await;
