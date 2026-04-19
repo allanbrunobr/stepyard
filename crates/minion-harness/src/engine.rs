@@ -269,17 +269,33 @@ impl Engine {
         };
         let duration_ms = start.elapsed().as_millis() as u64;
 
-        // Timeout landed first: emit StepTimeoutFired BEFORE tearing the
-        // sandbox down (D5 emit-before-IO), then finalise the session as
-        // failed and return a typed StepFailed error carrying the
-        // TerminationReason::StepTimeout taxonomy (D9). The dashboard
-        // synthesises a failure signal from that Err at the binary boundary;
-        // emitting a separate Event::StepFailed here would double-count.
+        // Timeout landed first. D5 emit-before-IO ordering: persist both
+        // facts to the session log BEFORE tearing the sandbox down.
+        //   1. StepTimeoutFired — the structural fact that the timer fired
+        //      (step_index + configured_ms). Consumers can correlate against
+        //      the configured timeout without replaying the whole log.
+        //   2. StepFailed — the terminal fact that this step is done and the
+        //      session is now in failure state. progress_from_log() treats
+        //      step_failed as the terminal marker; without it a reloaded
+        //      session can be advanced past a timed-out step. This matches
+        //      architecture.md §D9 + NFR13.
+        // Only after both events are appended do we destroy the sandbox
+        // (IO) and flip the session row. Return a typed StepFailed error
+        // carrying the TerminationReason::StepTimeout taxonomy (D9).
         if let StepSelection::TimedOut = selection {
             let configured_ms = step.timeout.expect("TimedOut requires step.timeout.is_some()");
             self.emit(Event::StepTimeoutFired {
                 step_index,
                 configured_ms,
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: "cmd".into(),
+                error: format!("step timed out after {configured_ms}ms"),
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: true,
             })
             .await?;
             let _ = self.lifecycle.destroy_by_session(session_uuid).await;
