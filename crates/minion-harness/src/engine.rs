@@ -168,12 +168,6 @@ impl Engine {
     /// [`StepOutcome::WorkflowCompleted`] once every step has a completion
     /// event in the log.
     pub async fn step(&mut self) -> Result<StepOutcome, EngineError> {
-        // Fast path: already cancelled — do not emit anything new.
-        if self.cancel.is_cancelled() {
-            self.finalise_cancel().await?;
-            return Ok(StepOutcome::Cancelled);
-        }
-
         // Ask the log how far we are. "Completed" counts only include
         // successful StepCompleted events; a StepFailed means the workflow
         // is stuck and no new step should be executed.
@@ -192,6 +186,37 @@ impl Engine {
             // Happy path: every step has a completed event. Mark session.
             self.finalise_success().await?;
             return Ok(StepOutcome::WorkflowCompleted);
+        }
+
+        // Fast-path cancel: a cancel token flipped before this step boundary
+        // (either pre-workflow or between two steps). Emit a StepFailed event
+        // for the would-be-next step so progress_from_log() treats the
+        // workflow as terminal on reload — otherwise a restarted engine could
+        // advance past a cancelled session (architecture.md §D9 + NFR13).
+        // Symmetric with the step-timeout terminality fix.
+        if self.cancel.is_cancelled() {
+            let next_step = &self.workflow.steps[progress.completed_steps];
+            // Keep the "log begins with workflow_started" invariant even when
+            // a cancel races ahead of the first step — emit WorkflowStarted
+            // exactly once per session if it has not been emitted yet.
+            if progress.completed_steps == 0 && self.started_at.is_none() {
+                self.started_at = Some(Instant::now());
+                self.emit(Event::WorkflowStarted {
+                    timestamp: Utc::now(),
+                })
+                .await?;
+            }
+            self.emit(Event::StepFailed {
+                step_name: next_step.name.clone(),
+                step_type: "cmd".into(),
+                error: "Cancelled".into(),
+                duration_ms: 0,
+                timestamp: Utc::now(),
+                sandboxed: true,
+            })
+            .await?;
+            self.finalise_cancel().await?;
+            return Ok(StepOutcome::Cancelled);
         }
 
         let step = &self.workflow.steps[progress.completed_steps].clone();
