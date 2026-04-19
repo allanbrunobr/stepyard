@@ -3,6 +3,8 @@
 //! Mock-based tests always run. Docker-backed tests are gated by the
 //! `MINION_TEST_DOCKER=1` env var so CI without a daemon does not fail.
 
+use std::sync::Arc;
+
 use minion_sandbox_orchestrator::{
     mock::mark_destroyed, DockerLifecycle, ExecOutput, MockCall, MockLifecycle, SandboxError,
     SandboxLifecycle,
@@ -127,4 +129,43 @@ async fn docker_destroy_is_idempotent() {
         .destroy_by_session(session_id)
         .await
         .expect("destroy non-existent is Ok");
+}
+
+#[tokio::test]
+async fn docker_destroy_by_session_reaches_override_through_trait_object() {
+    // The harness calls destroy_by_session through Arc<dyn SandboxLifecycle>,
+    // not on a concrete DockerLifecycle. Guards against a future refactor
+    // that drops `destroy_by_session` from the trait impl and silently
+    // falls back to the default (which delegates to the no-op `destroy`) —
+    // that would leave real containers running.
+    if !docker_enabled() {
+        eprintln!("[skip] MINION_TEST_DOCKER not set to 1");
+        return;
+    }
+    let lifecycle: Arc<dyn SandboxLifecycle> = Arc::new(DockerLifecycle::default());
+    let session_id = Uuid::new_v4();
+    let sandbox = lifecycle.create(session_id).await.expect("create");
+    let _ = sandbox.exec("echo hi").await.expect("exec");
+
+    lifecycle
+        .destroy_by_session(session_id)
+        .await
+        .expect("destroy_by_session via trait object");
+
+    let ps = tokio::process::Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "-q",
+            "--filter",
+            &format!("name=minion-session-{session_id}"),
+        ])
+        .output()
+        .await
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&ps.stdout).trim().to_string();
+    assert!(
+        stdout.is_empty(),
+        "container still listed after trait-dispatched destroy_by_session: {stdout}"
+    );
 }
