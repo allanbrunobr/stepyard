@@ -1241,6 +1241,9 @@ pub async fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// One row of `session list` output: `(id, status, started_at, ended_at)`.
+type SessionListRow = (uuid::Uuid, String, DateTime<Utc>, Option<DateTime<Utc>>);
+
 /// `minion session list --status <status> [--since <duration>]` — FR24 / Story 2.5.
 ///
 /// Queries PG directly for the requested status filter, printing one
@@ -1256,9 +1259,7 @@ pub async fn session_list(args: SessionListArgs) -> anyhow::Result<()> {
 
     let status_str = args.status.as_db_str();
 
-    let rows: Vec<(uuid::Uuid, String, DateTime<Utc>, Option<DateTime<Utc>>)> = if let Some(since) =
-        args.since
-    {
+    let rows: Vec<SessionListRow> = if let Some(since) = args.since {
         let interval_str = format!("{} seconds", std::time::Duration::from(since).as_secs());
         sqlx::query_as(
             r#"
