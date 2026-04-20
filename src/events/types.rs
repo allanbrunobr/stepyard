@@ -6,4 +6,4 @@
 //! import path `crate::events::types::Event` so existing call sites keep
 //! compiling unchanged.
 
-pub use minion_core::Event;
+pub use stepyard_core::Event;

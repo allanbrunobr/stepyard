@@ -4,8 +4,8 @@
 //!
 //! The binary's execute path reaches the reconcile via
 //! `crate::startup::reconcile(..)` (binary tree) or
-//! `minion_engine::startup::reconcile(..)` (lib tree). Both resolve to the
-//! same function symbol re-exported from [`minion_harness::startup`].
+//! `stepyard_engine::startup::reconcile(..)` (lib tree). Both resolve to the
+//! same function symbol re-exported from [`stepyard_harness::startup`].
 //!
 //! # Deviations from Story 2.4 as-written
 //!
@@ -18,7 +18,7 @@
 //!    is preserved because `execute_v2` is the only engine-constructing path
 //!    and reconcile runs there before the first `HarnessEngine::new(..)`.
 //!
-//! 2. **Logic in `minion_harness::startup`; this file re-exports.** Story
+//! 2. **Logic in `stepyard_harness::startup`; this file re-exports.** Story
 //!    wording places the function in `src/startup.rs`. It does — but as a
 //!    `pub use` re-export. The implementation lives in the harness crate so
 //!    `crates/minion-harness/tests/startup_reconcile.rs` can drive it
@@ -31,4 +31,4 @@
 // name the type directly, so `#[allow(unused_imports)]` keeps the compiler
 // quiet without forcing us to synthesise an artificial use site.
 #[allow(unused_imports)]
-pub use minion_harness::startup::{reconcile, ReconcileError, ReconcileReport};
+pub use stepyard_harness::startup::{reconcile, ReconcileError, ReconcileReport};

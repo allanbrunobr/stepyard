@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use minion_engine::{engine::Engine, workflow::parser, workflow::validator};
+use stepyard_engine::{engine::Engine, workflow::parser, workflow::validator};
 
 /// Helper to run a YAML workflow string to completion with quiet output
-async fn run_workflow(yaml: &str, target: &str) -> anyhow::Result<minion_engine::steps::StepOutput> {
+async fn run_workflow(yaml: &str, target: &str) -> anyhow::Result<stepyard_engine::steps::StepOutput> {
     let wf = parser::parse_str(yaml)?;
     let errors = validator::validate(&wf);
     assert!(errors.is_empty(), "Workflow validation errors: {:?}", errors);

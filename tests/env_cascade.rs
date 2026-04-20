@@ -4,8 +4,8 @@
 //! `step.env`), the host `${VAR}` expansion semantics, and the fail-fast
 //! error on a missing host variable.
 //!
-//! The tests drive [`minion_harness::resolve_env`] directly rather than
-//! constructing a full [`minion_harness::Engine`] — the engine needs a
+//! The tests drive [`stepyard_harness::resolve_env`] directly rather than
+//! constructing a full [`stepyard_harness::Engine`] — the engine needs a
 //! Postgres-backed `Session` which would require a live database per test
 //! run. The engine method [`Engine::prepare_step`] is a thin delegate over
 //! `resolve_env`, so testing the free function covers the merge + expansion
@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use minion_harness::{resolve_env, Defaults, EngineError};
+use stepyard_harness::{resolve_env, Defaults, EngineError};
 use serial_test::serial;
 
 fn env_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {

@@ -1670,110 +1670,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
-name = "minion-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "minion-engine"
-version = "0.7.6"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "async-trait",
- "axum",
- "chrono",
- "clap",
- "colored",
- "dialoguer",
- "dirs",
- "futures",
- "hex",
- "hmac",
- "humantime",
- "indicatif",
- "libloading",
- "minion-core",
- "minion-harness",
- "minion-sandbox-orchestrator",
- "minion-session",
- "predicates",
- "regex",
- "reqwest 0.12.28",
- "rhai",
- "rig-core",
- "serde",
- "serde_json",
- "serde_yaml",
- "serial_test",
- "sha2",
- "sqlx",
- "tempfile",
- "tera",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "minion-harness"
-version = "0.1.0"
-dependencies = [
- "assert_cmd",
- "async-trait",
- "chrono",
- "minion-core",
- "minion-sandbox-orchestrator",
- "minion-session",
- "serde",
- "serde_json",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "wait-timeout",
-]
-
-[[package]]
-name = "minion-sandbox-orchestrator"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "minion-session"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "mio"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3303,6 +3199,110 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stepyard-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "stepyard-engine"
+version = "0.7.6"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "async-trait",
+ "axum",
+ "chrono",
+ "clap",
+ "colored",
+ "dialoguer",
+ "dirs",
+ "futures",
+ "hex",
+ "hmac",
+ "humantime",
+ "indicatif",
+ "libloading",
+ "predicates",
+ "regex",
+ "reqwest 0.12.28",
+ "rhai",
+ "rig-core",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "sha2",
+ "sqlx",
+ "stepyard-core",
+ "stepyard-harness",
+ "stepyard-sandbox-orchestrator",
+ "stepyard-session",
+ "tempfile",
+ "tera",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "stepyard-harness"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "stepyard-core",
+ "stepyard-sandbox-orchestrator",
+ "stepyard-session",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wait-timeout",
+]
+
+[[package]]
+name = "stepyard-sandbox-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "stepyard-session"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "stringprep"

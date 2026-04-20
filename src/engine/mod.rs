@@ -21,7 +21,7 @@ use crate::error::StepError;
 use crate::events::subscribers::{DashboardSubscriber, FileSubscriber, WebhookSubscriber};
 use crate::events::types::Event;
 use crate::events::EventBus;
-use minion_session::Session;
+use stepyard_session::Session;
 use crate::plugins::loader::PluginLoader;
 use crate::plugins::registry::PluginRegistry;
 use crate::prompts::{

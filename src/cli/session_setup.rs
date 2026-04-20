@@ -1,5 +1,5 @@
 //! Shared session-setup helpers used by both the v1 (`Engine::run`) and v2
-//! (`minion_harness::Engine::resume`) execute paths.
+//! (`stepyard_harness::Engine::resume`) execute paths.
 //!
 //! Split into three layered entry points:
 //!
@@ -55,7 +55,7 @@ pub async fn connect_pg(json_mode: bool) -> anyhow::Result<sqlx::PgPool> {
             anyhow::anyhow!("DATABASE_URL unreachable: {e}")
         })?;
 
-    minion_session::migrate(&pool)
+    stepyard_session::migrate(&pool)
         .await
         .with_context(|| "engine requires PostgreSQL backend: migrations failed")?;
 
@@ -69,14 +69,14 @@ pub async fn connect_pg(json_mode: bool) -> anyhow::Result<sqlx::PgPool> {
 pub async fn open_session_with_pool(
     pool: &sqlx::PgPool,
     workflow_name: &str,
-) -> anyhow::Result<minion_session::Session> {
+) -> anyhow::Result<stepyard_session::Session> {
     // Workflow identifier — stable UUID derived from the workflow name so that
     // the same workflow name always maps to the same workflow_id row. A real
     // workflows table (Story 2.x) will replace this with an opaque lookup.
     let workflow_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, workflow_name.as_bytes());
     let tenant_id = std::env::var("MINION_TENANT").unwrap_or_else(|_| "default".to_string());
 
-    minion_session::Session::new(pool, workflow_id, tenant_id)
+    stepyard_session::Session::new(pool, workflow_id, tenant_id)
         .await
         .with_context(|| "failed to create session row")
 }
@@ -85,7 +85,7 @@ pub async fn open_session_with_pool(
 pub async fn open_session(
     workflow_name: &str,
     json_mode: bool,
-) -> anyhow::Result<minion_session::Session> {
+) -> anyhow::Result<stepyard_session::Session> {
     let pool = connect_pg(json_mode).await?;
     open_session_with_pool(&pool, workflow_name).await
 }
