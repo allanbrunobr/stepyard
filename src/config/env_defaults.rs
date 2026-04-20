@@ -25,7 +25,6 @@ use serde::Deserialize;
 /// Only the `env:` field is consumed by this loader. Other fields in the
 /// same file (future layers) are tolerated because `serde_yaml` ignores
 /// unknown keys by default.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct Defaults {
     #[serde(default)]
@@ -34,7 +33,6 @@ pub struct Defaults {
 
 /// Errors produced by [`load_defaults`]. Uses `thiserror` per NFR21 — this
 /// is library code, not binary glue.
-#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum DefaultsError {
     #[error("failed to read defaults file at {path}")]
@@ -56,7 +54,6 @@ pub enum DefaultsError {
 ///
 /// Returns [`Defaults::default()`] when `path` does not exist — a missing
 /// file is not an error because defaults are opt-in per project (AC).
-#[allow(dead_code)]
 pub fn load_defaults(path: &Path) -> Result<Defaults, DefaultsError> {
     if !path.exists() {
         return Ok(Defaults::default());

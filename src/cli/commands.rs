@@ -181,7 +181,8 @@ async fn execute_v2(
     shutdown_signal: Arc<OnceLock<String>>,
 ) -> anyhow::Result<()> {
     use minion_harness::{
-        Engine as HarnessEngine, EngineError, HarnessConfig, StepOutcome, TerminationReason,
+        Defaults as HarnessDefaults, Engine as HarnessEngine, EngineError, HarnessConfig,
+        StepOutcome, TerminationReason,
     };
     use minion_sandbox_orchestrator::{DockerLifecycle, LocalShellLifecycle, SandboxLifecycle};
 
@@ -218,7 +219,16 @@ async fn execute_v2(
         ..HarnessConfig::default()
     };
 
-    let mut engine = HarnessEngine::new(config, session, harness_workflow.clone(), lifecycle);
+    // Load `.minion/defaults.yaml` env layer. Missing file → empty defaults
+    // (the loader is explicit about that). This is the weakest layer of the
+    // cascade; step.env and workflow.env still override.
+    let defaults_path = Path::new(".minion/defaults.yaml");
+    let env_defaults = crate::config::load_env_defaults(defaults_path)
+        .with_context(|| format!("failed to load {}", defaults_path.display()))?;
+    let harness_defaults = HarnessDefaults::with_env(env_defaults.env);
+
+    let mut engine = HarnessEngine::new(config, session, harness_workflow.clone(), lifecycle)
+        .with_defaults(harness_defaults);
 
     // Signal interception lives in `src/signal.rs` (Story 2.2). `main()` races
     // that future against `cli.run(..)` via `tokio::select!`; no per-command

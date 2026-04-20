@@ -4,8 +4,7 @@ pub mod manager;
 pub mod merge;
 
 pub use defaults::apply_defaults;
-#[allow(unused_imports)]
-pub use env_defaults::{load_defaults as load_env_defaults, Defaults as EnvDefaults, DefaultsError as EnvDefaultsError};
+pub use env_defaults::load_defaults as load_env_defaults;
 pub use manager::ConfigManager;
 
 use std::collections::HashMap;
