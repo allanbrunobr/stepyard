@@ -2,7 +2,7 @@
 //!
 //! This crate owns "how do we get a running execution environment for a
 //! session and how do we tear it down?". It does NOT know what steps run
-//! inside — that is `minion-harness`'s job (Story 2.3).
+//! inside — that is `stepyard-harness`'s job (Story 2.3).
 //!
 //! # Key types
 //!

@@ -25,7 +25,7 @@ impl PluginLoader {
     ///
     /// # Safety
     /// Loading and calling foreign functions from shared libraries is inherently
-    /// unsafe. The caller must ensure the library is a valid minion plugin.
+    /// unsafe. The caller must ensure the library is a valid stepyard plugin.
     pub fn load_plugin(path: &str) -> Result<Box<dyn PluginStep>> {
         // SAFETY: We are loading a shared library that is expected to expose
         // a `create_plugin` symbol following the documented ABI.

@@ -4,7 +4,7 @@
 //! Story 2.4 ships the v2 engine path behind `--engine v2`. This adapter
 //! accepts cmd-type steps and rejects everything else; the 9-type port is
 //! Stories 2.6+. Keeping the adapter in the CLI crate (instead of inside
-//! `minion-harness`) preserves the invariant that the harness knows nothing
+//! `stepyard-harness`) preserves the invariant that the harness knows nothing
 //! about legacy YAML shapes.
 
 use stepyard_harness::{Step, Workflow};

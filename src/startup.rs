@@ -21,7 +21,7 @@
 //! 2. **Logic in `stepyard_harness::startup`; this file re-exports.** Story
 //!    wording places the function in `src/startup.rs`. It does — but as a
 //!    `pub use` re-export. The implementation lives in the harness crate so
-//!    `crates/minion-harness/tests/startup_reconcile.rs` can drive it
+//!    `crates/stepyard-harness/tests/startup_reconcile.rs` can drive it
 //!    without introducing a circular `minion-engine → minion-harness`
 //!    build dependency (the harness crate cannot depend on the binary).
 

@@ -1,9 +1,9 @@
-//! End-to-end integration tests for `minion execute --engine v2` (Story 2.4).
+//! End-to-end integration tests for `stepyard execute --engine v2` (Story 2.4).
 //!
-//! These tests shell out to the built `minion` binary via `assert_cmd` and
+//! These tests shell out to the built `stepyard` binary via `assert_cmd` and
 //! assume a live PostgreSQL reachable at `DATABASE_URL`. Without it, each
 //! test prints a skip line and returns — matching the pattern used by the
-//! harness stress test in `crates/minion-harness/tests/`.
+//! harness stress test in `crates/stepyard-harness/tests/`.
 
 use assert_cmd::Command;
 use uuid::Uuid;
@@ -23,7 +23,7 @@ fn v2_executes_cmd_only_workflow_to_completion() {
     // each other's rows (pitfall #3 from PROMPT_STORY_2_4.md).
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
-    Command::cargo_bin("minion")
+    Command::cargo_bin("stepyard")
         .unwrap()
         .args([
             "execute",
@@ -48,7 +48,7 @@ fn v2_rejects_workflow_with_unsupported_step_type() {
     };
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
-    Command::cargo_bin("minion")
+    Command::cargo_bin("stepyard")
         .unwrap()
         .args([
             "execute",
@@ -75,7 +75,7 @@ fn default_engine_is_v1_and_still_works() {
     };
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
-    Command::cargo_bin("minion")
+    Command::cargo_bin("stepyard")
         .unwrap()
         .args([
             "execute",

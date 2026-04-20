@@ -29,14 +29,14 @@ fn resolve_workflow_path(path: &Path) -> anyhow::Result<PathBuf> {
     // Try ~/.minion/workflows/<filename>
     if let Some(filename) = path.file_name() {
         if let Some(home) = dirs::home_dir() {
-            let home_path = home.join(".minion").join("workflows").join(filename);
+            let home_path = home.join(".stepyard").join("workflows").join(filename);
             if home_path.exists() {
                 return Ok(home_path);
             }
         }
     }
 
-    bail!("Workflow file not found: {}\n  Hint: run `minion slack start` once to extract built-in workflows to ~/.minion/workflows/", path.display())
+    bail!("Workflow file not found: {}\n  Hint: run `stepyard slack start` once to extract built-in workflows to ~/.minion/workflows/", path.display())
 }
 
 #[derive(Args)]
@@ -501,7 +501,7 @@ async fn validate_environment(
                export ANTHROPIC_API_KEY=\"sk-ant-...\"\n\
              \n\
              Or pass it inline:\n\
-               ANTHROPIC_API_KEY=\"sk-ant-...\" minion execute <workflow> -- <target>"
+               ANTHROPIC_API_KEY=\"sk-ant-...\" stepyard execute <workflow> -- <target>"
                 .to_string(),
         );
     }
@@ -814,7 +814,7 @@ pub async fn list() -> anyhow::Result<()> {
     // Scan current directory, workflows/ subdirectory, and ~/.minion/workflows/
     let mut dirs_to_scan = vec![cwd.clone(), cwd.join("workflows")];
     if let Some(home) = dirs::home_dir() {
-        dirs_to_scan.push(home.join(".minion").join("workflows"));
+        dirs_to_scan.push(home.join(".stepyard").join("workflows"));
     }
 
     for dir in &dirs_to_scan {
@@ -833,7 +833,7 @@ pub async fn list() -> anyhow::Result<()> {
     if found.is_empty() {
         println!("No workflow files found.");
         println!(
-            "Tip: run `minion init <name>` to create a new workflow, or place .yaml files in:"
+            "Tip: run `stepyard init <name>` to create a new workflow, or place .yaml files in:"
         );
         println!("  • {} (current directory)", cwd.display());
         println!("  • {}/workflows/", cwd.display());
@@ -898,8 +898,8 @@ pub async fn init(args: InitArgs) -> anyhow::Result<()> {
     );
     println!("  Template: {}", template.description);
     println!("\nEdit the file and run:");
-    println!("  minion validate {}", out_path.display());
-    println!("  minion execute {} -- <target>", out_path.display());
+    println!("  stepyard validate {}", out_path.display());
+    println!("  stepyard execute {} -- <target>", out_path.display());
 
     Ok(())
 }
@@ -1129,18 +1129,18 @@ pub async fn config_path() -> anyhow::Result<()> {
 
     // 2. User-level
     if let Some(home) = dirs::home_dir() {
-        let path = home.join(".minion").join("defaults.yaml");
+        let path = home.join(".stepyard").join("defaults.yaml");
         if path.exists() {
             println!("  \x1b[32m✓\x1b[0m {} — active", path.display());
         } else {
             println!("  \x1b[90m○\x1b[0m {} — not created", path.display());
-            println!("    Run `minion config init` to create it");
+            println!("    Run `stepyard config init` to create it");
         }
     }
 
     // 3. Project-level
     if let Ok(cwd) = std::env::current_dir() {
-        let path = cwd.join(".minion").join("config.yaml");
+        let path = cwd.join(".stepyard").join("config.yaml");
         if path.exists() {
             println!("  \x1b[32m✓\x1b[0m {} — active", path.display());
         } else {
@@ -1157,13 +1157,13 @@ pub async fn config_path() -> anyhow::Result<()> {
 
 pub async fn config_init() -> anyhow::Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let dir = home.join(".minion");
+    let dir = home.join(".stepyard");
     let path = dir.join("defaults.yaml");
 
     if path.exists() {
         println!("\x1b[33m!\x1b[0m Config file already exists: {}", path.display());
         println!("  Edit it directly: {}", path.display());
-        println!("  Or delete it and run `minion config init` again.");
+        println!("  Or delete it and run `stepyard config init` again.");
         return Ok(());
     }
 
@@ -1188,7 +1188,7 @@ pub async fn config_init() -> anyhow::Result<()> {
 
 pub async fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let dir = home.join(".minion");
+    let dir = home.join(".stepyard");
     let path = dir.join("defaults.yaml");
 
     // Parse key: "chat.model" → section="chat", field="model"
@@ -1254,7 +1254,7 @@ pub async fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
 /// One row of `session list` output: `(id, status, started_at, ended_at)`.
 type SessionListRow = (uuid::Uuid, String, DateTime<Utc>, Option<DateTime<Utc>>);
 
-/// `minion session list --status <status> [--since <duration>]` — FR24 / Story 2.5.
+/// `stepyard session list --status <status> [--since <duration>]` — FR24 / Story 2.5.
 ///
 /// Queries PG directly for the requested status filter, printing one
 /// whitespace-separated row per session:

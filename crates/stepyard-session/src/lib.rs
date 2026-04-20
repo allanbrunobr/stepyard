@@ -24,7 +24,7 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let pool = PgPoolOptions::new()
 //!     .max_connections(5)
-//!     .connect("postgres://localhost/minion").await?;
+//!     .connect("postgres://localhost/stepyard").await?;
 //!
 //! // Create a new session for a dispatched workflow
 //! let session = Session::new(&pool, Uuid::new_v4(), "edenred".to_string()).await?;

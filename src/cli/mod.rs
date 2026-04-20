@@ -13,13 +13,13 @@ use tokio::sync::broadcast;
 
 #[derive(Parser)]
 #[command(
-    name = "minion",
+    name = "stepyard",
     about = "AI Workflow Engine — orchestrate Claude Code CLI with YAML workflows",
     version,
     after_help = "\x1b[1mQuick start:\x1b[0m
   cargo install minion-engine
-  minion setup
-  minion execute workflows/code-review.yaml -- 42
+  stepyard setup
+  stepyard execute workflows/code-review.yaml -- 42
 
 \x1b[1mRequirements:\x1b[0m
   • ANTHROPIC_API_KEY   — required for AI steps (chat, map)
@@ -27,13 +27,13 @@ use tokio::sync::broadcast;
   • Docker Desktop      — required for --sandbox mode (creates isolated containers)
 
 \x1b[1mExamples:\x1b[0m
-  minion execute workflows/code-review.yaml -- 42        Review PR #42 (sandbox on by default)
-  minion execute workflows/fix-issue.yaml -- 123         Fix issue #123
-  minion execute my-workflow.yaml --no-sandbox -- main   Run without Docker sandbox
-  minion list                                            List available workflows
-  minion init my-workflow --template code-review         Create a new workflow
-  minion setup                                           Interactive setup wizard
-  minion slack start                                     Start Slack bot (requires --features slack)"
+  stepyard execute workflows/code-review.yaml -- 42        Review PR #42 (sandbox on by default)
+  stepyard execute workflows/fix-issue.yaml -- 123         Fix issue #123
+  stepyard execute my-workflow.yaml --no-sandbox -- main   Run without Docker sandbox
+  stepyard list                                            List available workflows
+  stepyard init my-workflow --template code-review         Create a new workflow
+  stepyard setup                                           Interactive setup wizard
+  stepyard slack start                                     Start Slack bot (requires --features slack)"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -79,7 +79,7 @@ enum ConfigCommand {
     Show,
     /// Create or edit user-level defaults (~/.minion/defaults.yaml)
     Init,
-    /// Set a config value. Example: minion config set chat.model claude-opus-4-20250514
+    /// Set a config value. Example: stepyard config set chat.model claude-opus-4-20250514
     Set {
         /// Config key in dot notation (e.g., chat.model, agent.model, global.timeout)
         key: String,
@@ -154,7 +154,7 @@ impl Cli {
             },
             Command::Remote(args) => remote::run(args).await,
             Command::Version => {
-                println!("minion {}", env!("CARGO_PKG_VERSION"));
+                println!("stepyard {}", env!("CARGO_PKG_VERSION"));
                 Ok(())
             }
         }

@@ -1,6 +1,6 @@
 //! [`LocalShellLifecycle`] — run commands directly on the host via `sh -c`.
 //!
-//! Used by `minion execute --no-sandbox --engine v2`. No Docker daemon, no
+//! Used by `stepyard execute --no-sandbox --engine v2`. No Docker daemon, no
 //! container boundaries, no cleanup — each `exec` spawns a fresh `sh -c`
 //! process in the current working directory.
 //!

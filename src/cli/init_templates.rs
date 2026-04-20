@@ -1,4 +1,4 @@
-/// Template definitions for `minion init`
+/// Template definitions for `stepyard init`
 pub struct Template {
     pub name: &'static str,
     pub description: &'static str,

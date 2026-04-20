@@ -4,7 +4,7 @@
 //! crates (parser, validator) can compile against the version discriminator
 //! without pulling the full `WorkflowDef` into `minion-core`. The complete
 //! `WorkflowDef` migration to this crate happens in **Story 2.3** when the
-//! parser/validator move out of the engine binary into `minion-harness`.
+//! parser/validator move out of the engine binary into `stepyard-harness`.
 //!
 //! Until then, the engine binary keeps `WorkflowDef` in `src/workflow/schema.rs`
 //! and re-exports the same `WorkflowVersion` from this crate so both halves
