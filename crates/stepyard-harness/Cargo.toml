@@ -42,6 +42,10 @@ sqlx = { version = "0.8", features = [
 assert_cmd = "2"
 tempfile = "3"
 wait-timeout = "0.2"
+# PR 1 of Task #31 (v2 migration) — serde round-trip tests for the
+# widened workflow shape. Parsing of real workflow YAML still lives in
+# the CLI adapter; the harness only needs this for scaffolding tests.
+serde_yaml = "0.9"
 
 [lints]
 workspace = true
