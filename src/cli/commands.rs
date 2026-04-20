@@ -182,7 +182,7 @@ async fn execute_v2(
 ) -> anyhow::Result<()> {
     use stepyard_harness::{
         Defaults as HarnessDefaults, Engine as HarnessEngine, EngineError, HarnessConfig,
-        StepOutcome, TerminationReason,
+        RunContext as HarnessRunContext, StepOutcome, TerminationReason,
     };
     use stepyard_sandbox_orchestrator::{DockerLifecycle, LocalShellLifecycle, SandboxLifecycle};
 
@@ -227,8 +227,24 @@ async fn execute_v2(
         .with_context(|| format!("failed to load {}", defaults_path.display()))?;
     let harness_defaults = HarnessDefaults::with_env(env_defaults.env);
 
+    // PR 2 of Task #31: thread the CLI's `--target` and `--var k=v` into the
+    // harness so gate conditions can reference `{{ target }}` / `{{ vars.X }}`.
+    // Mirrors the v1 path's args.target.first() / args.vars parsing (see line
+    // ~353) without reaching into the legacy engine's Context.
+    let mut run_vars = std::collections::HashMap::new();
+    for kv in &args.vars {
+        if let Some((k, v)) = kv.split_once('=') {
+            run_vars.insert(k.to_string(), v.to_string());
+        }
+    }
+    let run_context = HarnessRunContext {
+        target: args.target.first().cloned().unwrap_or_default(),
+        vars: run_vars,
+    };
+
     let mut engine = HarnessEngine::new(config, session, harness_workflow.clone(), lifecycle)
-        .with_defaults(harness_defaults);
+        .with_defaults(harness_defaults)
+        .with_run_context(run_context);
 
     // Signal interception lives in `src/signal.rs` (Story 2.2). `main()` races
     // that future against `cli.run(..)` via `tokio::select!`; no per-command
@@ -247,7 +263,7 @@ async fn execute_v2(
         // call to step() will just emit WorkflowCompleted.
         let upcoming = harness_workflow.steps.get(step_index);
 
-        let pb = upcoming.map(|s| display::step_start(&s.name, "cmd"));
+        let pb = upcoming.map(|s| display::step_start(&s.name, &s.kind.to_string()));
         let step_start_time = Instant::now();
 
         // Story 2.3: intercept `SignalReceived` **before** the `?` converts

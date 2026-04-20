@@ -39,6 +39,27 @@ impl StepKind {
     }
 }
 
+impl std::fmt::Display for StepKind {
+    /// Renders the same snake_case label the engine writes to
+    /// `step_type` on emitted events, so display/log/CLI can share one
+    /// source of truth.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            StepKind::Cmd => "cmd",
+            StepKind::Agent => "agent",
+            StepKind::Chat => "chat",
+            StepKind::Gate => "gate",
+            StepKind::Repeat => "repeat",
+            StepKind::Map => "map",
+            StepKind::Parallel => "parallel",
+            StepKind::Call => "call",
+            StepKind::Template => "template",
+            StepKind::Script => "script",
+        };
+        f.write_str(s)
+    }
+}
+
 /// A complete workflow definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workflow {
@@ -104,6 +125,24 @@ pub struct Step {
     /// (NFR18, NFR22).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
+    /// Tera template evaluated by [`StepKind::Gate`] steps to decide the
+    /// pass/fail branch. PR 2 of Task #31. Other kinds leave this `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    /// Gate action when `condition` evaluates truthy. PR 2 only accepts
+    /// `"continue"` and `"fail"`; `"break"` and `"skip"` land with
+    /// repeat/map/call semantics in PR 3 and are rejected by the adapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_pass: Option<String>,
+    /// Gate action when `condition` evaluates falsy. Same value space as
+    /// `on_pass`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_fail: Option<String>,
+    /// Operator-visible message attached to the gate's terminal outcome
+    /// (displayed in Dashboard and CLI). Plain string, no templating in
+    /// PR 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 impl Step {
@@ -114,6 +153,25 @@ impl Step {
             command: command.into(),
             timeout: None,
             env: HashMap::new(),
+            condition: None,
+            on_pass: None,
+            on_fail: None,
+            message: None,
+        }
+    }
+
+    /// Constructor for a [`StepKind::Gate`] step. PR 2 of Task #31.
+    pub fn gate(name: impl Into<String>, condition: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: StepKind::Gate,
+            command: String::new(),
+            timeout: None,
+            env: HashMap::new(),
+            condition: Some(condition.into()),
+            on_pass: None,
+            on_fail: None,
+            message: None,
         }
     }
 
@@ -195,5 +253,44 @@ scopes:
             !yaml.contains("type:"),
             "cmd is the default; `type:` should be skipped: {yaml}"
         );
+    }
+
+    #[test]
+    fn cmd_step_omits_gate_fields_from_serialized_output() {
+        // Backward-compat: the four gate fields added in PR 2 of Task #31
+        // must stay absent on the wire for cmd steps, otherwise existing
+        // workflow round-trips would gain noise.
+        let step = Step::cmd("s", "true");
+        let yaml = serde_yaml::to_string(&step).unwrap();
+        for field in ["condition:", "on_pass:", "on_fail:", "message:"] {
+            assert!(
+                !yaml.contains(field),
+                "cmd step leaked `{field}` onto the wire: {yaml}"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_fields_roundtrip_through_yaml() {
+        let yaml = r#"
+name: with-gate
+steps:
+  - name: check
+    type: gate
+    condition: "{{ steps.one.exit_code }} == 0"
+    on_pass: continue
+    on_fail: fail
+    message: "build must pass"
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        let step = &wf.steps[0];
+        assert_eq!(step.kind, StepKind::Gate);
+        assert_eq!(
+            step.condition.as_deref(),
+            Some("{{ steps.one.exit_code }} == 0")
+        );
+        assert_eq!(step.on_pass.as_deref(), Some("continue"));
+        assert_eq!(step.on_fail.as_deref(), Some("fail"));
+        assert_eq!(step.message.as_deref(), Some("build must pass"));
     }
 }
