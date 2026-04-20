@@ -86,7 +86,7 @@ pub struct ExecuteArgs {
 
     /// GitHub repository (OWNER/REPO) to clone inside the Docker sandbox.
     /// When set, the sandbox clones this repo instead of copying the host CWD.
-    /// Example: --repo allanbrunobr/minion-engine
+    /// Example: --repo allanbrunobr/stepyard
     #[arg(long, value_name = "OWNER/REPO")]
     pub repo: Option<String>,
 
