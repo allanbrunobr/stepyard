@@ -10,9 +10,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use minion_engine::prompts::detector::{StackDetector, StackInfo};
-use minion_engine::prompts::registry::Registry;
-use minion_engine::prompts::resolver::PromptResolver;
+use stepyard_engine::prompts::detector::{StackDetector, StackInfo};
+use stepyard_engine::prompts::registry::Registry;
+use stepyard_engine::prompts::resolver::PromptResolver;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

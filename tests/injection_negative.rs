@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use minion_sandbox_orchestrator::{DockerLifecycle, SandboxId, SandboxLifecycle};
+use stepyard_sandbox_orchestrator::{DockerLifecycle, SandboxId, SandboxLifecycle};
 use tokio::time::timeout;
 use uuid::Uuid;
 

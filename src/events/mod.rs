@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 // Re-export so legacy import paths `crate::events::Event` and
 // `crate::events::EventSubscriber` keep working after Story 2.1 moved the
 // canonical types into `minion-core`.
-pub use minion_core::EventSubscriber;
+pub use stepyard_core::EventSubscriber;
 pub use types::Event;
 
 /// Capacity of the broadcast channel (number of events buffered before slow

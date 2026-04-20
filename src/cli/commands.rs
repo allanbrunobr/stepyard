@@ -94,7 +94,7 @@ pub struct ExecuteArgs {
     /// `v1` (default) — the legacy monolithic `Engine::run()` with all 9
     /// step types (cmd, agent, chat, gate, repeat, map, parallel, call,
     /// template, script).
-    /// `v2` — the new `minion_harness::Engine::resume()` step loop. Only
+    /// `v2` — the new `stepyard_harness::Engine::resume()` step loop. Only
     /// supports cmd steps in this release (Story 2.4); non-cmd workflows
     /// exit non-zero with a clear error.
     #[arg(long, value_name = "v1|v2", default_value = "v1")]
@@ -129,7 +129,7 @@ pub struct InspectArgs {
 
 /// CLI-layer session status filter (Story 2.5, FR24).
 ///
-/// Separate from `minion_session::SessionStatus` so clap's `ValueEnum` derive
+/// Separate from `stepyard_session::SessionStatus` so clap's `ValueEnum` derive
 /// does not leak into the session crate; the two are kept in sync through
 /// [`SessionStatus::as_db_str`]. Variant names match the DB check constraint
 /// exactly (`running | completed | failed | cancelled`).
@@ -167,7 +167,7 @@ pub struct SessionListArgs {
 }
 
 /// `--engine v2` path — drives the workflow through
-/// [`minion_harness::Engine`] step-by-step, printing the same
+/// [`stepyard_harness::Engine`] step-by-step, printing the same
 /// `▶ name` / `✓ name (…s)` lines the v1 display emits.
 ///
 /// Returns `Ok(())` on successful completion. Non-zero exit codes for failed
@@ -180,11 +180,11 @@ async fn execute_v2(
     shutdown_tx: Arc<broadcast::Sender<()>>,
     shutdown_signal: Arc<OnceLock<String>>,
 ) -> anyhow::Result<()> {
-    use minion_harness::{
+    use stepyard_harness::{
         Defaults as HarnessDefaults, Engine as HarnessEngine, EngineError, HarnessConfig,
         StepOutcome, TerminationReason,
     };
-    use minion_sandbox_orchestrator::{DockerLifecycle, LocalShellLifecycle, SandboxLifecycle};
+    use stepyard_sandbox_orchestrator::{DockerLifecycle, LocalShellLifecycle, SandboxLifecycle};
 
     let harness_workflow = harness_adapter::adapt(&workflow)
         .map_err(|e| anyhow::anyhow!("cannot run workflow on --engine v2: {e}"))?;
@@ -273,7 +273,7 @@ async fn execute_v2(
             }
             Err(e) => {
                 return Err(anyhow::Error::new(e)
-                    .context("minion_harness::Engine::step failed"));
+                    .context("stepyard_harness::Engine::step failed"));
             }
         };
 
@@ -388,7 +388,7 @@ pub async fn execute(
     validate_environment(&workflow, sandbox_mode != SandboxMode::Disabled, args.json).await?;
 
     // ── Engine selection (Epic 2 Story 2.4) ──────────────────────────────
-    // `--engine v2` drives the workflow through `minion_harness::Engine` — a
+    // `--engine v2` drives the workflow through `stepyard_harness::Engine` — a
     // thin step/resume loop that delegates persistence to the Session log and
     // execution to a `SandboxLifecycle`. v2 only supports cmd steps today;
     // the remaining step types stay on the v1 code path below.

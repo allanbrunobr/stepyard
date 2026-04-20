@@ -1,5 +1,5 @@
 //! Bridge between the legacy [`WorkflowDef`] (with all 9 step types) and the
-//! narrower [`minion_harness::Workflow`] (cmd-only for Story 2.4).
+//! narrower [`stepyard_harness::Workflow`] (cmd-only for Story 2.4).
 //!
 //! Story 2.4 ships the v2 engine path behind `--engine v2`. This adapter
 //! accepts cmd-type steps and rejects everything else; the 9-type port is
@@ -7,7 +7,7 @@
 //! `minion-harness`) preserves the invariant that the harness knows nothing
 //! about legacy YAML shapes.
 
-use minion_harness::{Step, Workflow};
+use stepyard_harness::{Step, Workflow};
 
 use crate::workflow::schema::{StepType, WorkflowDef};
 
