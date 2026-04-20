@@ -196,6 +196,7 @@ async fn cancel_from_another_task_during_long_running_step() {
         use async_trait::async_trait;
         use minion_harness::StepExecutor;
         use minion_sandbox_orchestrator::{ExecOutput, SandboxError};
+        use std::collections::HashMap;
         use std::time::Duration;
 
         struct SlowExec;
@@ -212,6 +213,15 @@ async fn cancel_from_another_task_during_long_running_step() {
                     stderr: String::new(),
                     exit_code: 0,
                 })
+            }
+
+            async fn execute_with_env(
+                &self,
+                sid: Uuid,
+                step: &minion_harness::Step,
+                _env: &HashMap<String, String>,
+            ) -> Result<ExecOutput, SandboxError> {
+                self.execute(sid, step).await
             }
         }
 

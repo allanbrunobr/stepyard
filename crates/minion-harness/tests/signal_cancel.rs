@@ -19,6 +19,7 @@
 //!
 //! Skipped gracefully if `MINION_HARNESS_DATABASE_URL` is unset.
 
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -59,6 +60,15 @@ impl StepExecutor for BlockingExecutor {
     ) -> Result<ExecOutput, SandboxError> {
         std::future::pending::<()>().await;
         unreachable!("pending never resolves")
+    }
+
+    async fn execute_with_env(
+        &self,
+        session_id: Uuid,
+        step: &Step,
+        _env: &HashMap<String, String>,
+    ) -> Result<ExecOutput, SandboxError> {
+        self.execute(session_id, step).await
     }
 }
 

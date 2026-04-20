@@ -25,20 +25,16 @@ pub trait StepExecutor: Send + Sync {
         step: &Step,
     ) -> Result<ExecOutput, SandboxError>;
 
-    /// Run `step` for `session_id` with a resolved env map. Default impl
-    /// drops `env` and delegates to [`execute`] — preserving backward compat
-    /// for mock executors that predate Story 3.4 (D3: additive extension).
-    /// Production impls override this to plumb env pairs into argv-form
-    /// `--env K=V` flags (see [`SandboxStepExecutor`]).
+    /// Run `step` for `session_id` with a resolved env map. Required — no
+    /// default impl, because a default that delegates to [`execute`]
+    /// silently drops `env`, which masks env-routing bugs. Every executor
+    /// (prod or test) decides explicitly how to treat env pairs.
     async fn execute_with_env(
         &self,
         session_id: Uuid,
         step: &Step,
         env: &HashMap<String, String>,
-    ) -> Result<ExecOutput, SandboxError> {
-        let _ = env;
-        self.execute(session_id, step).await
-    }
+    ) -> Result<ExecOutput, SandboxError>;
 }
 
 /// Default implementation — delegates to a [`SandboxLifecycle`].
@@ -80,5 +76,98 @@ impl StepExecutor for SandboxStepExecutor {
         // lifecycle.exec_with_env — never concatenated into a shell string.
         let argv = vec!["sh".to_string(), "-c".to_string(), step.command.clone()];
         self.lifecycle.exec_with_env(&sandbox_id, &argv, env).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use minion_sandbox_orchestrator::MockLifecycle;
+    use tokio::sync::Mutex;
+
+    /// Recording executor that captures the env map it receives via
+    /// `execute_with_env`. Proves the harness hands a real map through —
+    /// a silent-drop impl would leave `captured` empty.
+    struct RecordingExecutor {
+        captured: Mutex<Option<HashMap<String, String>>>,
+    }
+
+    #[async_trait]
+    impl StepExecutor for RecordingExecutor {
+        async fn execute(
+            &self,
+            _session_id: Uuid,
+            _step: &Step,
+        ) -> Result<ExecOutput, SandboxError> {
+            unreachable!("execute_with_env is the only entrypoint the engine uses")
+        }
+
+        async fn execute_with_env(
+            &self,
+            _session_id: Uuid,
+            _step: &Step,
+            env: &HashMap<String, String>,
+        ) -> Result<ExecOutput, SandboxError> {
+            *self.captured.lock().await = Some(env.clone());
+            Ok(ExecOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_with_env_receives_full_env_map() {
+        let executor = RecordingExecutor {
+            captured: Mutex::new(None),
+        };
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        env.insert("TOKEN".to_string(), "xyz".to_string());
+
+        let step = Step::cmd("probe".to_string(), "true".to_string());
+        executor
+            .execute_with_env(Uuid::new_v4(), &step, &env)
+            .await
+            .expect("execute_with_env");
+
+        let got = executor
+            .captured
+            .lock()
+            .await
+            .clone()
+            .expect("env captured");
+        assert_eq!(got, env);
+    }
+
+    #[tokio::test]
+    async fn sandbox_step_executor_threads_env_through_lifecycle() {
+        // SandboxStepExecutor uses lifecycle.exec_with_env, which for
+        // MockLifecycle records the exact env map. If SandboxStepExecutor
+        // ever drops env silently, MockCall::ExecWithEnv.env will diverge.
+        use minion_sandbox_orchestrator::MockCall;
+
+        let lifecycle: Arc<MockLifecycle> = Arc::new(MockLifecycle::new());
+        let executor = SandboxStepExecutor::new(lifecycle.clone());
+
+        let mut env = HashMap::new();
+        env.insert("KEY".to_string(), "value".to_string());
+        let step = Step::cmd("s".to_string(), "true".to_string());
+
+        executor
+            .execute_with_env(Uuid::new_v4(), &step, &env)
+            .await
+            .expect("execute_with_env");
+
+        let calls = lifecycle.calls().await;
+        let recorded_env = calls
+            .iter()
+            .find_map(|c| match c {
+                MockCall::ExecWithEnv { env, .. } => Some(env.clone()),
+                _ => None,
+            })
+            .expect("ExecWithEnv recorded");
+        assert_eq!(recorded_env, env);
     }
 }
