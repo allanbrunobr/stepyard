@@ -1076,6 +1076,11 @@ impl Engine {
                     output_tokens: last_record.and_then(|r| r.output_tokens),
                     cost_usd: last_record.and_then(|r| r.cost_usd),
                     sandboxed: use_sandbox,
+                    // v1 stores cross-step state in its own Context, not the
+                    // event log. The output snapshot is a v2-path affordance
+                    // (PR 2 of Task #31); leaving it unset here keeps v1 events
+                    // byte-identical to pre-widening output.
+                    output: None,
                 })
                 .await
                 .map_err(|e| StepError::Fail(e.to_string()))?;

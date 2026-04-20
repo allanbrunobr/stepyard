@@ -7,14 +7,34 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use chrono::Utc;
-use stepyard_core::Event;
+use stepyard_core::{Event, StepOutputSnapshot};
 use stepyard_sandbox_orchestrator::SandboxLifecycle;
 use stepyard_session::{Session, SessionError, SessionId, SessionStatus};
 use tokio::sync::broadcast;
 
 use crate::defaults::Defaults;
 use crate::executor::{SandboxStepExecutor, StepExecutor};
-use crate::workflow::{Step, Workflow};
+use crate::gate::{evaluate_bool, outcome_for, GateAction, GateError, GateOutcome};
+use crate::render::{render, RenderContext};
+use crate::workflow::{Step, StepKind, Workflow};
+
+/// Canonical lower-case label for a [`StepKind`], used as `step_type` on
+/// every emitted event. Keeping it a free function means the engine never
+/// calls `serde_json::to_string` on the enum just to get a wire label.
+fn step_type_label(kind: &StepKind) -> &'static str {
+    match kind {
+        StepKind::Cmd => "cmd",
+        StepKind::Agent => "agent",
+        StepKind::Chat => "chat",
+        StepKind::Gate => "gate",
+        StepKind::Repeat => "repeat",
+        StepKind::Map => "map",
+        StepKind::Parallel => "parallel",
+        StepKind::Call => "call",
+        StepKind::Template => "template",
+        StepKind::Script => "script",
+    }
+}
 
 /// Default grace period (in seconds) for in-flight engines to wrap up after a
 /// shutdown broadcast fires. D2: matches the architecture-decided 10s budget
@@ -77,6 +97,26 @@ impl Default for HarnessConfig {
             shutdown_signal: default_shutdown_signal(),
         }
     }
+}
+
+/// Per-invocation inputs threaded into the renderer — data that varies
+/// from run to run (the CLI's `--target` and `--var k=v` flags) rather
+/// than process-lifetime config.
+///
+/// PR 2 of Task #31. Kept separate from [`HarnessConfig`] per the
+/// architecture review: `target` and `vars` are execution inputs to a
+/// single workflow run, not engine-lifetime state, so they should not
+/// compete with the shutdown broadcast / tenant id for space on the
+/// long-lived config. Defaults to empty — callers that don't need
+/// rendering can skip the builder.
+#[derive(Debug, Clone, Default)]
+pub struct RunContext {
+    /// Deployment target selected for this run. Exposed to templates as
+    /// `{{ target }}`. Empty when no target is specified.
+    pub target: String,
+    /// Key/value overrides collected from the CLI's `--var k=v` flags.
+    /// Exposed to templates as `{{ vars.name }}`.
+    pub vars: HashMap<String, String>,
 }
 
 /// Outcome of a single [`Engine::step`] call.
@@ -170,6 +210,9 @@ pub struct Engine {
     /// [`Engine::with_defaults`]; empty by default so existing callers keep
     /// compiling.
     defaults: Defaults,
+    /// Per-run inputs exposed to the gate/cmd renderer (PR 2 of Task #31).
+    /// Attached via [`Engine::with_run_context`]; empty by default.
+    run_context: RunContext,
 }
 
 impl Engine {
@@ -206,6 +249,7 @@ impl Engine {
             shutdown_rx,
             started_at: None,
             defaults: Defaults::default(),
+            run_context: RunContext::default(),
         }
     }
 
@@ -214,6 +258,14 @@ impl Engine {
     /// `step.env`. Builder-style so call sites stay compact.
     pub fn with_defaults(mut self, defaults: Defaults) -> Self {
         self.defaults = defaults;
+        self
+    }
+
+    /// Attach per-run renderer inputs (CLI `--target` and `--var k=v`).
+    /// PR 2 of Task #31. Builder-style so tests and the CLI call site both
+    /// stay one-liners.
+    pub fn with_run_context(mut self, run_context: RunContext) -> Self {
+        self.run_context = run_context;
         self
     }
 
@@ -287,6 +339,7 @@ impl Engine {
         // Symmetric with the step-timeout terminality fix.
         if self.cancel.is_cancelled() {
             let next_step = &self.workflow.steps[progress.completed_steps];
+            let next_step_type = step_type_label(&next_step.kind);
             // Keep the "log begins with workflow_started" invariant even when
             // a cancel races ahead of the first step — emit WorkflowStarted
             // exactly once per session if it has not been emitted yet.
@@ -299,11 +352,11 @@ impl Engine {
             }
             self.emit(Event::StepFailed {
                 step_name: next_step.name.clone(),
-                step_type: "cmd".into(),
+                step_type: next_step_type.into(),
                 error: "Cancelled".into(),
                 duration_ms: 0,
                 timestamp: Utc::now(),
-                sandboxed: true,
+                sandboxed: matches!(next_step.kind, StepKind::Cmd),
             })
             .await?;
             self.finalise_cancel().await?;
@@ -311,6 +364,7 @@ impl Engine {
         }
 
         let step = &self.workflow.steps[progress.completed_steps].clone();
+        let step_type = step_type_label(&step.kind);
         let start = Instant::now();
 
         // Remember when the workflow actually started (first step).
@@ -325,7 +379,7 @@ impl Engine {
 
         self.emit(Event::StepStarted {
             step_name: step.name.clone(),
-            step_type: "cmd".into(),
+            step_type: step_type.into(),
             timestamp: Utc::now(),
         })
         .await?;
@@ -337,15 +391,52 @@ impl Engine {
         if self.cancel.is_cancelled() {
             self.emit(Event::StepFailed {
                 step_name: step.name.clone(),
-                step_type: "cmd".into(),
+                step_type: step_type.into(),
                 error: "Cancelled".into(),
                 duration_ms: start.elapsed().as_millis() as u64,
                 timestamp: Utc::now(),
-                sandboxed: true,
+                sandboxed: matches!(step.kind, StepKind::Cmd),
             })
             .await?;
             self.finalise_cancel().await?;
             return Ok(StepOutcome::Cancelled);
+        }
+
+        // Gate dispatch: pure template evaluation, no sandbox, no select.
+        // Lives here so the shared pre-step scaffolding (progress check,
+        // WorkflowStarted, StepStarted, cancel gates) stays the single
+        // source of truth; only the exec step itself forks by kind.
+        // PR 2 of Task #31.
+        if matches!(step.kind, StepKind::Gate) {
+            let step_index = progress.completed_steps as u32;
+            return self
+                .run_gate_step(step, &progress.outputs, start, step_index)
+                .await;
+        }
+
+        // Kinds other than Cmd/Gate are rejected by the adapter at the CLI
+        // boundary today. If an in-process caller (e.g. a future test)
+        // constructs one anyway, emit a structured StepFailed instead of
+        // silently dispatching the cmd path — a typed "not yet supported"
+        // outcome is easier to debug than a command with an empty string.
+        if !matches!(step.kind, StepKind::Cmd) {
+            let error = format!(
+                "step type `{step_type}` not yet supported in v2 engine — PR 2 of #31 ships cmd + gate only"
+            );
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error: error.clone(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            return Ok(StepOutcome::StepFailed {
+                step_name: step.name.clone(),
+                error,
+            });
         }
 
         // Resolve env BEFORE the exec select. Failure here is a user-config
@@ -526,6 +617,16 @@ impl Engine {
 
         match exec_result {
             Ok(output) if output.is_success() => {
+                // Persist stdout/stderr/exit_code in the session log so a later
+                // gate step's `{{ steps.X.stdout }}` survives a process crash
+                // and reloads via `progress_from_log` — without the snapshot
+                // the harness would need per-session memory between steps and
+                // break Invariante 11 on resume (PR 2 of Task #31).
+                let snapshot = stepyard_core::StepOutputSnapshot {
+                    stdout: output.stdout.clone(),
+                    stderr: output.stderr.clone(),
+                    exit_code: output.exit_code,
+                };
                 self.emit(Event::StepCompleted {
                     step_name: step.name.clone(),
                     step_type: "cmd".into(),
@@ -535,6 +636,7 @@ impl Engine {
                     output_tokens: None,
                     cost_usd: None,
                     sandboxed: true,
+                    output: Some(snapshot),
                 })
                 .await?;
                 Ok(StepOutcome::StepCompleted {
@@ -612,6 +714,141 @@ impl Engine {
         Ok(Self::new(config, session, workflow, lifecycle))
     }
 
+    /// Execute a [`StepKind::Gate`] step — render `condition` against the
+    /// cross-step outputs map + [`RunContext`], evaluate it as a boolean,
+    /// apply `on_pass` / `on_fail`, and emit `StepCompleted` or
+    /// `StepFailed` accordingly. PR 2 of Task #31.
+    ///
+    /// No sandbox, no tokio select — gate is pure in-memory evaluation on
+    /// the replay-safe outputs map. `outputs` is rebuilt from the session
+    /// log by [`Self::progress_from_log`] so a post-crash resume arrives
+    /// here with the same data the pre-crash run would have seen.
+    async fn run_gate_step(
+        &mut self,
+        step: &Step,
+        outputs: &HashMap<String, StepOutputSnapshot>,
+        start: Instant,
+        step_index: u32,
+    ) -> Result<StepOutcome, EngineError> {
+        let step_type = step_type_label(&step.kind);
+
+        // Validate config once, up front. These are validation errors, not
+        // runtime failures, and we want them surfaced before render even
+        // starts so a typo in on_pass / on_fail doesn't look like a
+        // template problem.
+        let on_pass = match GateAction::parse(step.on_pass.as_deref()) {
+            Ok(a) => a,
+            Err(e) => return self.emit_gate_failure(step, step_type, start, e.to_string()).await,
+        };
+        let on_fail = match GateAction::parse(step.on_fail.as_deref()) {
+            Ok(a) => a,
+            Err(e) => return self.emit_gate_failure(step, step_type, start, e.to_string()).await,
+        };
+        let Some(condition) = step.condition.as_deref().filter(|c| !c.trim().is_empty()) else {
+            let err = GateError::MissingCondition {
+                step: step.name.clone(),
+            };
+            return self
+                .emit_gate_failure(step, step_type, start, err.to_string())
+                .await;
+        };
+
+        let ctx = RenderContext {
+            steps: outputs,
+            target: &self.run_context.target,
+            vars: &self.run_context.vars,
+        };
+        let rendered = match render(condition, &ctx) {
+            Ok(s) => s,
+            Err(e) => {
+                return self
+                    .emit_gate_failure(step, step_type, start, e.to_string())
+                    .await
+            }
+        };
+        let passed = match evaluate_bool(&step.name, &rendered) {
+            Ok(b) => b,
+            Err(e) => {
+                return self
+                    .emit_gate_failure(step, step_type, start, e.to_string())
+                    .await
+            }
+        };
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+        match outcome_for(passed, on_pass, on_fail, step.message.as_deref()) {
+            GateOutcome::Continue => {
+                // `output: None` — gate produces no exec output; the
+                // snapshot slot exists for cmd steps only. Tokens and cost
+                // are also absent, matching the v1 gate executor's
+                // no-billable-IO semantics.
+                self.emit(Event::StepCompleted {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    input_tokens: None,
+                    output_tokens: None,
+                    cost_usd: None,
+                    sandboxed: false,
+                    output: None,
+                })
+                .await?;
+                Ok(StepOutcome::StepCompleted {
+                    step_name: step.name.clone(),
+                })
+            }
+            GateOutcome::Fail { message } => {
+                let _ = step_index; // reserved for a future typed termination reason
+                let error = GateError::Failed {
+                    step: step.name.clone(),
+                    message,
+                }
+                .to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                })
+            }
+        }
+    }
+
+    /// Shared emit helper for gate validation/render/eval errors —
+    /// keeps every bail-out branch in [`Self::run_gate_step`] a one-liner.
+    async fn emit_gate_failure(
+        &mut self,
+        step: &Step,
+        step_type: &'static str,
+        start: Instant,
+        error: String,
+    ) -> Result<StepOutcome, EngineError> {
+        let duration_ms = start.elapsed().as_millis() as u64;
+        self.emit(Event::StepFailed {
+            step_name: step.name.clone(),
+            step_type: step_type.into(),
+            error: error.clone(),
+            duration_ms,
+            timestamp: Utc::now(),
+            sandboxed: false,
+        })
+        .await?;
+        self.finalise_fail().await?;
+        Ok(StepOutcome::StepFailed {
+            step_name: step.name.clone(),
+            error,
+        })
+    }
+
     // ── Internals ───────────────────────────────────────────────────────
 
     async fn emit(&self, event: Event) -> Result<(), EngineError> {
@@ -626,13 +863,47 @@ impl Engine {
         let mut completed = 0usize;
         let mut has_failure = false;
         let mut last_failed: Option<String> = None;
+        // Rebuild the cross-step outputs map (PR 2 of Task #31) in the
+        // same scan as the progress counters — one pass of the log per
+        // `step()` call. Only cmd steps carry an output snapshot; gate
+        // steps emit `output: None` and contribute nothing here.
+        let mut outputs: HashMap<String, StepOutputSnapshot> = HashMap::new();
 
         for evt in events.iter() {
             let Some(tag) = evt.payload.get("event").and_then(|v| v.as_str()) else {
                 continue;
             };
             match tag {
-                "step_completed" => completed += 1,
+                "step_completed" => {
+                    completed += 1;
+                    let step_name = evt
+                        .payload
+                        .get("step_name")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    // Absent `output` stays OK — that's how log entries
+                    // written before the PR 2 widening look, and how gate
+                    // steps (`output: None`) look today. Present but
+                    // malformed must fail loudly: this payload now
+                    // participates in replay correctness, so silently
+                    // dropping it would make a gate in the rerun see a
+                    // different context than the gate in the original
+                    // run — the exact invariant this PR establishes.
+                    let snapshot = match evt.payload.get("output") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(raw) => Some(
+                            serde_json::from_value::<StepOutputSnapshot>(raw.clone())
+                                .map_err(|e| {
+                                    EngineError::InvalidState(format!(
+                                        "step_completed log entry has malformed `output` payload: {e}"
+                                    ))
+                                })?,
+                        ),
+                    };
+                    if let (Some(name), Some(snap)) = (step_name, snapshot) {
+                        outputs.insert(name, snap);
+                    }
+                }
                 "step_failed" => {
                     has_failure = true;
                     last_failed = evt
@@ -649,6 +920,7 @@ impl Engine {
             completed_steps: completed,
             has_failure,
             last_failed_step: last_failed,
+            outputs,
         })
     }
 
@@ -693,6 +965,12 @@ struct Progress {
     completed_steps: usize,
     has_failure: bool,
     last_failed_step: Option<String>,
+    /// Cross-step outputs map rebuilt from the session log on every
+    /// `progress_from_log` call. Gate steps read this to render
+    /// `{{ steps.X.stdout }}`; cmd steps don't consume it yet (the
+    /// template pass over `command` is deferred to a later PR of #31).
+    /// PR 2 of Task #31.
+    outputs: HashMap<String, StepOutputSnapshot>,
 }
 
 /// Which branch of the `step` loop's `tokio::select!` fired first.

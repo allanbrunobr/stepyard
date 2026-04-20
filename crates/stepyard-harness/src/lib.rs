@@ -29,12 +29,18 @@
 mod defaults;
 mod engine;
 mod executor;
+mod gate;
+mod render;
 pub mod startup;
 mod workflow;
 
 pub use defaults::Defaults;
-pub use engine::{resolve_env, CancelToken, Engine, EngineError, HarnessConfig, StepOutcome};
+pub use engine::{
+    resolve_env, CancelToken, Engine, EngineError, HarnessConfig, RunContext, StepOutcome,
+};
 pub use executor::StepExecutor;
+pub use gate::{GateAction, GateError, GateOutcome};
+pub use render::{render, RenderContext, RenderError};
 pub use workflow::{Scope, Step, StepKind, Workflow};
 
 // Re-export so callers matching on `EngineError::StepFailed.reason` don't
