@@ -22,7 +22,7 @@
 //!    wording places the function in `src/startup.rs`. It does — but as a
 //!    `pub use` re-export. The implementation lives in the harness crate so
 //!    `crates/stepyard-harness/tests/startup_reconcile.rs` can drive it
-//!    without introducing a circular `minion-engine → minion-harness`
+//!    without introducing a circular `stepyard-engine → stepyard-harness`
 //!    build dependency (the harness crate cannot depend on the binary).
 
 // `ReconcileError` is part of the public `reconcile` signature (it is the

@@ -1033,7 +1033,7 @@ pub async fn inspect(args: InspectArgs) -> anyhow::Result<()> {
 
 /// Default content for a new ~/.stepyard/defaults.yaml
 const USER_DEFAULTS_TEMPLATE: &str = r#"# ============================================================
-# Minion Engine — User Default Configuration
+# Stepyard — User Default Configuration
 # ============================================================
 #
 # This file overrides the built-in defaults for ALL workflows.

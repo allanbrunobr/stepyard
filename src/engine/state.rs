@@ -24,16 +24,16 @@ impl WorkflowState {
         }
     }
 
-    /// Build a timestamped state file path: /tmp/minion-<workflow>-<timestamp>.state.json
+    /// Build a timestamped state file path: /tmp/stepyard-<workflow>-<timestamp>.state.json
     pub fn state_file_path(workflow: &str) -> PathBuf {
         let ts = chrono::Utc::now().format("%Y%m%d%H%M%S");
         let slug = workflow.replace(' ', "_");
-        PathBuf::from(format!("/tmp/minion-{slug}-{ts}.state.json"))
+        PathBuf::from(format!("/tmp/stepyard-{slug}-{ts}.state.json"))
     }
 
     /// Find the most recently modified state file for a workflow in /tmp
     pub fn find_latest(workflow: &str) -> Option<PathBuf> {
-        let prefix = format!("minion-{}-", workflow.replace(' ', "_"));
+        let prefix = format!("stepyard-{}-", workflow.replace(' ', "_"));
         let suffix = ".state.json";
 
         std::fs::read_dir("/tmp")
@@ -102,7 +102,7 @@ mod tests {
     fn state_file_path_contains_workflow_name() {
         let path = WorkflowState::state_file_path("fix-issue");
         let name = path.file_name().unwrap().to_string_lossy();
-        assert!(name.starts_with("minion-fix-issue-"));
+        assert!(name.starts_with("stepyard-fix-issue-"));
         assert!(name.ends_with(".state.json"));
     }
 

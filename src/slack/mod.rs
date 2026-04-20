@@ -1,4 +1,4 @@
-//! Minion Slack Bot — listens for @stepyard mentions and dispatches workflows
+//! Stepyard Slack Bot — listens for @stepyard mentions and dispatches workflows
 //!
 //! Enable with: cargo install minion-engine --features slack
 //!
@@ -441,7 +441,7 @@ async fn slack_events(
 }
 
 async fn health() -> &'static str {
-    "minion-slack ok"
+    "stepyard-slack ok"
 }
 
 // ── Public entry point ──────────────────────────────────────────────────────
@@ -544,10 +544,10 @@ fn resolve_workflows_dir() -> String {
 pub async fn start_server(port: u16) -> anyhow::Result<()> {
     let (bot_token, signing_secret, workflows_dir) = load_slack_config();
 
-    info!(workflows_dir = %workflows_dir, port = port, "Starting Minion Slack Bot");
+    info!(workflows_dir = %workflows_dir, port = port, "Starting Stepyard Slack Bot");
 
     println!();
-    println!("\x1b[1m🤖 Minion Slack Bot\x1b[0m");
+    println!("\x1b[1m🤖 Stepyard Slack Bot\x1b[0m");
     println!("  Workflows: {}", workflows_dir);
     println!("  Port:      {}", port);
     println!();

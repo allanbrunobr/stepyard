@@ -356,7 +356,7 @@ impl Engine {
         // In repo mode, use a minimal temp dir as workspace (the real repo
         // will be cloned inside the container). Otherwise, use the host CWD.
         let effective_workspace = if is_repo_mode {
-            let tmp = std::env::temp_dir().join("minion-repo-workspace");
+            let tmp = std::env::temp_dir().join("stepyard-repo-workspace");
             std::fs::create_dir_all(&tmp).ok();
             // Initialize a bare git repo so the sandbox doesn't complain
             let _ = std::process::Command::new("git")
@@ -436,8 +436,8 @@ impl Engine {
         let _ = docker
             .run_command(
                 "git config --global --add safe.directory /workspace \
-                 && git config --global user.name 'Minion Engine' \
-                 && git config --global user.email 'minion@localhost' \
+                 && git config --global user.name 'Stepyard' \
+                 && git config --global user.email 'stepyard@localhost' \
                  && if [ -n \"$GH_TOKEN\" ]; then \
                       git config --global credential.helper '!f() { echo \"password=$GH_TOKEN\"; }; f'; \
                       git config --global credential.https://github.com.username x-access-token; \
@@ -452,8 +452,8 @@ impl Engine {
                 "if id minion >/dev/null 2>&1; then \
                    chown -R minion:minion /workspace 2>/dev/null; \
                    su - minion -c 'git config --global --add safe.directory /workspace \
-                     && git config --global user.name \"Minion Engine\" \
-                     && git config --global user.email \"minion@localhost\"'; \
+                     && git config --global user.name \"Stepyard\" \
+                     && git config --global user.email \"stepyard@localhost\"'; \
                    if [ -n \"$GH_TOKEN\" ]; then \
                      su - minion -c \"git config --global credential.helper '!f() { echo password=\\$GH_TOKEN; }; f' \
                        && git config --global credential.https://github.com.username x-access-token\"; \
@@ -1721,7 +1721,7 @@ steps:
     async fn resume_fails_for_unknown_step() {
         let workflow_name = "test-resume-unknown-step";
         let state = WorkflowState::new(workflow_name);
-        let tmp_path = format!("/tmp/minion-{workflow_name}-20991231235959.state.json");
+        let tmp_path = format!("/tmp/stepyard-{workflow_name}-20991231235959.state.json");
         let path = PathBuf::from(&tmp_path);
         state.save(&path).unwrap();
 
