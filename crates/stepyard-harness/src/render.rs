@@ -1,9 +1,11 @@
 //! Harness-local Tera renderer for gate conditions and cross-step refs.
 //!
 //! PR 2 of Task #31. The v2 engine needs a minimal template pass so gate
-//! conditions like `{{ steps.build.exit_code }} == 0` and cmd `command`
-//! fields referencing `{{ target }}` or `{{ vars.X }}` resolve to concrete
-//! strings before execution.
+//! conditions like `{{ steps.build.exit_code }} == 0` resolve to concrete
+//! strings before evaluation. PR 2 wires this renderer only into
+//! `gate.condition`; rendering `cmd.command` (and `env` values) is
+//! deferred to a later PR — the context shape here already carries the
+//! fields those sites will need.
 //!
 //! # Scope
 //!

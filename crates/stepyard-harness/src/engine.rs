@@ -881,11 +881,25 @@ impl Engine {
                         .get("step_name")
                         .and_then(|v| v.as_str())
                         .map(str::to_string);
-                    let snapshot = evt
-                        .payload
-                        .get("output")
-                        .cloned()
-                        .and_then(|v| serde_json::from_value::<StepOutputSnapshot>(v).ok());
+                    // Absent `output` stays OK — that's how log entries
+                    // written before the PR 2 widening look, and how gate
+                    // steps (`output: None`) look today. Present but
+                    // malformed must fail loudly: this payload now
+                    // participates in replay correctness, so silently
+                    // dropping it would make a gate in the rerun see a
+                    // different context than the gate in the original
+                    // run — the exact invariant this PR establishes.
+                    let snapshot = match evt.payload.get("output") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(raw) => Some(
+                            serde_json::from_value::<StepOutputSnapshot>(raw.clone())
+                                .map_err(|e| {
+                                    EngineError::InvalidState(format!(
+                                        "step_completed log entry has malformed `output` payload: {e}"
+                                    ))
+                                })?,
+                        ),
+                    };
                     if let (Some(name), Some(snap)) = (step_name, snapshot) {
                         outputs.insert(name, snap);
                     }

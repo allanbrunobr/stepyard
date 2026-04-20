@@ -403,3 +403,53 @@ async fn gate_non_boolean_condition_is_structured_step_failure() {
         }
     });
 }
+
+#[tokio::test]
+async fn malformed_output_in_log_fails_replay_loudly() {
+    // Absent `output` must stay OK (older log entries + gate completions
+    // both look that way). A *present but malformed* `output` must fail
+    // loudly — the outputs map now participates in replay correctness,
+    // so silently dropping it would let a gate in the rerun see a
+    // different context than the gate in the original run.
+    db_test!(pool, {
+        let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("session");
+
+        // Poison the log with a step_completed payload whose `output`
+        // field is a string instead of a StepOutputSnapshot object.
+        session
+            .append(serde_json::json!({
+                "event": "step_completed",
+                "step_index": 0,
+                "step_name": "build",
+                "step_type": "cmd",
+                "duration_ms": 1,
+                "timestamp": "2025-01-01T00:00:00Z",
+                "sandboxed": true,
+                "output": "not-a-snapshot-object",
+            }))
+            .await
+            .expect("poison log");
+
+        let executor = Arc::new(ScriptedExecutor::new());
+        let wf = build_then_gate("{{ steps.build.exit_code }} == 0", "continue", "fail");
+        let mut engine = Engine::with_executor(
+            HarnessConfig::default(),
+            session,
+            wf,
+            lifecycle(),
+            executor,
+        );
+
+        let err = engine
+            .step()
+            .await
+            .expect_err("malformed output must surface as an engine error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("malformed `output`"),
+            "expected replay to fail loudly, got: {msg}"
+        );
+    });
+}
