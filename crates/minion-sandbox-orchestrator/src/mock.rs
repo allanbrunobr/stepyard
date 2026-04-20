@@ -179,7 +179,7 @@ mod tests {
     #[tokio::test]
     async fn exec_with_env_records_full_env_pairs() {
         // AC5: calling exec_with_env on MockLifecycle records the exact env
-        // map — a default impl that silently drops env would fail this.
+        // map — an impl that silently drops env would fail this.
         let mock = MockLifecycle::new();
         let id = SandboxId::new();
         let mut env = HashMap::new();
@@ -201,54 +201,5 @@ mod tests {
         assert_eq!(rec_id, id);
         assert_eq!(rec_cmd, cmd);
         assert_eq!(rec_env, env);
-    }
-
-    type ExecLog = Arc<Mutex<Vec<(SandboxId, Vec<String>)>>>;
-
-    /// Stub that implements `exec` but deliberately does NOT override
-    /// `exec_with_env`. Used to prove the default impl delegates to `exec`.
-    #[derive(Default)]
-    struct StubLifecycle {
-        exec_calls: ExecLog,
-    }
-
-    #[async_trait]
-    impl SandboxLifecycle for StubLifecycle {
-        async fn create(&self, _session_id: Uuid) -> Result<Sandbox, SandboxError> {
-            unreachable!("stub is not used via create in these tests")
-        }
-
-        async fn destroy(&self, _id: &SandboxId) -> Result<(), SandboxError> {
-            Ok(())
-        }
-
-        async fn exec(&self, id: &SandboxId, cmd: &[String]) -> Result<ExecOutput, SandboxError> {
-            self.exec_calls.lock().await.push((*id, cmd.to_vec()));
-            Ok(ExecOutput {
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: 0,
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn default_exec_with_env_delegates_to_exec() {
-        // AC6: a type that does NOT override exec_with_env sees its `exec`
-        // called by the trait default (env is dropped, backward-compat).
-        let stub = StubLifecycle::default();
-        let id = SandboxId::new();
-        let mut env = HashMap::new();
-        env.insert("DROPPED".to_string(), "ignored".to_string());
-        let cmd = vec!["true".to_string()];
-
-        stub.exec_with_env(&id, &cmd, &env)
-            .await
-            .expect("default delegation");
-
-        let recorded = stub.exec_calls.lock().await;
-        assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].0, id);
-        assert_eq!(recorded[0].1, cmd);
     }
 }

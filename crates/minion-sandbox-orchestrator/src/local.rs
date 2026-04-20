@@ -7,6 +7,7 @@
 //! Trades the container isolation guarantees for simpler local runs. Callers
 //! that need isolation must pick [`crate::DockerLifecycle`] instead.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -60,6 +61,29 @@ impl SandboxLifecycle for LocalShellLifecycle {
             exit_code: output.status.code().unwrap_or(-1),
         })
     }
+
+    async fn exec_with_env(
+        &self,
+        _id: &SandboxId,
+        cmd: &[String],
+        env: &HashMap<String, String>,
+    ) -> Result<ExecOutput, SandboxError> {
+        if cmd.is_empty() {
+            return Err(SandboxError::ExecFailed("empty argv".into()));
+        }
+        let output = Command::new(&cmd[0])
+            .args(&cmd[1..])
+            .envs(env)
+            .kill_on_drop(true)
+            .output()
+            .await
+            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+        Ok(ExecOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
 }
 
 struct LocalShellExec;
@@ -102,5 +126,21 @@ mod tests {
         let sandbox = lifecycle.create(Uuid::new_v4()).await.unwrap();
         let output = sandbox.exec("exit 7").await.unwrap();
         assert_eq!(output.exit_code, 7);
+    }
+
+    #[tokio::test]
+    async fn exec_with_env_propagates_pairs_to_child_process() {
+        let lifecycle = LocalShellLifecycle::new();
+        let id = SandboxId::new();
+        let mut env = HashMap::new();
+        env.insert("LOCAL_SHELL_TEST_VAR".to_string(), "propagated".to_string());
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf %s \"$LOCAL_SHELL_TEST_VAR\"".to_string(),
+        ];
+        let output = lifecycle.exec_with_env(&id, &cmd, &env).await.unwrap();
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout, "propagated");
     }
 }
