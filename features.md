@@ -52,27 +52,27 @@
 ## Feature 10: Extend SandboxLifecycle Trait with exec_with_env Default-Impl Method
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.1] As an engine maintainer, I want SandboxLifecycle to gain exec_with_env(id, cmd, env) as a default-impl method delegating to exec(id, cmd) (ignoring env), so that Epic 3 can inject env vars via the new method without changing the existing exec signature. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 4
-- Status: in_progress
+- Status: done
 
 ## Feature 11: Implement DockerLifecycle::exec_with_env with Argv-Only --env Flags
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.2] As an engine maintainer, I want DockerLifecycle to override exec_with_env with docker exec --env K=V argv-only invocations (one --env per pair, sorted), so that env vars pass as argv elements and are never shell-interpolated (argv-not-shell rule). Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 10
-- Status: in_progress
+- Status: done
 
 ## Feature 12: Extend Workflow YAML Schema with env: Fields and .stepyard/defaults.yaml Loader
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.3] As a workflow author, I want step-level env: {KEY: VAL} and workflow-level env: {KEY: VAL} in YAML plus a .stepyard/defaults.yaml file contributing default env pairs, so that I can parameterize secrets and config per step, per workflow, or project-wide. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 11
-- Status: in_progress
+- Status: done
 
 ## Feature 13: Cascade Resolver in Engine::prepare_step with ${VAR} Host Expansion
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.4] As an engine runtime, I want Engine::prepare_step to resolve the effective env by overlaying step > workflow > defaults.yaml and expanding ${VAR} against host env, so that one workflow YAML declares opt-in env with clear precedence and secrets flow through without full host passthrough. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 12
-- Status: in_progress
+- Status: done
 
 ## Feature 14: Negative-Control Security Tests in tests/injection_negative.rs
 - Description: [Epic 3: Sandbox Environment Injection, Story 3.5] As a security reviewer, I want a dedicated negative-control test file proving user env values reach the container as argv (never executed as shell) and that sh -c IS user-owned, so that any future regression reintroducing shell interpolation is caught at CI time. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 13
-- Status: in_progress
+- Status: done
 
 ## Feature 15: Define WorkspaceManager Trait and GitWorktreeManager Skeleton
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.1] As an engine maintainer, I want a WorkspaceManager trait in stepyard-sandbox-orchestrator/src/workspace.rs and a GitWorktreeManager struct with stub method bodies, so that subsequent stories fill in prepare/finalize/prune against a stable trait contract without a new crate. Source: _bmad-output/sandcastle-features/epics.md
