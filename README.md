@@ -1,6 +1,6 @@
 # Stepyard
 
-![Stepyard High-Level Architecture](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-high-level.jpg)
+![Stepyard High-Level Architecture](https://raw.githubusercontent.com/allanbrunobr/stepyard/main/docs/architecture-high-level.jpg)
 
 **Run AI workflows in Docker. Define steps in YAML. No surprises.**
 
@@ -64,7 +64,7 @@ brew tap allanbrunobr/minion-engine https://github.com/allanbrunobr/homebrew-min
 brew install minion-engine
 
 #   (b) Pre-compiled binary (no Rust required) — see GitHub Releases
-#       https://github.com/allanbrunobr/minion-engine/releases/latest
+#       https://github.com/allanbrunobr/stepyard/releases/latest
 
 #   (c) From source (Rust toolchain required)
 cargo install minion-engine
@@ -108,7 +108,7 @@ All workflows are YAML files you can customize or create from scratch.
 
 ### 🐳 Docker Sandbox (default)
 
-![Secure Docker Sandbox Workflow](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-docker-sandbox.jpg)
+![Secure Docker Sandbox Workflow](https://raw.githubusercontent.com/allanbrunobr/stepyard/main/docs/architecture-docker-sandbox.jpg)
 
 Every workflow runs inside an isolated Docker container. Your project is copied in, the AI works in isolation, and only the results come back. If anything goes wrong, the container is destroyed — zero impact on your project.
 
@@ -116,7 +116,7 @@ Every workflow runs inside an isolated Docker container. Your project is copied 
 
 API keys **never enter the container**. Stepyard runs a host-side reverse proxy that intercepts API calls from inside the sandbox and injects authentication headers on-the-fly:
 
-![Secure API Proxy Mechanism](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-api-proxy.jpg)
+![Secure API Proxy Mechanism](https://raw.githubusercontent.com/allanbrunobr/stepyard/main/docs/architecture-api-proxy.jpg)
 
 - The container only sees `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>`
 - `ANTHROPIC_API_KEY` stays on the host machine — never exposed as a container env var
@@ -343,7 +343,7 @@ steps:
 
 ## Slack Bot Integration
 
-![Slack Bot Interaction Flow](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/slack.jpg)
+![Slack Bot Interaction Flow](https://raw.githubusercontent.com/allanbrunobr/stepyard/main/docs/slack.jpg)
 
 Trigger Stepyard workflows from Slack by mentioning the bot:
 
@@ -491,8 +491,8 @@ Then mention it:
 Issues and PRs are welcome. To run the project locally:
 
 ```bash
-git clone https://github.com/allanbrunobr/minion-engine
-cd minion-engine
+git clone https://github.com/allanbrunobr/stepyard
+cd stepyard
 cargo build
 cargo test
 ```
