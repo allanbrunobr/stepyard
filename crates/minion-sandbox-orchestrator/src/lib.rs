@@ -76,19 +76,16 @@ pub trait SandboxLifecycle: Send + Sync {
     /// No env injection — callers that need env pairs use [`exec_with_env`].
     async fn exec(&self, id: &SandboxId, cmd: &[String]) -> Result<ExecOutput, SandboxError>;
 
-    /// Execute `cmd` with a structured env map. Default impl drops `env` and
-    /// delegates to [`exec`] — backends that care about env injection
-    /// (Docker, Story 3.2) override this. D3: additive extension, preserves
-    /// backward compat for unmigrated impls (NFR22).
+    /// Execute `cmd` with a structured env map inside the sandbox `id`.
+    /// Required — no default impl, because a default that delegates to
+    /// [`exec`] silently drops `env`, a production-visible bug. Every
+    /// backend must decide explicitly how to propagate env pairs.
     async fn exec_with_env(
         &self,
         id: &SandboxId,
         cmd: &[String],
         env: &HashMap<String, String>,
-    ) -> Result<ExecOutput, SandboxError> {
-        let _ = env;
-        self.exec(id, cmd).await
-    }
+    ) -> Result<ExecOutput, SandboxError>;
 
     /// Return the live sandbox for this session if one already exists,
     /// otherwise create a new one. The default impl just calls `create` —
