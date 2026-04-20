@@ -33,7 +33,7 @@ fn v2_executes_cmd_only_workflow_to_completion() {
             "v2",
         ])
         .env("DATABASE_URL", &url)
-        .env("MINION_TENANT", &tenant)
+        .env("STEPYARD_TENANT", &tenant)
         .assert()
         .success();
 }
@@ -58,7 +58,7 @@ fn v2_rejects_workflow_with_unsupported_step_type() {
             "v2",
         ])
         .env("DATABASE_URL", &url)
-        .env("MINION_TENANT", &tenant)
+        .env("STEPYARD_TENANT", &tenant)
         .assert()
         .failure()
         .stderr(predicates::str::contains("not yet supported"));
@@ -83,7 +83,7 @@ fn default_engine_is_v1_and_still_works() {
             "--no-sandbox",
         ])
         .env("DATABASE_URL", &url)
-        .env("MINION_TENANT", &tenant)
+        .env("STEPYARD_TENANT", &tenant)
         .assert()
         .success();
 }

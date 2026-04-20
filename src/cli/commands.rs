@@ -213,7 +213,7 @@ async fn execute_v2(
     };
 
     let config = HarnessConfig {
-        tenant_id: std::env::var("MINION_TENANT").unwrap_or_else(|_| "default".into()),
+        tenant_id: std::env::var("STEPYARD_TENANT").unwrap_or_else(|_| "default".into()),
         shutdown_tx,
         shutdown_signal,
         ..HarnessConfig::default()

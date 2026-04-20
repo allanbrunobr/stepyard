@@ -7,7 +7,7 @@
 //! that a cancel signal does not contaminate its siblings (Invariante 9,
 //! NFC2).
 //!
-//! Skipped gracefully if `MINION_HARNESS_DATABASE_URL` is unset.
+//! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("MINION_HARNESS_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_HARNESS_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(32) // 10 sessions × ~2 connections each with headroom
         .connect(&url)
@@ -42,7 +42,7 @@ fn five_step_workflow(prefix: &str) -> Workflow {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
     let Some(pool) = pool().await else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 

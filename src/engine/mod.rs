@@ -202,8 +202,8 @@ impl Engine {
                 tracing::info!(path = %file_path, "Registered file event subscriber");
             }
             if let Some(ref dashboard_cfg) = events_cfg.dashboard {
-                // Resolve user_name: env MINION_USER > git user.name > "unknown"
-                let user_name = std::env::var("MINION_USER").unwrap_or_else(|_| {
+                // Resolve user_name: env STEPYARD_USER > git user.name > "unknown"
+                let user_name = std::env::var("STEPYARD_USER").unwrap_or_else(|_| {
                     std::process::Command::new("git")
                         .args(["config", "user.name"])
                         .output()

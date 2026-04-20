@@ -15,7 +15,7 @@
 //! so the Rule 7a invariant (deterministic, no time-waste) is satisfied on
 //! real time without `start_paused`.
 //!
-//! Skipped gracefully if `MINION_HARNESS_DATABASE_URL` is unset.
+//! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
 
 use std::sync::Arc;
 
@@ -27,7 +27,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("MINION_HARNESS_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_HARNESS_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&url)
@@ -40,7 +40,7 @@ async fn pool() -> Option<sqlx::PgPool> {
 #[tokio::test]
 async fn every_engine_subscribes_to_shared_shutdown_tx() {
     let Some(pool) = pool().await else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 

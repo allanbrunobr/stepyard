@@ -10,7 +10,7 @@
 //! # Running
 //!
 //! Integration-tier: requires a live Docker daemon. Gated behind
-//! `MINION_TEST_DOCKER=1` (matches the convention established in
+//! `STEPYARD_TEST_DOCKER=1` (matches the convention established in
 //! `crates/minion-sandbox-orchestrator/tests/exec_with_env_docker.rs`).
 //! Tests early-return without failure when the flag is not set, so CI
 //! without Docker skips them gracefully.
@@ -43,7 +43,7 @@ use uuid::Uuid;
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn docker_enabled() -> bool {
-    std::env::var("MINION_TEST_DOCKER")
+    std::env::var("STEPYARD_TEST_DOCKER")
         .map(|v| v == "1")
         .unwrap_or(false)
 }
@@ -105,7 +105,7 @@ async fn teardown(name: &str) {
 #[tokio::test]
 async fn positive_control_host_filesystem_untouched() {
     if !docker_enabled() {
-        eprintln!("[skip] MINION_TEST_DOCKER not set to 1");
+        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
         return;
     }
 
@@ -164,7 +164,7 @@ async fn positive_control_host_filesystem_untouched() {
 async fn negative_control_user_owned_sh_c_expansion() {
     // Escape hatch behavior — user chose sh -c, user owns expansion safety
     if !docker_enabled() {
-        eprintln!("[skip] MINION_TEST_DOCKER not set to 1");
+        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
         return;
     }
 

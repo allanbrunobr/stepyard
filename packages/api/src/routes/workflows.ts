@@ -295,7 +295,7 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
   }
 
   const { workflow, target, repo, branch, vars } = parsed.data;
-  const workflowsDir = process.env.MINION_WORKFLOWS_DIR || '/root/.minion/workflows';
+  const workflowsDir = process.env.STEPYARD_WORKFLOWS_DIR || '/root/.minion/workflows';
   const workflowFile = join(workflowsDir, `${workflow}.yaml`);
 
   if (!existsSync(workflowFile)) {
@@ -319,17 +319,17 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
   minionArgs.push(workflowFile, '--', target);
 
   // Two deploy modes:
-  //   1. `MINION_DISPATCH_SSH_HOST` set → SSH back to host, run minion there
+  //   1. `STEPYARD_DISPATCH_SSH_HOST` set → SSH back to host, run minion there
   //      (used when the API runs in a container that doesn't have minion installed)
   //   2. otherwise → spawn `minion` directly from $PATH
-  const sshHost = process.env.MINION_DISPATCH_SSH_HOST;
+  const sshHost = process.env.STEPYARD_DISPATCH_SSH_HOST;
   const [binary, args] = sshHost
     ? buildSshCommand(sshHost, minionArgs)
-    : [process.env.MINION_BINARY || 'minion', minionArgs];
+    : [process.env.STEPYARD_BINARY || 'minion', minionArgs];
 
   // Log file for the detached process. Persists after the api request returns
   // so operators can inspect failures post-hoc. Written to /tmp; container-local.
-  const logDir = process.env.MINION_DISPATCH_LOG_DIR || '/tmp';
+  const logDir = process.env.STEPYARD_DISPATCH_LOG_DIR || '/tmp';
   try { mkdirSync(logDir, { recursive: true }); } catch {}
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const logPath = join(logDir, `minion-dispatch-${ts}-${process.pid}.log`);
@@ -376,16 +376,16 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
 /**
  * Wrap a minion invocation in an SSH call. The remote side runs the engine
  * via `bash -lc '<envs> exec minion ...'` so the host's PATH is loaded and
- * workflow-level env vars are forwarded from MINION_SSH_ENV_FORWARD.
+ * workflow-level env vars are forwarded from STEPYARD_SSH_ENV_FORWARD.
  *
- * MINION_SSH_ENV_FORWARD accepts a comma-separated list of:
+ * STEPYARD_SSH_ENV_FORWARD accepts a comma-separated list of:
  *   - `NAME`          → forward `NAME=$NAME` (simple)
  *   - `NAME:SOURCE`   → forward `NAME=$SOURCE` (remap — e.g. when the api
  *                       container's DATABASE_URL points at `db` but the host
  *                       needs `localhost`)
  */
 function buildSshCommand(sshHost: string, minionArgs: string[]): [string, string[]] {
-  const forward = (process.env.MINION_SSH_ENV_FORWARD || '')
+  const forward = (process.env.STEPYARD_SSH_ENV_FORWARD || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -400,7 +400,7 @@ function buildSshCommand(sshHost: string, minionArgs: string[]): [string, string
   // Ensure a clean git-enabled CWD for the engine. Required when not in --repo
   // mode because minion's sandbox_up expects a git repo to copy as workspace.
   // The dir is created idempotently and reused across dispatches.
-  const ws = process.env.MINION_DISPATCH_WORKSPACE || '/tmp/minion-dispatch-ws';
+  const ws = process.env.STEPYARD_DISPATCH_WORKSPACE || '/tmp/minion-dispatch-ws';
   const prep = [
     `mkdir -p ${shellQuote(ws)}`,
     `cd ${shellQuote(ws)}`,
@@ -409,7 +409,7 @@ function buildSshCommand(sshHost: string, minionArgs: string[]): [string, string
   // Use an absolute path so we don't rely on the login shell's PATH order.
   // Some hosts have multiple minion binaries (e.g. ~/.cargo/bin vs /usr/local/bin)
   // which may be different versions.
-  const minionBin = process.env.MINION_HOST_BINARY || '/usr/local/bin/minion';
+  const minionBin = process.env.STEPYARD_HOST_BINARY || '/usr/local/bin/minion';
   const remoteCmd = `${prep} && ${exports.join(' ')} exec ${shellQuote(minionBin)} ${minionArgs.map(shellQuote).join(' ')}`;
   // ssh concatenates remote argv with spaces before feeding it to the remote
   // shell, which then re-parses. Pass the bash invocation as ONE argument so

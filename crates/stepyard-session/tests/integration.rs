@@ -1,5 +1,5 @@
 //! Integration tests exercising the full append/replay/load contract against
-//! a real PostgreSQL. Skipped (without failing) when `MINION_SESSION_DATABASE_URL`
+//! a real PostgreSQL. Skipped (without failing) when `STEPYARD_SESSION_DATABASE_URL`
 //! is not set so `cargo test` stays green in CI without a DB sidecar.
 //!
 //! To run against a local database:
@@ -7,7 +7,7 @@
 //! ```shell
 //! docker run --rm -d --name pg-session -e POSTGRES_PASSWORD=pg \
 //!     -p 5433:5432 postgres:16-alpine
-//! export MINION_SESSION_DATABASE_URL=postgres://postgres:pg@localhost:5433/postgres
+//! export STEPYARD_SESSION_DATABASE_URL=postgres://postgres:pg@localhost:5433/postgres
 //! cargo test -p minion-session --test integration
 //! ```
 //!
@@ -23,12 +23,12 @@ use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("MINION_SESSION_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_SESSION_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(8)
         .connect(&url)
         .await
-        .expect("MINION_SESSION_DATABASE_URL set but unreachable");
+        .expect("STEPYARD_SESSION_DATABASE_URL set but unreachable");
     migrate(&pool).await.expect("migrations must succeed");
     Some(pool)
 }
@@ -36,7 +36,7 @@ async fn pool() -> Option<sqlx::PgPool> {
 macro_rules! db_test {
     ($pool:ident, $body:block) => {{
         let Some($pool) = pool().await else {
-            eprintln!("[skip] MINION_SESSION_DATABASE_URL not set");
+            eprintln!("[skip] STEPYARD_SESSION_DATABASE_URL not set");
             return;
         };
         $body

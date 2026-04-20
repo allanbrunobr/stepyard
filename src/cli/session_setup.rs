@@ -74,7 +74,7 @@ pub async fn open_session_with_pool(
     // the same workflow name always maps to the same workflow_id row. A real
     // workflows table (Story 2.x) will replace this with an opaque lookup.
     let workflow_id = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, workflow_name.as_bytes());
-    let tenant_id = std::env::var("MINION_TENANT").unwrap_or_else(|_| "default".to_string());
+    let tenant_id = std::env::var("STEPYARD_TENANT").unwrap_or_else(|_| "default".to_string());
 
     stepyard_session::Session::new(pool, workflow_id, tenant_id)
         .await

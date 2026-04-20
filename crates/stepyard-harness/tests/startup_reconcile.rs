@@ -15,7 +15,7 @@
 //!   (NFR12 idempotency).
 //!
 //! Skipped gracefully (printed `[skip]` + `return`) when:
-//! * `MINION_HARNESS_DATABASE_URL` is unset.
+//! * `STEPYARD_HARNESS_DATABASE_URL` is unset.
 //! * the `docker` CLI is missing or cannot reach the daemon.
 //!
 //! Every `tokio::process::Command` is wrapped in `tokio::time::timeout(..)`
@@ -38,7 +38,7 @@ use uuid::Uuid;
 const CMD_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("MINION_HARNESS_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_HARNESS_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&url)
@@ -127,7 +127,7 @@ async fn container_alive(name: &str) -> bool {
 #[tokio::test(flavor = "current_thread")]
 async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
     let Some(pool) = pool().await else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
     if !docker_available().await {
