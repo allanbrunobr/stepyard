@@ -12,7 +12,7 @@ const navItems = [
 export function Sidebar() {
   return (
     <aside className="w-60 border-r bg-card min-h-screen p-4">
-      <h2 className="text-lg font-bold mb-6 px-2">Minion Dashboard</h2>
+      <h2 className="text-lg font-bold mb-6 px-2">Stepyard Dashboard</h2>
       <nav className="flex flex-col gap-1">
         {navItems.map(({ to, label, icon: Icon }) => (
           <NavLink

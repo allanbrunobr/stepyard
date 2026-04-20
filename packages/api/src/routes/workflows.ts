@@ -104,7 +104,7 @@ workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => 
 
   const fromDate = from ?? 'all';
   const toDate = to ?? 'all';
-  const filename = `minion-dashboard-export-${fromDate}-to-${toDate}.csv`;
+  const filename = `stepyard-dashboard-export-${fromDate}-to-${toDate}.csv`;
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -308,35 +308,37 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
     return;
   }
 
-  const minionArgs: string[] = ['execute'];
-  if (repo) minionArgs.push('--repo', repo);
-  if (branch) minionArgs.push('--var', `branch=${branch}`);
+  const stepyardArgs: string[] = ['execute'];
+  if (repo) stepyardArgs.push('--repo', repo);
+  if (branch) stepyardArgs.push('--var', `branch=${branch}`);
   if (vars) {
     for (const [k, v] of Object.entries(vars)) {
-      minionArgs.push('--var', `${k}=${v}`);
+      stepyardArgs.push('--var', `${k}=${v}`);
     }
   }
-  minionArgs.push(workflowFile, '--', target);
+  stepyardArgs.push(workflowFile, '--', target);
 
   // Two deploy modes:
-  //   1. `STEPYARD_DISPATCH_SSH_HOST` set → SSH back to host, run minion there
-  //      (used when the API runs in a container that doesn't have minion installed)
-  //   2. otherwise → spawn `minion` directly from $PATH
+  //   1. `STEPYARD_DISPATCH_SSH_HOST` set → SSH back to host, run stepyard there
+  //      (used when the API runs in a container that doesn't have stepyard installed)
+  //   2. otherwise → spawn `stepyard` directly from $PATH
+  // NOTE: Default binary name is still 'minion' until the VPS migration flips
+  // the installed binary — override with STEPYARD_BINARY=stepyard once deployed.
   const sshHost = process.env.STEPYARD_DISPATCH_SSH_HOST;
   const [binary, args] = sshHost
-    ? buildSshCommand(sshHost, minionArgs)
-    : [process.env.STEPYARD_BINARY || 'minion', minionArgs];
+    ? buildSshCommand(sshHost, stepyardArgs)
+    : [process.env.STEPYARD_BINARY || 'minion', stepyardArgs];
 
   // Log file for the detached process. Persists after the api request returns
   // so operators can inspect failures post-hoc. Written to /tmp; container-local.
   const logDir = process.env.STEPYARD_DISPATCH_LOG_DIR || '/tmp';
   try { mkdirSync(logDir, { recursive: true }); } catch {}
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const logPath = join(logDir, `minion-dispatch-${ts}-${process.pid}.log`);
+  const logPath = join(logDir, `stepyard-dispatch-${ts}-${process.pid}.log`);
 
   logger.info(
     { binary, args, workflow, target, repo, branch, sshHost: !!sshHost, logPath },
-    'Dispatching minion run',
+    'Dispatching stepyard run',
   );
 
   try {
@@ -347,13 +349,13 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
       env: process.env,
     });
     child.on('error', (err) => {
-      logger.error({ err, args }, 'Spawned minion emitted error event');
+      logger.error({ err, args }, 'Spawned stepyard emitted error event');
     });
     child.unref();
     closeSync(logFd);
     const pid = child.pid;
     if (typeof pid !== 'number') {
-      res.status(500).json({ error: { code: 'SPAWN_FAILED', message: 'Failed to spawn minion (no pid)' } });
+      res.status(500).json({ error: { code: 'SPAWN_FAILED', message: 'Failed to spawn stepyard (no pid)' } });
       return;
     }
     res.status(202).json({
@@ -366,7 +368,7 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
       log: logPath,
     });
   } catch (err) {
-    logger.error({ err, args }, 'Failed to spawn minion');
+    logger.error({ err, args }, 'Failed to spawn stepyard');
     res.status(500).json({ error: { code: 'SPAWN_FAILED', message: (err as Error).message } });
   }
 });
@@ -374,8 +376,8 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
 // --- Helpers ---
 
 /**
- * Wrap a minion invocation in an SSH call. The remote side runs the engine
- * via `bash -lc '<envs> exec minion ...'` so the host's PATH is loaded and
+ * Wrap a stepyard invocation in an SSH call. The remote side runs the engine
+ * via `bash -lc '<envs> exec stepyard ...'` so the host's PATH is loaded and
  * workflow-level env vars are forwarded from STEPYARD_SSH_ENV_FORWARD.
  *
  * STEPYARD_SSH_ENV_FORWARD accepts a comma-separated list of:
@@ -384,7 +386,7 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
  *                       container's DATABASE_URL points at `db` but the host
  *                       needs `localhost`)
  */
-function buildSshCommand(sshHost: string, minionArgs: string[]): [string, string[]] {
+function buildSshCommand(sshHost: string, stepyardArgs: string[]): [string, string[]] {
   const forward = (process.env.STEPYARD_SSH_ENV_FORWARD || '')
     .split(',')
     .map((s) => s.trim())
@@ -398,19 +400,20 @@ function buildSshCommand(sshHost: string, minionArgs: string[]): [string, string
     }
   }
   // Ensure a clean git-enabled CWD for the engine. Required when not in --repo
-  // mode because minion's sandbox_up expects a git repo to copy as workspace.
+  // mode because stepyard's sandbox_up expects a git repo to copy as workspace.
   // The dir is created idempotently and reused across dispatches.
-  const ws = process.env.STEPYARD_DISPATCH_WORKSPACE || '/tmp/minion-dispatch-ws';
+  const ws = process.env.STEPYARD_DISPATCH_WORKSPACE || '/tmp/stepyard-dispatch-ws';
   const prep = [
     `mkdir -p ${shellQuote(ws)}`,
     `cd ${shellQuote(ws)}`,
-    `[ -d .git ] || { git init -q && echo dispatch > .dispatch && git add .dispatch && git -c user.email=minion@localhost -c user.name=Minion commit -qm init ; }`,
+    `[ -d .git ] || { git init -q && echo dispatch > .dispatch && git add .dispatch && git -c user.email=stepyard@localhost -c user.name=Stepyard commit -qm init ; }`,
   ].join(' && ');
   // Use an absolute path so we don't rely on the login shell's PATH order.
-  // Some hosts have multiple minion binaries (e.g. ~/.cargo/bin vs /usr/local/bin)
-  // which may be different versions.
-  const minionBin = process.env.STEPYARD_HOST_BINARY || '/usr/local/bin/minion';
-  const remoteCmd = `${prep} && ${exports.join(' ')} exec ${shellQuote(minionBin)} ${minionArgs.map(shellQuote).join(' ')}`;
+  // Some hosts have multiple stepyard binaries (e.g. ~/.cargo/bin vs /usr/local/bin)
+  // which may be different versions. Default still points at the legacy
+  // /usr/local/bin/minion path; override STEPYARD_HOST_BINARY post-VPS-migration.
+  const stepyardBin = process.env.STEPYARD_HOST_BINARY || '/usr/local/bin/minion';
+  const remoteCmd = `${prep} && ${exports.join(' ')} exec ${shellQuote(stepyardBin)} ${stepyardArgs.map(shellQuote).join(' ')}`;
   // ssh concatenates remote argv with spaces before feeding it to the remote
   // shell, which then re-parses. Pass the bash invocation as ONE argument so
   // the `&&` / quoting in remoteCmd survives.

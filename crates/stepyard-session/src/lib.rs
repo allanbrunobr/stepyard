@@ -1,4 +1,4 @@
-//! Append-only session log primitive for the Minion Engine v2 harness.
+//! Append-only session log primitive for the Stepyard Engine v2 harness.
 //!
 //! A [`Session`] is the central primitive of the engine's v2 architecture
 //! (phase A of the refactor). Every piece of context the harness reconstructs

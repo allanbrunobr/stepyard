@@ -3,8 +3,8 @@
 # ============================================================
 #
 # Usage:
-#   minion execute workflows/weekly-report.yaml
-#   minion execute workflows/weekly-report.yaml --args '{"days": "14", "author": "alice"}'
+#   stepyard execute workflows/weekly-report.yaml
+#   stepyard execute workflows/weekly-report.yaml --args '{"days": "14", "author": "alice"}'
 #
 # What it does:
 #   1. Collects git log for the past N days

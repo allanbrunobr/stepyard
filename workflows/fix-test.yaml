@@ -3,8 +3,8 @@
 # ============================================================
 #
 # Usage:
-#   minion execute workflows/fix-test.yaml --target <PR_NUMBER>
-#   minion execute workflows/fix-test.yaml --target <PR_NUMBER> --args '{"mode": "integration"}'
+#   stepyard execute workflows/fix-test.yaml --target <PR_NUMBER>
+#   stepyard execute workflows/fix-test.yaml --target <PR_NUMBER> --args '{"mode": "integration"}'
 #
 # What it does:
 #   1. Checks out the PR branch

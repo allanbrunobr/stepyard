@@ -2,7 +2,7 @@
 //! and the domain [`SessionError`].
 //!
 //! These types are intentionally schema-agnostic about the event payload —
-//! payloads are stored as opaque JSON so that `minion-core`'s `Event` enum can
+//! payloads are stored as opaque JSON so that `stepyard-core`'s `Event` enum can
 //! evolve independently of the session storage layer.
 
 use std::fmt;

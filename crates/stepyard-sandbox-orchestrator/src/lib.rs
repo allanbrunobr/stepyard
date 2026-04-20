@@ -1,4 +1,4 @@
-//! Sandbox lifecycle abstractions for the Minion Engine v2 harness.
+//! Sandbox lifecycle abstractions for the Stepyard Engine v2 harness.
 //!
 //! This crate owns "how do we get a running execution environment for a
 //! session and how do we tear it down?". It does NOT know what steps run

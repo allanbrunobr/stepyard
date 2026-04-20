@@ -2,7 +2,7 @@
 //!
 //! Story 2.1 only ships the [`WorkflowVersion`] enum here so that downstream
 //! crates (parser, validator) can compile against the version discriminator
-//! without pulling the full `WorkflowDef` into `minion-core`. The complete
+//! without pulling the full `WorkflowDef` into `stepyard-core`. The complete
 //! `WorkflowDef` migration to this crate happens in **Story 2.3** when the
 //! parser/validator move out of the engine binary into `stepyard-harness`.
 //!
