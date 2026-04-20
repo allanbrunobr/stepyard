@@ -264,7 +264,7 @@ pub trait WorkspaceManager: Send + Sync {
 - `WorkspacePrepared { path: String, strategy: String }`
 - `WorkspacePruned { path: String, reason: String }`
 
-**Why revised:** Party Mode (Murat) added `#[deny(non_exhaustive_omitted_patterns)]` at exhaustive match sites (replay, subscribers, CLI formatters) to prevent silent-drop bugs when new variants land without updating every consumer. The `#[non_exhaustive]` + `#[serde(other)]` pattern preserves forward-compat for external JSONB readers; the `deny` lint forces internal correctness.
+**Why revised:** Party Mode (Murat) added `#[deny(non_exhaustive_omitted_patterns)]` at exhaustive match sites (replay, subscribers, CLI formatters) to prevent silent-drop bugs when new variants land without updating every consumer. The `#[non_exhaustive]` + `#[serde(other)]` pattern preserves forward-compat for external JSONB readers; the `deny` lint forces internal correctness. _(Stability caveat: the lint is nightly-only on stable Rust — see §Pattern Enforcement for the compensating pre-merge grep audit.)_
 
 **Serde:** All new variants use `#[serde(rename_all = "snake_case")]` consistent with existing variants. No schema migration required (payload column is `jsonb`).
 
@@ -561,13 +561,16 @@ Everything else in this section is scoped to specific stories, crates, or API su
 
 **Pattern Enforcement:**
 
-- **Workspace-wide lints (revised, party mode):** `[workspace.lints.rust]` in root `Cargo.toml` pins `non_exhaustive_omitted_patterns = "deny"`. This propagates to all consumer crates (`stepyard-core`, `stepyard-harness`, `stepyard-session`, `stepyard-sandbox-orchestrator`, `stepyard` binary) uniformly — per-site `#[deny(…)]` is insufficient because the lint only fires within the crate where the enum is defined.
-  - **MSRV note (Round 2):** The `[workspace.lints]` table requires Rust 1.74+. Stepyard workspace already pins `rust-version = "1.75"` (inherited from Engine v2), so this works as-written. If the MSRV is ever lowered, this rule must migrate to per-crate `#![deny(…)]` attributes in every `lib.rs` and `main.rs`.
+- **Workspace-wide lints (Round 3 — corrected after empirical `cargo check` capture):** `[workspace.lints.rust]` in root `Cargo.toml` pins `non_exhaustive_omitted_patterns = "deny"`. Intent: force all consumer crates (`stepyard-core`, `stepyard-harness`, `stepyard-session`, `stepyard-sandbox-orchestrator`, `stepyard` binary) to handle every variant of `#[non_exhaustive]` enums explicitly. **Reality:** the lint is unstable on stable Rust (tracking `rust-lang/rust#89554`). On the pinned MSRV toolchain, `cargo check` emits `warning: unknown lint: non_exhaustive_omitted_patterns` and the `deny` level does **not** escalate — `-D warnings` treats `unknown_lints` as a separate category and does not fail the build. The pin only actively fires on nightly.
+  - **MSRV (corrected):** Workspace root `Cargo.toml` pins `rust-version = "1.82"` (not 1.75 as a prior revision claimed — the binary uses `Option::is_none_or`, stable since 1.82). The `[workspace.lints]` table itself parses fine from 1.74+, but the lint inside is a no-op on stable regardless of version.
+  - **Compensating enforcement (primary, blocking — planned, not yet wired):** pre-merge CI grep audit that every `match` on `Event`, `EngineError`, or `TerminationReason` in consumer crates either lists all variants or has a wildcard arm (`_ =>` or `other =>`). Target home: `.github/workflows/check.yml` (file does not yet exist at the time this revision was written — the only present workflow is `release.yml`). Landing this check is an explicit PRD deliverable; blocking status activates once the workflow lands.
+  - **Compensating enforcement (secondary, advisory — planned):** nightly CI lane running `cargo +nightly clippy --workspace --all-targets -- -D warnings`. Non-blocking on merge (nightly churn is not a repo-quality signal) but reviewed on regression — this is the only environment where the deny actually fires today.
+  - **Migration path:** when the lint stabilises upstream, drop the grep audit and promote the deny to blocking-on-stable. If MSRV is ever lowered below 1.74, migrate the deny to per-crate `#![deny(non_exhaustive_omitted_patterns)]` in every `lib.rs` and `main.rs` (same nightly-only caveat applies until stabilisation).
 - **Clippy:** workspace `Cargo.toml` pins deny list (`-D warnings` includes `clippy::all`).
 - **Coverage:** `cargo llvm-cov --workspace --fail-under-lines 70` in CI. Line coverage, not branch (branch coverage on Rust is experimental and flaky).
-- **Security tests:** each crate with substitution has a `tests/injection_negative.rs` file with both positive- and negative-control cases; missing file fails a pre-merge grep check.
+- **Security tests:** each crate with substitution has a `tests/injection_negative.rs` file with both positive- and negative-control cases; missing-file pre-merge grep check is _planned_ (not yet wired — same `.github/workflows/check.yml` landing as the lint audit above). Until the CI lands, the rule is reviewer-enforced.
 - **Time-determinism in tests (new, party mode — split into 7a/7b in Round 2):**
-  - **Rule 7a — In-process tokio tests:** Timing-sensitive `#[tokio::test]` / `#[cfg(test)]` blocks use `tokio::time::pause()` + `advance()` for virtual time. `tokio::time::sleep(…)` is **banned** inside these blocks — CI rejects via workspace lint (custom clippy restriction or pre-merge grep). Rationale: real sleep produces flaky tests and wastes CI wall-clock; virtual time is deterministic and fast.
+  - **Rule 7a — In-process tokio tests:** Timing-sensitive `#[tokio::test]` / `#[cfg(test)]` blocks use `tokio::time::pause()` + `advance()` for virtual time. `tokio::time::sleep(…)` is **banned** inside these blocks. _Enforcement status: reviewer-enforced today; the `.github/workflows/check.yml` pre-merge grep check listed above will gain a `tokio::time::sleep` rule as a follow-up; a custom clippy restriction is an alternative if the grep pattern proves fragile._ Rationale: real sleep produces flaky tests and wastes CI wall-clock; virtual time is deterministic and fast.
   - **Rule 7b — Out-of-process `assert_cmd` tests:** Integration tests that shell out via `assert_cmd` cannot use `tokio::time::pause()` because the subprocess has its own runtime. These tests MUST specify `.timeout(Duration::from_secs(N))` on every `Command` — a deliberate ceiling that fails loud if exceeded. Never invoke `.output()` or `.status()` without a `.timeout()`.
 
 ### Pattern Examples
@@ -1125,7 +1128,7 @@ The 3 Important Gaps are documented inline as clarifications — **no decisions 
 
 **✅ Architectural Decisions**
 - [x] 10 core decisions documented with rationale, Rust shape, rejected alternatives
-- [x] Technology stack fully specified (Rust 1.75+, tokio, sqlx, serde, clap; no new external crates)
+- [x] Technology stack fully specified (Rust 1.82+, tokio, sqlx, serde, clap; no new external crates)
 - [x] Integration patterns defined (Docker CLI subprocess, git CLI subprocess, PG via sqlx)
 - [x] Performance considerations addressed (broadcast <1s, timeout <1s precision, prune <30s)
 
