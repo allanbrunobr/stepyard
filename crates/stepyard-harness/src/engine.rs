@@ -209,7 +209,7 @@ impl Engine {
         }
     }
 
-    /// Attach `.minion/defaults.yaml` defaults to this engine (Story 3.4).
+    /// Attach `.stepyard/defaults.yaml` defaults to this engine (Story 3.4).
     /// The cascade resolver overlays these below `workflow.env` and
     /// `step.env`. Builder-style so call sites stay compact.
     pub fn with_defaults(mut self, defaults: Defaults) -> Self {

@@ -46,23 +46,23 @@ fn embedded_defaults() -> &'static WorkflowConfig {
 ///
 /// ```text
 /// [embedded in binary]          ← always available (lowest)
-/// ~/.minion/defaults.yaml       ← user-level overrides (optional)
-/// .minion/config.yaml           ← project-level overrides (optional)
+/// ~/.stepyard/defaults.yaml       ← user-level overrides (optional)
+/// .stepyard/config.yaml           ← project-level overrides (optional)
 /// workflow.yaml config:         ← workflow-level
 /// step inline config:           ← highest priority
 /// ```
 fn override_config_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
 
-    // 1. User-level: ~/.minion/defaults.yaml
-    //    On Windows: C:\Users\<user>\.minion\defaults.yaml
-    //    On macOS:   /Users/<user>/.minion/defaults.yaml
-    //    On Linux:   /home/<user>/.minion/defaults.yaml
+    // 1. User-level: ~/.stepyard/defaults.yaml
+    //    On Windows: C:\Users\<user>\.stepyard\defaults.yaml
+    //    On macOS:   /Users/<user>/.stepyard/defaults.yaml
+    //    On Linux:   /home/<user>/.stepyard/defaults.yaml
     if let Some(home) = dirs::home_dir() {
         paths.push(home.join(".stepyard").join("defaults.yaml"));
     }
 
-    // 2. Project-level: .minion/config.yaml (relative to CWD)
+    // 2. Project-level: .stepyard/config.yaml (relative to CWD)
     if let Ok(cwd) = std::env::current_dir() {
         paths.push(cwd.join(".stepyard").join("config.yaml"));
     }
@@ -140,7 +140,7 @@ pub fn merge_workflow_config(base: &WorkflowConfig, overlay: &WorkflowConfig) ->
 }
 
 /// Build the full defaults chain:
-///   embedded → ~/.minion/defaults.yaml → .minion/config.yaml
+///   embedded → ~/.stepyard/defaults.yaml → .stepyard/config.yaml
 ///
 /// Each layer overrides the previous one.
 pub fn load_defaults() -> WorkflowConfig {
@@ -158,7 +158,7 @@ pub fn load_defaults() -> WorkflowConfig {
 /// Apply the full defaults chain under a workflow's config.
 ///
 /// Priority (lowest → highest):
-///   embedded → ~/.minion/defaults.yaml → .minion/config.yaml → workflow YAML
+///   embedded → ~/.stepyard/defaults.yaml → .stepyard/config.yaml → workflow YAML
 ///
 /// The workflow config always wins over defaults.
 pub fn apply_defaults(workflow_config: &WorkflowConfig) -> WorkflowConfig {

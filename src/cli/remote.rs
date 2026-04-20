@@ -1,7 +1,7 @@
 //! Remote dispatch client — talks to the Dashboard API's `/api/workflows/dispatch`
 //! endpoint so users can trigger workflows on a VPS without opening SSH.
 //!
-//! Config: `~/.minion/remote.toml`
+//! Config: `~/.stepyard/remote.toml`
 //!
 //! ```toml
 //! url = "http://187.45.254.82:3001"
@@ -79,7 +79,7 @@ struct RemoteConfig {
 fn config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_default()
-        .join(".minion/remote.toml")
+        .join(".stepyard/remote.toml")
 }
 
 fn load_config() -> Result<RemoteConfig> {

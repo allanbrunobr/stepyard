@@ -26,7 +26,7 @@ name: code-review
 version: 1
 description: "Review a PR or branch diff with AI — produces a structured findings report"
 
-# Only overrides — defaults inherited from ~/.minion/defaults.yaml
+# Only overrides — defaults inherited from ~/.stepyard/defaults.yaml
 config:
   cmd:
     fail_on_error: false

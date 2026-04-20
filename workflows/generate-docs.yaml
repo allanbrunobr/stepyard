@@ -20,7 +20,7 @@ name: generate-docs
 version: 1
 description: "Generate documentation for source files using AI"
 
-# Only overrides — defaults inherited from ~/.minion/defaults.yaml
+# Only overrides — defaults inherited from ~/.stepyard/defaults.yaml
 config:
   global:
     timeout: 600s

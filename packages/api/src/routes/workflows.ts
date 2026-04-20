@@ -295,7 +295,7 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
   }
 
   const { workflow, target, repo, branch, vars } = parsed.data;
-  const workflowsDir = process.env.STEPYARD_WORKFLOWS_DIR || '/root/.minion/workflows';
+  const workflowsDir = process.env.STEPYARD_WORKFLOWS_DIR || '/root/.stepyard/workflows';
   const workflowFile = join(workflowsDir, `${workflow}.yaml`);
 
   if (!existsSync(workflowFile)) {

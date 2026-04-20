@@ -19,14 +19,14 @@ use super::session_setup::{connect_pg, open_session, open_session_with_pool};
 
 /// Resolve a workflow path with fallback chain:
 /// 1. As-is (if the file exists — developer running from repo or absolute path)
-/// 2. `~/.minion/workflows/<filename>` (cargo install users)
+/// 2. `~/.stepyard/workflows/<filename>` (cargo install users)
 fn resolve_workflow_path(path: &Path) -> anyhow::Result<PathBuf> {
     // If the file exists as specified, use it
     if path.exists() {
         return Ok(path.to_path_buf());
     }
 
-    // Try ~/.minion/workflows/<filename>
+    // Try ~/.stepyard/workflows/<filename>
     if let Some(filename) = path.file_name() {
         if let Some(home) = dirs::home_dir() {
             let home_path = home.join(".stepyard").join("workflows").join(filename);
@@ -36,7 +36,7 @@ fn resolve_workflow_path(path: &Path) -> anyhow::Result<PathBuf> {
         }
     }
 
-    bail!("Workflow file not found: {}\n  Hint: run `stepyard slack start` once to extract built-in workflows to ~/.minion/workflows/", path.display())
+    bail!("Workflow file not found: {}\n  Hint: run `stepyard slack start` once to extract built-in workflows to ~/.stepyard/workflows/", path.display())
 }
 
 #[derive(Args)]
@@ -219,10 +219,10 @@ async fn execute_v2(
         ..HarnessConfig::default()
     };
 
-    // Load `.minion/defaults.yaml` env layer. Missing file → empty defaults
+    // Load `.stepyard/defaults.yaml` env layer. Missing file → empty defaults
     // (the loader is explicit about that). This is the weakest layer of the
     // cascade; step.env and workflow.env still override.
-    let defaults_path = Path::new(".minion/defaults.yaml");
+    let defaults_path = Path::new(".stepyard/defaults.yaml");
     let env_defaults = crate::config::load_env_defaults(defaults_path)
         .with_context(|| format!("failed to load {}", defaults_path.display()))?;
     let harness_defaults = HarnessDefaults::with_env(env_defaults.env);
@@ -328,7 +328,7 @@ pub async fn execute(
     let mut workflow = parser::parse_file(&workflow_path)
         .with_context(|| format!("Failed to parse {}", workflow_path.display()))?;
 
-    // Apply centralized defaults (~/.minion/defaults.yaml, .minion/config.yaml)
+    // Apply centralized defaults (~/.stepyard/defaults.yaml, .stepyard/config.yaml)
     // Defaults are lowest priority — workflow config overrides them.
     workflow.config = crate::config::apply_defaults(&workflow.config);
 
@@ -811,7 +811,7 @@ pub async fn list() -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let mut found = Vec::new();
 
-    // Scan current directory, workflows/ subdirectory, and ~/.minion/workflows/
+    // Scan current directory, workflows/ subdirectory, and ~/.stepyard/workflows/
     let mut dirs_to_scan = vec![cwd.clone(), cwd.join("workflows")];
     if let Some(home) = dirs::home_dir() {
         dirs_to_scan.push(home.join(".stepyard").join("workflows"));
@@ -838,7 +838,7 @@ pub async fn list() -> anyhow::Result<()> {
         println!("  • {} (current directory)", cwd.display());
         println!("  • {}/workflows/", cwd.display());
         if let Some(home) = dirs::home_dir() {
-            println!("  • {}/.minion/workflows/", home.display());
+            println!("  • {}/.stepyard/workflows/", home.display());
         }
     } else {
         println!("Available workflows:");
@@ -1031,7 +1031,7 @@ pub async fn inspect(args: InspectArgs) -> anyhow::Result<()> {
 
 // ── Config subcommands ───────────────────────────────────────────────────────
 
-/// Default content for a new ~/.minion/defaults.yaml
+/// Default content for a new ~/.stepyard/defaults.yaml
 const USER_DEFAULTS_TEMPLATE: &str = r#"# ============================================================
 # Minion Engine — User Default Configuration
 # ============================================================
@@ -1041,8 +1041,8 @@ const USER_DEFAULTS_TEMPLATE: &str = r#"# ======================================
 #
 # Priority (lowest → highest):
 #   Built-in defaults (compiled in binary)
-#   This file (~/.minion/defaults.yaml)     ← you are here
-#   .minion/config.yaml (project-level)
+#   This file (~/.stepyard/defaults.yaml)     ← you are here
+#   .stepyard/config.yaml (project-level)
 #   workflow.yaml config:
 #   step inline config:
 # ============================================================
@@ -1150,7 +1150,7 @@ pub async fn config_path() -> anyhow::Result<()> {
 
     println!();
     println!("\x1b[1mPriority order\x1b[0m (lowest → highest):");
-    println!("  embedded → ~/.minion/defaults.yaml → .minion/config.yaml → workflow YAML → step inline");
+    println!("  embedded → ~/.stepyard/defaults.yaml → .stepyard/config.yaml → workflow YAML → step inline");
 
     Ok(())
 }

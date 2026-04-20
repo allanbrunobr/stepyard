@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use dialoguer::{Confirm, Input};
 
-/// Config file structure (~/.minion/config.toml)
+/// Config file structure (~/.stepyard/config.toml)
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct MinionConfig {
     #[serde(default)]
@@ -78,7 +78,7 @@ pub async fn run_setup() -> anyhow::Result<()> {
     if std::env::var("ANTHROPIC_API_KEY").is_ok() {
         println!("  \x1b[32m✓\x1b[0m ANTHROPIC_API_KEY already set in environment");
     } else if config.core.anthropic_api_key.is_some() {
-        println!("  \x1b[32m✓\x1b[0m ANTHROPIC_API_KEY found in ~/.minion/config.toml");
+        println!("  \x1b[32m✓\x1b[0m ANTHROPIC_API_KEY found in ~/.stepyard/config.toml");
     } else {
         let set_key = Confirm::new()
             .with_prompt("  Set ANTHROPIC_API_KEY now?")
@@ -91,7 +91,7 @@ pub async fn run_setup() -> anyhow::Result<()> {
                 .interact_text()?;
             if !key.is_empty() {
                 config.core.anthropic_api_key = Some(key);
-                println!("  \x1b[32m✓\x1b[0m Saved to ~/.minion/config.toml");
+                println!("  \x1b[32m✓\x1b[0m Saved to ~/.stepyard/config.toml");
             }
         } else {
             println!("  \x1b[33m⚠\x1b[0m  Skipped — set it later: export ANTHROPIC_API_KEY=\"sk-ant-...\"");

@@ -19,7 +19,7 @@ pub struct Workflow {
     pub name: String,
     pub steps: Vec<Step>,
     /// Workflow-level env vars. Merged below step-level env and above
-    /// `.minion/defaults.yaml` in the cascade resolver (Story 3.4).
+    /// `.stepyard/defaults.yaml` in the cascade resolver (Story 3.4).
     /// `#[serde(default)]` preserves backward compat for YAML without an
     /// `env:` field (NFR18, NFR22).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
