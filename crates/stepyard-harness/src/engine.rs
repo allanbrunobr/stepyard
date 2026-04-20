@@ -381,6 +381,9 @@ impl Engine {
             step_name: step.name.clone(),
             step_type: step_type.into(),
             timestamp: Utc::now(),
+            // Scope-aware emission lands with the executor in a later
+            // commit of PR 3; top-level steps emit `None`.
+            scope_context: None,
         })
         .await?;
 
@@ -637,6 +640,8 @@ impl Engine {
                     cost_usd: None,
                     sandboxed: true,
                     output: Some(snapshot),
+                    scope_context: None,
+                    gate_outcome: None,
                 })
                 .await?;
                 Ok(StepOutcome::StepCompleted {
@@ -782,6 +787,10 @@ impl Engine {
                 // snapshot slot exists for cmd steps only. Tokens and cost
                 // are also absent, matching the v1 gate executor's
                 // no-billable-IO semantics.
+                // Gate-continue: record the branch the gate took so
+                // replay never has to re-evaluate the condition (PR 3
+                // of Task #31). `scope_context` is still `None` here —
+                // the scope executor lands in a later commit.
                 self.emit(Event::StepCompleted {
                     step_name: step.name.clone(),
                     step_type: step_type.into(),
@@ -792,6 +801,8 @@ impl Engine {
                     cost_usd: None,
                     sandboxed: false,
                     output: None,
+                    scope_context: None,
+                    gate_outcome: Some(stepyard_core::GateOutcome::Continue),
                 })
                 .await?;
                 Ok(StepOutcome::StepCompleted {

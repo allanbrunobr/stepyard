@@ -35,6 +35,12 @@ pub enum Event {
         step_name: String,
         step_type: String,
         timestamp: DateTime<Utc>,
+        /// Non-`None` when the step runs inside a container scope
+        /// (`call` / `repeat` / `map` — PR 3 of Task #31). Absent for
+        /// top-level steps and for legacy log entries written before
+        /// the widening, so existing JSON deserializes unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_context: Option<ScopeContext>,
     },
     /// A step finished successfully.
     StepCompleted {
@@ -58,6 +64,23 @@ pub enum Event {
         /// this PR's scope.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<StepOutputSnapshot>,
+        /// Non-`None` when the step ran inside a container scope
+        /// (`call` / `repeat` / `map` — PR 3 of Task #31). Mirrors
+        /// [`Self::StepStarted`]; absent for top-level steps.
+        ///
+        /// The harness's `progress_from_log` counts only completions
+        /// with `scope_context: None` toward the top-level step index
+        /// — scoped completions feed container-internal replay state.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_context: Option<ScopeContext>,
+        /// Which branch a `gate` step's `condition` resolved to.
+        /// Persisting the decision in the log (rather than re-evaluating
+        /// the `condition` during replay) keeps the log as the single
+        /// source of truth for scope control flow. `None` for non-gate
+        /// steps. Gate failures route through [`Self::StepFailed`]
+        /// instead, so `fail` is not a valid `gate_outcome` value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gate_outcome: Option<GateOutcome>,
     },
     /// A step finished with an error.
     StepFailed {
@@ -114,6 +137,57 @@ pub struct StepOutputSnapshot {
     pub stderr: String,
     /// Process exit code (0 on success for cmd steps).
     pub exit_code: i32,
+}
+
+/// Position of a step inside a container scope (`call` / `repeat` / `map`).
+/// Attached to [`Event::StepStarted`] and [`Event::StepCompleted`] so the
+/// harness can rebuild container-internal state from the session log
+/// alone (PR 3 of Task #31).
+///
+/// Nested containers are rejected at the adapter layer in PR 3, so a flat
+/// `{ container, iteration, position }` is sufficient. A later PR that
+/// lifts that restriction can add a `scope_path: Vec<ScopeFrame>` field
+/// without breaking this shape (absent = legacy top-level scope frame).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeContext {
+    /// Name of the container step (e.g. the `call` / `repeat` / `map`
+    /// step that wraps this scope body).
+    pub container: String,
+    /// Zero-based iteration index within the container.
+    /// `0` for `call` (single pass), `0..N` for `repeat` / `map`.
+    pub iteration: u32,
+    /// Zero-based position of this step within the scope body, counting
+    /// in declaration order regardless of whether earlier scope steps
+    /// were skipped. Lets replay locate the current step inside the
+    /// scope without having to replay gate decisions.
+    pub position: u32,
+}
+
+/// Which branch of a `gate` step's `condition` fired. Persisted on the
+/// gate's [`Event::StepCompleted`] so replay never has to re-evaluate
+/// the condition to figure out the scope's next step — the log is the
+/// single source of truth for control flow.
+///
+/// Gate failures route through [`Event::StepFailed`], so `Fail` is
+/// deliberately not a variant. `#[non_exhaustive]` lets a later PR add
+/// variants (e.g. scope-aware short-circuits) without a major bump.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateOutcome {
+    /// Execution continues with the next scope step (or the next
+    /// top-level step for a top-level gate).
+    Continue,
+    /// End the current scope iteration early; the containing
+    /// `repeat` / `map` advances to the next iteration, and `call`
+    /// completes the scope body. Rejected at the adapter boundary for
+    /// top-level gates (PR 3 of Task #31).
+    Skip,
+    /// End the containing scope entirely. `repeat` / `map` exit the
+    /// loop and the container step completes successfully; `call`
+    /// treats this as end-of-scope (v1 parity). Rejected at the
+    /// adapter boundary for top-level gates.
+    Break,
 }
 
 #[cfg(test)]

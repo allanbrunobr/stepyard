@@ -7,7 +7,10 @@
 //! * EventSubscriber is dyn-compatible.
 
 use chrono::TimeZone;
-use stepyard_core::{EngineError, Event, EventSubscriber, StepOutputSnapshot, TerminationReason};
+use stepyard_core::{
+    EngineError, Event, EventSubscriber, GateOutcome, ScopeContext, StepOutputSnapshot,
+    TerminationReason,
+};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -18,6 +21,7 @@ fn step_started_serialization_is_stable() {
         step_name: "review".into(),
         step_type: "agent".into(),
         timestamp: ts,
+        scope_context: None,
     };
     let value: serde_json::Value = serde_json::to_value(&event).unwrap();
     assert_eq!(
@@ -28,6 +32,13 @@ fn step_started_serialization_is_stable() {
             "step_type": "agent",
             "timestamp": "2026-04-13T12:00:00Z"
         })
+    );
+    // The `scope_context` field added in PR 3 of Task #31 must stay
+    // absent on the wire when `None`, so pre-PR-3 log entries and
+    // subscribers keep working unchanged.
+    assert!(
+        !value.as_object().unwrap().contains_key("scope_context"),
+        "step_started with scope_context=None must omit the field"
     );
 }
 
@@ -44,6 +55,8 @@ fn step_completed_omits_optional_fields_when_none() {
         cost_usd: None,
         sandboxed: false,
         output: None,
+        scope_context: None,
+        gate_outcome: None,
     };
     let value: serde_json::Value = serde_json::to_value(&event).unwrap();
     let obj = value.as_object().unwrap();
@@ -54,6 +67,10 @@ fn step_completed_omits_optional_fields_when_none() {
     // absent on the wire when None, so old subscribers keep deserializing the
     // same JSON shape they've always seen.
     assert!(!obj.contains_key("output"));
+    // Same contract for the PR 3 widenings — both scope_context and
+    // gate_outcome must stay absent on the wire when None.
+    assert!(!obj.contains_key("scope_context"));
+    assert!(!obj.contains_key("gate_outcome"));
     assert_eq!(obj["sandboxed"], json!(false));
 }
 
@@ -74,6 +91,8 @@ fn step_completed_with_output_snapshot_roundtrips() {
             stderr: String::new(),
             exit_code: 0,
         }),
+        scope_context: None,
+        gate_outcome: None,
     };
 
     let value = serde_json::to_value(&original).unwrap();
@@ -97,6 +116,178 @@ fn step_completed_with_output_snapshot_roundtrips() {
             assert_eq!(snap.exit_code, 0);
         }
         other => panic!("roundtrip produced unexpected variant: {other:?}"),
+    }
+}
+
+// ── PR 3 of #31 — scope_context + gate_outcome wire-shape locks ─────────
+
+#[test]
+fn step_started_with_scope_context_roundtrips() {
+    let ts = chrono::Utc.with_ymd_and_hms(2026, 4, 20, 12, 0, 0).unwrap();
+    let original = Event::StepStarted {
+        step_name: "inner".into(),
+        step_type: "cmd".into(),
+        timestamp: ts,
+        scope_context: Some(ScopeContext {
+            container: "build-each".into(),
+            iteration: 2,
+            position: 1,
+        }),
+    };
+    let value = serde_json::to_value(&original).unwrap();
+    let ctx = value
+        .as_object()
+        .unwrap()
+        .get("scope_context")
+        .expect("scope_context must be present when Some");
+    assert_eq!(ctx["container"], json!("build-each"));
+    assert_eq!(ctx["iteration"], json!(2));
+    assert_eq!(ctx["position"], json!(1));
+
+    let back: Event = serde_json::from_value(value).unwrap();
+    match back {
+        Event::StepStarted {
+            scope_context: Some(c),
+            ..
+        } => {
+            assert_eq!(c.container, "build-each");
+            assert_eq!(c.iteration, 2);
+            assert_eq!(c.position, 1);
+        }
+        other => panic!("roundtrip produced unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn step_completed_with_scope_context_and_gate_outcome_roundtrips() {
+    let ts = chrono::Utc.with_ymd_and_hms(2026, 4, 20, 12, 0, 1).unwrap();
+    let original = Event::StepCompleted {
+        step_name: "check".into(),
+        step_type: "gate".into(),
+        duration_ms: 3,
+        timestamp: ts,
+        input_tokens: None,
+        output_tokens: None,
+        cost_usd: None,
+        sandboxed: false,
+        output: None,
+        scope_context: Some(ScopeContext {
+            container: "loop".into(),
+            iteration: 0,
+            position: 2,
+        }),
+        gate_outcome: Some(GateOutcome::Skip),
+    };
+    let value = serde_json::to_value(&original).unwrap();
+    assert_eq!(value["gate_outcome"], json!("skip"));
+    assert_eq!(value["scope_context"]["container"], json!("loop"));
+
+    let back: Event = serde_json::from_value(value).unwrap();
+    match back {
+        Event::StepCompleted {
+            scope_context: Some(c),
+            gate_outcome: Some(g),
+            ..
+        } => {
+            assert_eq!(c.position, 2);
+            assert_eq!(g, GateOutcome::Skip);
+        }
+        other => panic!("roundtrip produced unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn gate_outcome_serializes_as_snake_case() {
+    // Locking the wire spelling — `continue` / `skip` / `break` — so a
+    // future rename of the enum variant can't silently change the JSON
+    // shape the Dashboard / subscribers rely on.
+    for (variant, expected) in [
+        (GateOutcome::Continue, "continue"),
+        (GateOutcome::Skip, "skip"),
+        (GateOutcome::Break, "break"),
+    ] {
+        let v = serde_json::to_value(variant).unwrap();
+        assert_eq!(v, json!(expected), "wire spelling for {variant:?}");
+    }
+}
+
+#[test]
+fn gate_outcome_rejects_unknown_values_on_deserialize() {
+    // `fail` routes through StepFailed, not through gate_outcome, so a
+    // log entry claiming `gate_outcome: "fail"` is malformed and must
+    // fail to parse. Same for arbitrary strings — the contract test
+    // pins the accepted values to the three variants.
+    let bad = json!({
+        "event": "step_completed",
+        "step_name": "g",
+        "step_type": "gate",
+        "duration_ms": 0,
+        "timestamp": "2026-04-20T12:00:00Z",
+        "sandboxed": false,
+        "gate_outcome": "fail"
+    });
+    assert!(
+        serde_json::from_value::<Event>(bad).is_err(),
+        "unknown gate_outcome value must fail deserialization"
+    );
+    let gibberish = json!({
+        "event": "step_completed",
+        "step_name": "g",
+        "step_type": "gate",
+        "duration_ms": 0,
+        "timestamp": "2026-04-20T12:00:00Z",
+        "sandboxed": false,
+        "gate_outcome": "explode"
+    });
+    assert!(serde_json::from_value::<Event>(gibberish).is_err());
+}
+
+#[test]
+fn legacy_step_started_without_scope_context_deserializes() {
+    // A pre-PR-3 log entry — no `scope_context` field at all — must
+    // still round-trip into today's Event::StepStarted so old sessions
+    // can be replayed unchanged.
+    let legacy = json!({
+        "event": "step_started",
+        "step_name": "x",
+        "step_type": "cmd",
+        "timestamp": "2026-04-13T12:00:00Z"
+    });
+    let back: Event = serde_json::from_value(legacy).unwrap();
+    match back {
+        Event::StepStarted {
+            scope_context: None,
+            step_name,
+            ..
+        } => assert_eq!(step_name, "x"),
+        other => panic!("legacy step_started must deserialize: {other:?}"),
+    }
+}
+
+#[test]
+fn legacy_step_completed_without_pr3_fields_deserializes() {
+    // A pre-PR-3 log entry — neither `scope_context` nor `gate_outcome`
+    // present — must still deserialize so sessions logged before the
+    // widening replay cleanly. Also verifies the PR-2 `output` field
+    // stays optional for the same reason.
+    let legacy = json!({
+        "event": "step_completed",
+        "step_name": "x",
+        "step_type": "cmd",
+        "duration_ms": 10,
+        "timestamp": "2026-04-13T12:00:00Z",
+        "sandboxed": true
+    });
+    let back: Event = serde_json::from_value(legacy).unwrap();
+    match back {
+        Event::StepCompleted {
+            step_name,
+            output: None,
+            scope_context: None,
+            gate_outcome: None,
+            ..
+        } => assert_eq!(step_name, "x"),
+        other => panic!("legacy step_completed must deserialize: {other:?}"),
     }
 }
 
