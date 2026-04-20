@@ -5,17 +5,17 @@ inputDocuments:
   - _bmad-output/sandcastle-features/prd.md
   - _bmad-output/sandcastle-features/architecture.md
 workflowType: 'epics-and-stories'
-project_name: 'Minion Engine — Sandcastle-Inspired Features'
+project_name: 'Stepyard — Sandcastle-Inspired Features'
 user_name: 'Bruno'
 date: '2026-04-16'
 sourceDocSet: 'sandcastle-features'
 ---
 
-# Minion Engine — Sandcastle-Inspired Features - Epic Breakdown
+# Stepyard — Sandcastle-Inspired Features - Epic Breakdown
 
 ## Overview
 
-This document provides the complete epic and story breakdown for Minion Engine — Sandcastle-Inspired Features, decomposing the requirements from the PRD and Architecture into implementable stories. No UX Design document exists for this project (Rust CLI/library — no UI surface).
+This document provides the complete epic and story breakdown for Stepyard — Sandcastle-Inspired Features, decomposing the requirements from the PRD and Architecture into implementable stories. No UX Design document exists for this project (Rust CLI/library — no UI surface).
 
 ## Requirements Inventory
 
@@ -40,7 +40,7 @@ This document provides the complete epic and story breakdown for Minion Engine �
 **Sandbox Environment (MVP):**
 
 - **FR9:** Workflow authors can declare environment variables per step in workflow YAML, and the engine passes them to the sandbox container at execution time.
-- **FR10:** Workflow authors can declare default environment variables in `.minion/defaults.yaml` that apply to all steps unless overridden at the step level.
+- **FR10:** Workflow authors can declare default environment variables in `.stepyard/defaults.yaml` that apply to all steps unless overridden at the step level.
 - **FR11:** The engine can resolve environment variable values from the host process environment using `${VAR}` syntax in workflow YAML.
 - **FR12:** The engine can restrict environment variables passed to the sandbox to only those explicitly declared in the workflow or defaults (no full host env passthrough).
 
@@ -114,10 +114,10 @@ This document provides the complete epic and story breakdown for Minion Engine �
 
 **Architectural Invariants (hard constraints):**
 
-- **No new crates.** All features land in existing `minion-core`, `minion-session`, `minion-sandbox-orchestrator`, `minion-harness`, or the root `minion` binary (`src/`). ADR-011 reserves the only planned future crate (`minion-mcp-proxy`) for a separate concern.
-- **Binary layout.** `minion` binary lives at workspace root `src/main.rs` (NOT `crates/minion/src/main.rs`). Startup reconciler and signal handler go in `src/startup.rs` and `src/signal.rs`.
+- **No new crates.** All features land in existing `stepyard-core`, `stepyard-session`, `stepyard-sandbox-orchestrator`, `stepyard-harness`, or the root `stepyard` binary (`src/`). ADR-011 reserves the only planned future crate (`stepyard-mcp-proxy`) for a separate concern.
+- **Binary layout.** `stepyard` binary lives at workspace root `src/main.rs` (NOT `crates/stepyard/src/main.rs`). Startup reconciler and signal handler go in `src/startup.rs` and `src/signal.rs`.
 - **Session-log-as-truth.** Engine holds zero in-memory state between steps. Any new feature (timeout, branch state, env dict) must be expressible as session events. Runtime registries via `once_cell::sync::Lazy<DashMap<…>>` or `static` are banned.
-- **Docker CLI subprocess only.** No bollard, no embedded Docker client. All operations via `tokio::process::Command` invoking `docker run`, `docker exec`, `docker rm -f`. Container naming: `minion-session-{uuid}`.
+- **Docker CLI subprocess only.** No bollard, no embedded Docker client. All operations via `tokio::process::Command` invoking `docker run`, `docker exec`, `docker rm -f`. Container naming: `stepyard-session-{uuid}`.
 - **Async safety.** All types crossing task boundaries are `Send + Sync`. No `std::sync::Mutex` or `parking_lot::Mutex` held across `.await`. Use `Arc<AtomicBool>` for flags or `tokio::sync::Mutex` if coordination is unavoidable.
 - **Backward compatibility.** MVP preserves all existing public trait signatures. Env dict added via new `exec_with_env` default-impl method (not by changing `exec`). YAML fields added via `#[serde(default)]`.
 
@@ -125,29 +125,29 @@ This document provides the complete epic and story breakdown for Minion Engine �
 
 - **D1 — Active-session cancel coordination:** per-process `Arc<tokio::sync::broadcast::Sender<()>>` owned by `main()` and passed into every `Engine::new()` via `HarnessConfig::shutdown_rx`. Each engine holds a `broadcast::Receiver<()>` field, subscribes during construction, aborts its current step when broadcast fires via `select!`. NO DashMap registry.
 - **D2 — Signal handler:** `main()` installs `tokio::signal::unix` handlers for SIGINT/SIGTERM that fire `broadcast::Sender<()>::send(())` (best-effort, ignores `SendError`), wait up to `HarnessConfig::shutdown_grace_s` (default 10s) for in-flight engines to complete `finalise_cancel()`, then exit with code 130 (SIGINT) or 143 (SIGTERM).
-- **D3 — Env extension via default-impl method:** `SandboxLifecycle::exec_with_env(id, cmd, env: &HashMap<String, String>)` added as default-impl method delegating to `exec(id, cmd)` (ignoring env). `DockerLifecycle` and `MockLifecycle` override. Callers inside `minion-harness` always invoke `exec_with_env` (empty map when no env configured). Existing `exec` signature unchanged.
-- **D4 — WorkspaceManager location:** `pub trait WorkspaceManager` lives in `crates/minion-sandbox-orchestrator/src/workspace.rs` (NOT `minion-core`, NOT a new crate). `GitWorktreeManager` is the production impl.
-- **D5 — 8 new Event variants, inline:** `StepTimeoutFired { step_index, configured_ms }`, `IdleTimeoutFired { step_index, idle_threshold_ms }`, `SignalReceived { signal: String }`, `BranchCreated { branch, base }`, `MergeAttempted { source, target }`, `MergeConflict { source, target, files: Vec<String> }`, `WorkspacePrepared { path, strategy }`, `WorkspacePruned { path, reason }`. Added directly to existing `minion_core::Event` enum. All `#[serde(rename_all = "snake_case")]`; `#[non_exhaustive]` + `#[serde(other)]` preserved for forward compat.
-- **D6 — Env var cascade resolution:** `Engine::prepare_step` resolves env from step-level > workflow-level > `.minion/defaults.yaml` > host `${VAR}`. Values pass to subprocess as `--env K=V` argv elements — never shell-interpolated. Lifecycle stays dumb executor receiving resolved env map + resolved argv.
-- **D7 — `{{KEY}}` template substitution:** pre-parse pass in `minion_core::template::substitute`, runs BEFORE `serde_yaml::from_str`. Substitution sources: CLI `--var KEY=VAL` flags first, then `.minion/defaults.yaml`. Missing placeholders produce `EngineError::PlaceholderUnresolved { key, found_at }`.
-- **D8 — Worktree pruning at startup:** NOT per-session, NOT on a timer. Runs once at `main()` startup inside `minion::startup::reconcile()`. Two-phase: (1) `git worktree prune` for git metadata, (2) filesystem walk under `.minion/workspaces/` removing orphans without matching git entry. SKIP dirs with uncommitted changes (detected via `git status --porcelain`). Retention: `HarnessConfig::workspace_retention_hours` (default 24h).
+- **D3 — Env extension via default-impl method:** `SandboxLifecycle::exec_with_env(id, cmd, env: &HashMap<String, String>)` added as default-impl method delegating to `exec(id, cmd)` (ignoring env). `DockerLifecycle` and `MockLifecycle` override. Callers inside `stepyard-harness` always invoke `exec_with_env` (empty map when no env configured). Existing `exec` signature unchanged.
+- **D4 — WorkspaceManager location:** `pub trait WorkspaceManager` lives in `crates/stepyard-sandbox-orchestrator/src/workspace.rs` (NOT `stepyard-core`, NOT a new crate). `GitWorktreeManager` is the production impl.
+- **D5 — 8 new Event variants, inline:** `StepTimeoutFired { step_index, configured_ms }`, `IdleTimeoutFired { step_index, idle_threshold_ms }`, `SignalReceived { signal: String }`, `BranchCreated { branch, base }`, `MergeAttempted { source, target }`, `MergeConflict { source, target, files: Vec<String> }`, `WorkspacePrepared { path, strategy }`, `WorkspacePruned { path, reason }`. Added directly to existing `stepyard_core::Event` enum. All `#[serde(rename_all = "snake_case")]`; `#[non_exhaustive]` + `#[serde(other)]` preserved for forward compat.
+- **D6 — Env var cascade resolution:** `Engine::prepare_step` resolves env from step-level > workflow-level > `.stepyard/defaults.yaml` > host `${VAR}`. Values pass to subprocess as `--env K=V` argv elements — never shell-interpolated. Lifecycle stays dumb executor receiving resolved env map + resolved argv.
+- **D7 — `{{KEY}}` template substitution:** pre-parse pass in `stepyard_core::template::substitute`, runs BEFORE `serde_yaml::from_str`. Substitution sources: CLI `--var KEY=VAL` flags first, then `.stepyard/defaults.yaml`. Missing placeholders produce `EngineError::PlaceholderUnresolved { key, found_at }`.
+- **D8 — Worktree pruning at startup:** NOT per-session, NOT on a timer. Runs once at `main()` startup inside `stepyard::startup::reconcile()`. Two-phase: (1) `git worktree prune` for git metadata, (2) filesystem walk under `.stepyard/workspaces/` removing orphans without matching git entry. SKIP dirs with uncommitted changes (detected via `git status --porcelain`). Retention: `HarnessConfig::workspace_retention_hours` (default 24h).
 - **D9 — Error taxonomy via `TerminationReason` sub-enum:** single `EngineError::StepFailed { step_index: u32, reason: TerminationReason }` variant; `TerminationReason` sub-enum carries `StepTimeout { configured_ms }`, `IdleTimeout { idle_ms }`, `Cancelled`, `SignalReceived(String)`, `Other(String)`. NO sibling variants like `EngineError::StepTimeout` or `EngineError::StepCancelled` at the top level.
 - **D10 — Branch strategy config:** per-workflow top-level YAML field `branch_strategy:`. Values: `head | merge_to_head | named_branch` (snake_case matching Rust conventions, NOT PascalCase, NOT kebab-case). `named_branch` requires sibling `branch_name:` field (or `{{BRANCH_NAME}}` placeholder). Missing → `EngineError::PlaceholderUnresolved` at parse time. CLI flag `--branch-strategy` (Growth phase) overrides YAML.
-- **Crash Recovery reconcile:** `minion::startup::reconcile()` runs before any `Engine::new()` in `main()`. Three sequential phases:
+- **Crash Recovery reconcile:** `stepyard::startup::reconcile()` runs before any `Engine::new()` in `main()`. Three sequential phases:
   1. **Session reconciliation** — `SELECT id FROM sessions WHERE status='running'`; for each, replay events to determine last-known state; if session's container is gone (phase 2), append `SignalReceived { signal: "crash_recovery" }` and transition `status='failed'`.
-  2. **Container reconciliation** — `docker ps --filter "name=minion-session-*" --format "{{.Names}}"`; destroy any container not matching a running session (orphan from prior crash).
+  2. **Container reconciliation** — `docker ps --filter "name=stepyard-session-*" --format "{{.Names}}"`; destroy any container not matching a running session (orphan from prior crash).
   3. **Worktree pruning** — per D8 two-phase protocol.
 
    All three phases idempotent. Exempt from synchronous-emit-before-IO rule (runs before any live session exists).
 
 **Security Requirements:**
 
-- **Argv-not-shell rule:** every user-provided string reaching a subprocess MUST pass as an argv element, never joined into a shell string at the minion layer. Use `Command::new("docker").args([…])`, NEVER `Command::new("sh").arg("-c").arg(format!(…))`.
-- **Explicit shell escape hatch:** users needing pipes/redirects/shell expansion write `command: ["sh", "-c", "ls | grep foo"]` explicitly in workflow YAML. Security of contents inside `sh -c` is the user's responsibility, not minion's. Documented in workflow schema docs + reinforced by negative-control test.
+- **Argv-not-shell rule:** every user-provided string reaching a subprocess MUST pass as an argv element, never joined into a shell string at the stepyard layer. Use `Command::new("docker").args([…])`, NEVER `Command::new("sh").arg("-c").arg(format!(…))`.
+- **Explicit shell escape hatch:** users needing pipes/redirects/shell expansion write `command: ["sh", "-c", "ls | grep foo"]` explicitly in workflow YAML. Security of contents inside `sh -c` is the user's responsibility, not stepyard's. Documented in workflow schema docs + reinforced by negative-control test.
 - **YAML-safe template substitution:** `serde_yaml::to_string(&value)` every substituted value before embedding into YAML document. Never raw-string-interpolate user values into YAML text (would allow `---`, `&anchor`, `*alias`, `: ` to inject YAML structure).
-- **Env var isolation:** only vars declared in workflow YAML or `.minion/defaults.yaml` forward to containers. Host `process.env` never passes wholesale. No `--env-host` passthrough flag.
+- **Env var isolation:** only vars declared in workflow YAML or `.stepyard/defaults.yaml` forward to containers. Host `process.env` never passes wholesale. No `--env-host` passthrough flag.
 - **Credential redaction:** environment variable *values* never written to session events. Event payloads record variable *names* only (e.g., `env_keys: ["GITHUB_TOKEN", "API_KEY"]`).
-- **Legacy carveout:** `DockerLifecycle::exec(id, cmd)` at `crates/minion-sandbox-orchestrator/src/docker.rs:173` retains `sh -c` semantics for backward compat. The argv-only rule applies to NEW subprocess calls from this PRD (`exec_with_env`, workspace git commands, startup reconcile `docker ps`). Legacy migration to argv-only is scoped as post-MVP tech-debt refactor.
+- **Legacy carveout:** `DockerLifecycle::exec(id, cmd)` at `crates/stepyard-sandbox-orchestrator/src/docker.rs:173` retains `sh -c` semantics for backward compat. The argv-only rule applies to NEW subprocess calls from this PRD (`exec_with_env`, workspace git commands, startup reconcile `docker ps`). Legacy migration to argv-only is scoped as post-MVP tech-debt refactor.
 
 **Testing & Enforcement Mechanisms:**
 
@@ -156,7 +156,7 @@ This document provides the complete epic and story breakdown for Minion Engine �
 - **Coverage gate:** `cargo llvm-cov --workspace --fail-under-lines 70` in CI. Line coverage, not branch (branch coverage on Rust is experimental and flaky).
 - **Proptest required** for: template substitution (`{{KEY}}` preprocessor), env var resolution (`${VAR}` expansion), YAML preprocessor, CLI argument parsing (`--var KEY=VAL`, `--timeout`, `--branch-strategy`). Placed in `#[cfg(test)] mod proptest_tests` inside the module OR dedicated `tests/*_proptest.rs` file. NOT required for cleanup logic, pure internal helpers, or functions whose inputs are caller-constrained (not user-driven).
 - **Negative-control security tests:** `tests/injection_negative.rs` required in every crate with substitution responsibilities. Must include BOTH:
-  1. Positive-control: user value `$(rm -rf /)` passed through `command: [$VAR]` appears as literal argv element and does NOT execute (minion's guarantee).
+  1. Positive-control: user value `$(rm -rf /)` passed through `command: [$VAR]` appears as literal argv element and does NOT execute (stepyard's guarantee).
   2. Negative-control: user value passed through `command: ["sh", "-c", "$VAR"]` DOES execute, proving the escape hatch is user-owned.
 - **Rule 7a — In-process tokio tests:** `tokio::time::pause()` + `tokio::time::advance()` for virtual time. `tokio::time::sleep(…)` is BANNED inside `#[tokio::test]` / `#[cfg(test)]` blocks (pre-merge grep check or custom clippy restriction).
 - **Rule 7b — Out-of-process `assert_cmd` tests:** every `Command` must specify `.timeout(Duration::from_secs(N))`. NEVER invoke `.output()` or `.status()` without a `.timeout()`.
@@ -165,20 +165,20 @@ This document provides the complete epic and story breakdown for Minion Engine �
 
 **Structural / File Placement Requirements:**
 
-- `WorkspaceManager` trait + `GitWorktreeManager` impl → `crates/minion-sandbox-orchestrator/src/workspace.rs`
-- `{{KEY}}` template preprocessor → `crates/minion-core/src/template.rs`
+- `WorkspaceManager` trait + `GitWorktreeManager` impl → `crates/stepyard-sandbox-orchestrator/src/workspace.rs`
+- `{{KEY}}` template preprocessor → `crates/stepyard-core/src/template.rs`
 - Startup reconcile orchestrator → `src/startup.rs` (workspace-root binary — composes `DockerLifecycle` + `GitWorktreeManager` + PG pool from concrete types)
 - Signal handler + broadcast construction → `src/signal.rs`
-- Docker stderr → `SandboxError` classifier → `crates/minion-sandbox-orchestrator/src/docker_errors.rs`
-- All 8 new `Event` variants → `crates/minion-core/src/event.rs` only (never in consumer crates)
+- Docker stderr → `SandboxError` classifier → `crates/stepyard-sandbox-orchestrator/src/docker_errors.rs`
+- All 8 new `Event` variants → `crates/stepyard-core/src/event.rs` only (never in consumer crates)
 - Errors co-located with types: `WorkspaceError` inside `workspace.rs`, not a separate `workspace_errors.rs`
 - One file per major trait (`workspace.rs`, `template.rs`)
 - Internal helpers: sibling `{module}/internal.rs` or `{module}/_impl.rs`
 
 **CLI Surface Additions:**
 
-- `minion session list --status <running|completed|failed|cancelled> [--since <duration>]` — new CLI subcommand (FR24). Backed by PostgreSQL query against `sessions.status` column (NOT an in-memory registry lookup). Consistent with session-log-as-truth invariant.
-- `minion run --var KEY=VAL` — new CLI flag for template substitution values (Growth phase, FR19).
+- `stepyard session list --status <running|completed|failed|cancelled> [--since <duration>]` — new CLI subcommand (FR24). Backed by PostgreSQL query against `sessions.status` column (NOT an in-memory registry lookup). Consistent with session-log-as-truth invariant.
+- `stepyard run --var KEY=VAL` — new CLI flag for template substitution values (Growth phase, FR19).
 - Workflow YAML field `timeout:` (u64 ms) — MVP, per-step wall-clock timeout (FR1).
 - Workflow YAML field `idle_timeout:` (u64 ms) — Growth, per-step idle (no stdout) timeout (FR2).
 - Workflow YAML field `env: { KEY: VAL }` — MVP, step-level environment variable map (FR9).
@@ -195,11 +195,11 @@ This document provides the complete epic and story breakdown for Minion Engine �
 
 **First Implementation Target (MVP Feature #1):**
 
-- **Bug fix (~3 lines):** `crates/minion-harness/src/engine.rs:413-416` — `finalise_cancel()` currently passes `SandboxId::default()` to `lifecycle.destroy()` instead of the actual session ID. Fix: pass `self.session.id()`. Add test at `crates/minion-harness/tests/cancel_cleanup.rs` verifying the correct container is destroyed. This story unblocks everything else.
+- **Bug fix (~3 lines):** `crates/stepyard-harness/src/engine.rs:413-416` — `finalise_cancel()` currently passes `SandboxId::default()` to `lifecycle.destroy()` instead of the actual session ID. Fix: pass `self.session.id()`. Add test at `crates/stepyard-harness/tests/cancel_cleanup.rs` verifying the correct container is destroyed. This story unblocks everything else.
 
 ### UX Design Requirements
 
-_No UX Design document exists for this project. Minion Engine is a Rust CLI/library — no user interface surface beyond command-line output rendering (which is covered by the CLI Surface Additions above: new event variant rendering in `src/cli/display.rs`, `session list` subcommand output format)._
+_No UX Design document exists for this project. Stepyard is a Rust CLI/library — no user interface surface beyond command-line output rendering (which is covered by the CLI Surface Additions above: new event variant rendering in `src/cli/display.rs`, `session list` subcommand output format)._
 
 ### FR Coverage Map
 
@@ -207,28 +207,28 @@ _No UX Design document exists for this project. Minion Engine is a Rust CLI/libr
 |---|---|---|
 | FR1 | Epic 1 | Step timeout via `tokio::time::timeout()` wrapping step executor |
 | FR2 | Epic 5 | Idle timeout via `AsyncBufReadExt::read_until` + per-read `tokio::time::timeout` |
-| FR3 | Epic 1 | Cancel passes `self.session.id()` (MVP bug fix at `minion-harness/src/engine.rs:413-416`) |
+| FR3 | Epic 1 | Cancel passes `self.session.id()` (MVP bug fix at `stepyard-harness/src/engine.rs:413-416`) |
 | FR4 | Epic 1 + Epic 5 | `TerminationReason` sub-enum (D9): StepTimeout/Cancelled in Epic 1, IdleTimeout in Epic 5 |
 | FR5 | Epic 2 | `tokio::signal::unix` handlers for SIGINT/SIGTERM in `src/signal.rs` |
 | FR6 | Epic 2 | Per-process `broadcast::Sender<()>` in `main()`, receiver per Engine (D1/D2 — NOT DashMap) |
 | FR7 | Epic 2 | Idempotent `destroy_by_session()` tolerates already-destroyed |
 | FR8 | Epic 2 | `SignalReceived` event synchronously appended before destroy |
 | FR9 | Epic 3 | Step-level `env:` YAML field with `#[serde(default)]` |
-| FR10 | Epic 3 | `.minion/defaults.yaml` cascade in `src/config/merge.rs` |
+| FR10 | Epic 3 | `.stepyard/defaults.yaml` cascade in `src/config/merge.rs` |
 | FR11 | Epic 3 | `${VAR}` host resolution in `src/config/merge.rs` |
 | FR12 | Epic 3 | Opt-in-only forwarding; no `--env-host` flag; injection_negative.rs tests |
-| FR13 | Epic 4 | `git worktree add` via `GitWorktreeManager` in `crates/minion-sandbox-orchestrator/src/workspace.rs` |
+| FR13 | Epic 4 | `git worktree add` via `GitWorktreeManager` in `crates/stepyard-sandbox-orchestrator/src/workspace.rs` |
 | FR14 | Epic 4 | `branch_strategy:` top-level YAML field (D10) — `head \| merge_to_head \| named_branch` |
 | FR15 | Epic 4 | Auto-merge on `merge_to_head` strategy at workflow completion |
 | FR16 | Epic 4 | Conflict preserves temp branch + emits `MergeConflict { source, target, files }` event |
-| FR17 | Epic 4 | Startup two-phase prune via `minion::startup::reconcile()` (D8) |
+| FR17 | Epic 4 | Startup two-phase prune via `stepyard::startup::reconcile()` (D8) |
 | FR18 | Epic 4 | `git status --porcelain` detection before delete |
-| FR19 | Epic 5 | `minion_core::template::substitute` pre-parse pass (D7), YAML-safe |
+| FR19 | Epic 5 | `stepyard_core::template::substitute` pre-parse pass (D7), YAML-safe |
 | FR20 | Epic 5 | Completion-signal string match on agent stdout |
 | FR21 | Epic 5 | `EngineError::PlaceholderUnresolved { key, found_at }` at parse time |
 | FR22 | Cross-cutting | Events land incrementally: Epic 1 (StepTimeoutFired), Epic 2 (SignalReceived), Epic 4 (BranchCreated/MergeAttempted/MergeConflict/WorkspacePrepared/WorkspacePruned), Epic 5 (IdleTimeoutFired) |
 | FR23 | Epic 4 | Branch/git operations recorded as session events via `Session::append(evt).await?` |
-| FR24 | Epic 2 | `minion session list --status` CLI backed by PG query on `sessions.status` column |
+| FR24 | Epic 2 | `stepyard session list --status` CLI backed by PG query on `sessions.status` column |
 | FR25 | Epic 6 | Podman via existing `SandboxLifecycle` trait (no refinement needed for MVP) |
 | FR26 | Epic 6 | Provider config object passed to `SandboxLifecycle::create()` |
 | FR27 | Epic 6 | TTY forwarding through trait refinement (Expansion only) |
@@ -236,27 +236,27 @@ _No UX Design document exists for this project. Minion Engine is a Rust CLI/libr
 ## Epic List
 
 ### Epic 1: Stuck-Agent Termination & Cancel Correctness
-Operators can trust the engine not to hang. A step past its wall-clock timeout is terminated with a clear `TerminationReason`; cancel operations destroy the correct container associated with the active session (fixes the `SandboxId::default()` bug at `minion-harness/src/engine.rs:413-416`). Ships the `TerminationReason` sub-enum (D9), the `StepFailed` error structure, the first `Event` variant (`StepTimeoutFired`), and the workspace-wide `non_exhaustive_omitted_patterns = "deny"` lint — foundations for every later epic. **Minimum shippable scope:** Bug fix story alone (~3 lines) eliminates the worst production risk.
+Operators can trust the engine not to hang. A step past its wall-clock timeout is terminated with a clear `TerminationReason`; cancel operations destroy the correct container associated with the active session (fixes the `SandboxId::default()` bug at `stepyard-harness/src/engine.rs:413-416`). Ships the `TerminationReason` sub-enum (D9), the `StepFailed` error structure, the first `Event` variant (`StepTimeoutFired`), and the workspace-wide `non_exhaustive_omitted_patterns = "deny"` lint — foundations for every later epic. **Minimum shippable scope:** Bug fix story alone (~3 lines) eliminates the worst production risk.
 **Phase:** MVP (Micro-Release 1)
 **FRs covered:** FR1, FR3, FR4 (partial — step-timeout + cancel reasons), FR22 (partial — `StepTimeoutFired` variant)
 
 ### Epic 2: Crash-Safe Process Lifecycle & Session Visibility
-The engine survives OS-level termination (SIGTERM, SIGINT, OOM) without leaving orphaned containers. Active sessions receive a cancel broadcast and shut down gracefully; orphan containers and sessions from prior crashes are reconciled at startup via `minion::startup::reconcile()`. Operators query session state by status and time range through the new `minion session list --status` CLI subcommand — backed by PostgreSQL query, consistent with session-log-as-truth. Together these serve Journey 2 (VPS crash/OOM) and Journey 3 (DevOps audit).
+The engine survives OS-level termination (SIGTERM, SIGINT, OOM) without leaving orphaned containers. Active sessions receive a cancel broadcast and shut down gracefully; orphan containers and sessions from prior crashes are reconciled at startup via `stepyard::startup::reconcile()`. Operators query session state by status and time range through the new `stepyard session list --status` CLI subcommand — backed by PostgreSQL query, consistent with session-log-as-truth. Together these serve Journey 2 (VPS crash/OOM) and Journey 3 (DevOps audit).
 **Phase:** MVP (Micro-Release 2a)
 **FRs covered:** FR5, FR6, FR7, FR8, FR24, FR22 (partial — `SignalReceived` variant)
 
 ### Epic 3: Sandbox Environment Injection
-Workflow authors declare environment variables per step in workflow YAML or default vars in `.minion/defaults.yaml`, resolved from the host via `${VAR}` syntax. The engine passes only declared variables to the sandbox via argv `--env K=V` flags — never shell-interpolated, never full host env passthrough. Ships alongside Epic 2 as parallel MVP work. Introduces the `SandboxLifecycle::exec_with_env` default-impl method (D3) and cascade resolution in `Engine::prepare_step` (D6) with mandatory `injection_negative.rs` negative-control tests.
+Workflow authors declare environment variables per step in workflow YAML or default vars in `.stepyard/defaults.yaml`, resolved from the host via `${VAR}` syntax. The engine passes only declared variables to the sandbox via argv `--env K=V` flags — never shell-interpolated, never full host env passthrough. Ships alongside Epic 2 as parallel MVP work. Introduces the `SandboxLifecycle::exec_with_env` default-impl method (D3) and cascade resolution in `Engine::prepare_step` (D6) with mandatory `injection_negative.rs` negative-control tests.
 **Phase:** MVP (Micro-Release 2b)
 **FRs covered:** FR9, FR10, FR11, FR12
 
 ### Epic 4: Parallel Agent Isolation via Git Workspaces
-N agents run concurrently on the same repository without interfering. Each session receives an isolated git worktree; branches merge cleanly on success via the configured strategy (`head | merge_to_head | named_branch`, D10) or preserve the temp branch and emit `MergeConflict` on failure. Stale worktrees are pruned at startup via the D8 two-phase protocol; worktrees with uncommitted changes are never auto-deleted. Introduces the `WorkspaceManager` trait + `GitWorktreeManager` impl in `minion-sandbox-orchestrator` (D4) and five new Event variants (`BranchCreated`, `MergeAttempted`, `MergeConflict`, `WorkspacePrepared`, `WorkspacePruned`). Serves Journey 1 (Bruno's parallel reviews).
+N agents run concurrently on the same repository without interfering. Each session receives an isolated git worktree; branches merge cleanly on success via the configured strategy (`head | merge_to_head | named_branch`, D10) or preserve the temp branch and emit `MergeConflict` on failure. Stale worktrees are pruned at startup via the D8 two-phase protocol; worktrees with uncommitted changes are never auto-deleted. Introduces the `WorkspaceManager` trait + `GitWorktreeManager` impl in `stepyard-sandbox-orchestrator` (D4) and five new Event variants (`BranchCreated`, `MergeAttempted`, `MergeConflict`, `WorkspacePrepared`, `WorkspacePruned`). Serves Journey 1 (Bruno's parallel reviews).
 **Phase:** Growth
 **FRs covered:** FR13, FR14, FR15, FR16, FR17, FR18, FR23, FR22 (partial — 5 workspace/branch events)
 
 ### Epic 5: Workflow Templating & Idle Detection
-One workflow YAML runs across N projects via `{{KEY}}` placeholder substitution (CLI `--var KEY=VAL` flags or `.minion/defaults.yaml`). Placeholders are validated pre-execution and fail fast with a clear error. Idle agents (no stdout output for a configurable threshold) are detected via output-based timeout complementing Epic 1's wall-clock timeout. Completion-signal strings let agents exit iteration loops early. Introduces `minion_core::template::substitute` pre-parse pass (D7) with YAML-safe substitution and mandatory proptest coverage. Serves Journey 4 (workflow author parameterization).
+One workflow YAML runs across N projects via `{{KEY}}` placeholder substitution (CLI `--var KEY=VAL` flags or `.stepyard/defaults.yaml`). Placeholders are validated pre-execution and fail fast with a clear error. Idle agents (no stdout output for a configurable threshold) are detected via output-based timeout complementing Epic 1's wall-clock timeout. Completion-signal strings let agents exit iteration loops early. Introduces `stepyard_core::template::substitute` pre-parse pass (D7) with YAML-safe substitution and mandatory proptest coverage. Serves Journey 4 (workflow author parameterization).
 **Phase:** Growth
 **FRs covered:** FR2, FR19, FR20, FR21, FR4 (partial — idle-timeout reason), FR22 (partial — `IdleTimeoutFired` variant)
 
@@ -276,7 +276,7 @@ Swap Docker for Podman or cloud providers (Vercel, Daytona-style) through the ex
 
 ## Epic 1: Stuck-Agent Termination & Cancel Correctness
 
-Operators can trust the engine not to hang. A step past its wall-clock timeout is terminated with a clear `TerminationReason`; cancel operations destroy the correct container associated with the active session (fixes the `SandboxId::default()` bug at `minion-harness/src/engine.rs:413-416`). Ships the `TerminationReason` sub-enum (D9), the `StepFailed` error structure, the first `Event` variant (`StepTimeoutFired`), and the workspace-wide `non_exhaustive_omitted_patterns = "deny"` lint — foundations for every later epic. **Minimum shippable scope:** Bug fix story alone (~3 lines) eliminates the worst production risk.
+Operators can trust the engine not to hang. A step past its wall-clock timeout is terminated with a clear `TerminationReason`; cancel operations destroy the correct container associated with the active session (fixes the `SandboxId::default()` bug at `stepyard-harness/src/engine.rs:413-416`). Ships the `TerminationReason` sub-enum (D9), the `StepFailed` error structure, the first `Event` variant (`StepTimeoutFired`), and the workspace-wide `non_exhaustive_omitted_patterns = "deny"` lint — foundations for every later epic. **Minimum shippable scope:** Bug fix story alone (~3 lines) eliminates the worst production risk.
 
 **Phase:** MVP (Micro-Release 1)
 **FRs covered:** FR1, FR3, FR4 (partial — step-timeout + cancel reasons), FR22 (partial — `StepTimeoutFired` variant)
@@ -290,16 +290,16 @@ So that cancelling a session immediately frees its resources and doesn't leave o
 **Acceptance Criteria:**
 
 **Given** an active session with a live sandbox container
-**When** `finalise_cancel()` executes in `crates/minion-harness/src/engine.rs` around lines 413-416
+**When** `finalise_cancel()` executes in `crates/stepyard-harness/src/engine.rs` around lines 413-416
 **Then** `lifecycle.destroy()` receives `self.session.id()` (converted to `SandboxId` if needed), NOT `SandboxId::default()`
-**And** the container `minion-session-<session-uuid>` is removed by the cleanup deadline
+**And** the container `stepyard-session-<session-uuid>` is removed by the cleanup deadline
 
 **Given** `finalise_cancel()` is invoked when the container was already destroyed by another path
 **When** `lifecycle.destroy()` returns a `ContainerNotFound` (or equivalent `SandboxError` variant)
 **Then** the cancel path treats the error as success (idempotent per FR7 + NFR12 precedent)
 **And** the session transitions to `cancelled` status without propagating the error to the caller
 
-**Given** a new integration test file `crates/minion-harness/tests/cancel_cleanup.rs`
+**Given** a new integration test file `crates/stepyard-harness/tests/cancel_cleanup.rs`
 **When** the test drives a session through cancel with a `MockLifecycle` that records the `SandboxId` passed to `destroy()`
 **Then** the recorded ID's underlying UUID matches the session's UUID (not `Uuid::nil()` / default)
 **And** the assertion fails if future edits silently regress to `SandboxId::default()`
@@ -314,7 +314,7 @@ So that every step-termination path reports its cause through one taxonomy witho
 
 **Acceptance Criteria:**
 
-**Given** the error taxonomy defined in `crates/minion-core/src/error.rs`
+**Given** the error taxonomy defined in `crates/stepyard-core/src/error.rs`
 **When** `EngineError` is inspected
 **Then** the only step-termination variant is `StepFailed { step_index: u32, reason: TerminationReason }`
 **And** `TerminationReason` is a sibling enum in the same file deriving `Debug, Clone, thiserror::Error`
@@ -331,7 +331,7 @@ So that every step-termination path reports its cause through one taxonomy witho
 **Then** they must further match on `TerminationReason` which is ALSO `#[non_exhaustive]`
 **And** the workspace-wide lint from Story 1.3 forces explicit handling of every `TerminationReason` variant in consumers
 
-**Given** unit tests at `crates/minion-core/src/error.rs` (inline `#[cfg(test)] mod tests`)
+**Given** unit tests at `crates/stepyard-core/src/error.rs` (inline `#[cfg(test)] mod tests`)
 **When** each `TerminationReason` variant is constructed and formatted
 **Then** `Display` output matches the documented lowercase, no-trailing-punctuation format
 **And** `Debug` output is stable for use in event payload assertions
@@ -346,7 +346,7 @@ So that future event variants can ship without silent breakage in subscribers an
 
 **Acceptance Criteria:**
 
-**Given** `crates/minion-core/src/event.rs` owns the `Event` enum
+**Given** `crates/stepyard-core/src/event.rs` owns the `Event` enum
 **When** `StepTimeoutFired { step_index: u32, configured_ms: u64 }` is added as a new variant
 **Then** the enum retains its existing `#[non_exhaustive]` and `#[serde(other)]` attributes
 **And** the variant carries `#[serde(rename_all = "snake_case")]` so JSONB payloads serialize as `{"type":"step_timeout_fired","step_index":0,"configured_ms":300000}`
@@ -364,7 +364,7 @@ So that future event variants can ship without silent breakage in subscribers an
 **And** CLI display renders `"step {step_index} timed out after {configured_ms}ms"` (or equivalent lowercase phrase)
 **And** `cargo clippy --workspace --all-targets -- -D warnings` succeeds with the lint active
 
-**Given** a unit test in `crates/minion-core/src/event.rs`
+**Given** a unit test in `crates/stepyard-core/src/event.rs`
 **When** `serde_json::to_value(Event::StepTimeoutFired { step_index: 2, configured_ms: 300_000 })` is called
 **Then** the output is `{"type":"step_timeout_fired","step_index":2,"configured_ms":300000}`
 **And** round-trip deserialization produces the identical variant
@@ -398,7 +398,7 @@ So that a stuck agent never runs past its configured wall-clock deadline and the
 **And** no destroy call is triggered by the timeout path (normal completion cleanup handles that)
 **And** the elapsed time measured inside the wrapper stays within NFR3's 50ms overhead budget
 
-**Given** a test at `crates/minion-harness/tests/step_timeout.rs` annotated `#[tokio::test(start_paused = true)]`
+**Given** a test at `crates/stepyard-harness/tests/step_timeout.rs` annotated `#[tokio::test(start_paused = true)]`
 **When** the test calls `tokio::time::advance(Duration::from_secs(301)).await` (simulated 301 seconds for a `timeout: 300000`)
 **Then** the test observes an emitted `Event::StepTimeoutFired` BEFORE `MockLifecycle::destroy` was called
 **And** the test observes `EngineError::StepFailed { reason: TerminationReason::StepTimeout { configured_ms: 300_000 }, .. }` returned
@@ -409,7 +409,7 @@ Coverage: FR1, FR4 (StepTimeout reason), FR22 (StepTimeoutFired emission path), 
 
 ## Epic 2: Crash-Safe Process Lifecycle & Session Visibility
 
-The engine survives OS-level termination (SIGTERM, SIGINT, OOM) without leaving orphaned containers. Active sessions receive a cancel broadcast and shut down gracefully; orphan containers and sessions from prior crashes are reconciled at startup via `minion::startup::reconcile()`. Operators query session state by status and time range through the new `minion session list --status` CLI subcommand — backed by PostgreSQL query, consistent with session-log-as-truth. Together these serve Journey 2 (VPS crash/OOM) and Journey 3 (DevOps audit).
+The engine survives OS-level termination (SIGTERM, SIGINT, OOM) without leaving orphaned containers. Active sessions receive a cancel broadcast and shut down gracefully; orphan containers and sessions from prior crashes are reconciled at startup via `stepyard::startup::reconcile()`. Operators query session state by status and time range through the new `stepyard session list --status` CLI subcommand — backed by PostgreSQL query, consistent with session-log-as-truth. Together these serve Journey 2 (VPS crash/OOM) and Journey 3 (DevOps audit).
 
 **Phase:** MVP (Micro-Release 2a)
 **FRs covered:** FR5, FR6, FR7, FR8, FR24, FR22 (partial — `SignalReceived` variant)
@@ -422,12 +422,12 @@ So that later stories can wire signal handlers and crash-recovery without introd
 
 **Acceptance Criteria:**
 
-**Given** `HarnessConfig` in `crates/minion-harness/src/config.rs`
+**Given** `HarnessConfig` in `crates/stepyard-harness/src/config.rs`
 **When** the struct is inspected
 **Then** it gains `pub shutdown_tx: Arc<tokio::sync::broadcast::Sender<()>>`
 **And** it gains `pub shutdown_grace_s: u64` defaulting to `10` via `#[serde(default = "…")]` (D2 default)
 
-**Given** `Engine::new(HarnessConfig)` in `crates/minion-harness/src/engine.rs`
+**Given** `Engine::new(HarnessConfig)` in `crates/stepyard-harness/src/engine.rs`
 **When** constructed
 **Then** it subscribes: `let shutdown_rx = config.shutdown_tx.subscribe();`
 **And** stores `shutdown_rx: tokio::sync::broadcast::Receiver<()>` as a field on the Engine struct
@@ -439,7 +439,7 @@ So that later stories can wire signal handlers and crash-recovery without introd
 **And** passes `shutdown_tx.clone()` into every `Engine::new(HarnessConfig { shutdown_tx: .., .. })`
 **And** no Engine owns the `Sender` — only `main()` does (receivers are cloned through subscribe)
 
-**Given** a unit test at `crates/minion-harness/tests/broadcast_plumbing.rs`
+**Given** a unit test at `crates/stepyard-harness/tests/broadcast_plumbing.rs`
 **When** multiple Engines are constructed from a shared `shutdown_tx` and the test calls `shutdown_tx.send(()).unwrap()`
 **Then** every Engine's receiver observes exactly one message
 **And** the test uses `#[tokio::test(start_paused = true)]` (Rule 7a) and contains no `tokio::time::sleep(…)` calls
@@ -449,7 +449,7 @@ Coverage: FR6, D1, D2 (infrastructure)
 ### Story 2.2: Install SIGINT/SIGTERM Handlers and Graceful Shutdown Deadline
 
 As a platform operator,
-I want the `minion` binary to intercept SIGINT and SIGTERM, fire the broadcast channel, wait up to `shutdown_grace_s` for in-flight engines, then exit with the canonical signal exit code,
+I want the `stepyard` binary to intercept SIGINT and SIGTERM, fire the broadcast channel, wait up to `shutdown_grace_s` for in-flight engines, then exit with the canonical signal exit code,
 So that container cleanup starts within 1s (NFR1) and never hits the kernel's 30s SIGKILL deadline.
 
 **Acceptance Criteria:**
@@ -477,7 +477,7 @@ So that container cleanup starts within 1s (NFR1) and never hits the kernel's 30
 **And** its only side effects are `shutdown_tx.send(())` and measuring wall-clock deadline
 
 **Given** an integration test at `tests/signal_handler.rs` using `assert_cmd`
-**When** the test spawns `minion run <trivial-workflow>` as a subprocess and sends SIGTERM after step start
+**When** the test spawns `stepyard run <trivial-workflow>` as a subprocess and sends SIGTERM after step start
 **Then** the subprocess exits within `shutdown_grace_s + 1` seconds with code 143
 **And** every `std::process::Command` / `assert_cmd::Command` has `.timeout(Duration::from_secs(N))` (Rule 7b)
 **And** elapsed time from signal-to-exit is <5s (NFR1: cleanup within 1s + grace margin)
@@ -492,13 +492,13 @@ So that SIGTERM / SIGINT cancellation produces an auditable session record befor
 
 **Acceptance Criteria:**
 
-**Given** `crates/minion-core/src/event.rs`
+**Given** `crates/stepyard-core/src/event.rs`
 **When** inspected
 **Then** it gains `Event::SignalReceived { signal: String }` with `#[serde(rename_all = "snake_case")]`
 **And** subscribers at `src/events/subscribers.rs` and `src/cli/display.rs` gain explicit match arms (workspace `non_exhaustive_omitted_patterns = "deny"` lint from Story 1.3 enforces this)
 **And** CLI display renders `"signal received: {signal}"` (lowercase, no trailing punctuation)
 
-**Given** `Engine::run_step` (the main step loop) in `crates/minion-harness/src/engine.rs`
+**Given** `Engine::run_step` (the main step loop) in `crates/stepyard-harness/src/engine.rs`
 **When** the step executor future is in flight
 **Then** it runs inside `tokio::select! { result = step_future => …, _ = self.shutdown_rx.recv() => …, }` with the two arms
 **And** when the receiver arm fires, execution enters a finalise-cancel path
@@ -511,12 +511,12 @@ So that SIGTERM / SIGINT cancellation produces an auditable session record befor
 **Then** `signal` is one of `"sigterm"`, `"sigint"`, or (for Story 2.4) `"crash_recovery"` — lowercase snake_case
 **And** the `TerminationReason::SignalReceived(String)` argument carries the identical string
 
-**Given** `MockLifecycle` in `crates/minion-sandbox-orchestrator/src/mock.rs` (or test-common module)
+**Given** `MockLifecycle` in `crates/stepyard-sandbox-orchestrator/src/mock.rs` (or test-common module)
 **When** extended
 **Then** `MockLifecycleCall::Destroy { id: SandboxId }` records the `SandboxId` parameter
 **And** at least one test in this story asserts on `id` matching the session UUID (mock-extension safeguard — prevents silent regression to `SandboxId::default()`)
 
-**Given** an integration test at `crates/minion-harness/tests/signal_cancel.rs`
+**Given** an integration test at `crates/stepyard-harness/tests/signal_cancel.rs`
 **When** the test constructs an Engine with `MockLifecycle`, starts a long-running step, then fires `shutdown_tx.send(()).unwrap()`
 **Then** the test observes `Event::SignalReceived { signal: "sigterm" }` appended to the session log
 **And** the session event log records the emit happened BEFORE `MockLifecycleCall::Destroy` (emit-before-IO ordering)
@@ -528,7 +528,7 @@ Coverage: FR7, FR8, FR22 (SignalReceived variant), NFR12 (idempotent destroy)
 ### Story 2.4: Startup Crash Recovery — Reconcile Orphan Sessions and Containers
 
 As a platform operator,
-I want `minion` to run a three-phase reconcile at startup that marks orphan `running` sessions as `failed`, destroys orphan containers, and stubs the worktree pruning slot (Epic 4 fills it),
+I want `stepyard` to run a three-phase reconcile at startup that marks orphan `running` sessions as `failed`, destroys orphan containers, and stubs the worktree pruning slot (Epic 4 fills it),
 So that a restart after OOM / crash / hard-kill leaves the engine in a consistent state without manual intervention.
 
 **Acceptance Criteria:**
@@ -548,8 +548,8 @@ So that a restart after OOM / crash / hard-kill leaves the engine in a consisten
 
 **Given** phase 2 (container reconciliation)
 **When** executed
-**Then** it runs `docker ps --filter "name=minion-session-*" --format "{{.Names}}"` via `tokio::process::Command` with argv-only (never `sh -c`)
-**And** for each returned name, extracts the UUID suffix after `minion-session-`
+**Then** it runs `docker ps --filter "name=stepyard-session-*" --format "{{.Names}}"` via `tokio::process::Command` with argv-only (never `sh -c`)
+**And** for each returned name, extracts the UUID suffix after `stepyard-session-`
 **And** if that UUID does NOT correspond to a session whose `status = 'running'` in PG, runs `docker rm -f <name>` via argv
 **And** tolerates "No such container" stderr as success (NFR12 idempotent cleanup)
 **And** the phase is idempotent: two sequential runs produce identical final container state
@@ -573,10 +573,10 @@ So that a restart after OOM / crash / hard-kill leaves the engine in a consisten
 
 Coverage: Crash Recovery (architecture.md), NFR11 (crash recovery), NFR12 (idempotent cleanup)
 
-### Story 2.5: Add `minion session list --status` CLI Subcommand
+### Story 2.5: Add `stepyard session list --status` CLI Subcommand
 
 As a DevOps engineer,
-I want `minion session list --status <running|completed|failed|cancelled> [--since <duration>]` backed by a PostgreSQL query on `sessions.status`,
+I want `stepyard session list --status <running|completed|failed|cancelled> [--since <duration>]` backed by a PostgreSQL query on `sessions.status`,
 So that I can audit session outcomes and filter by time range without loading full event logs.
 
 **Acceptance Criteria:**
@@ -586,7 +586,7 @@ So that I can audit session outcomes and filter by time range without loading fu
 **Then** `SessionListArgs` derives `clap::Args` with `status: SessionStatus` (clap `ValueEnum` with variants `Running`, `Completed`, `Failed`, `Cancelled` — snake_case on CLI)
 **And** `since: Option<humantime::Duration>` is an optional flag `--since <duration>` (parsed via `humantime::parse_duration`)
 
-**Given** the user invokes `minion session list --status running`
+**Given** the user invokes `stepyard session list --status running`
 **When** the handler runs
 **Then** it executes `SELECT id, status, started_at, ended_at FROM sessions WHERE status = $1 ORDER BY started_at DESC` against PG
 **And** prints one row per session in tabular format: `<id>  <status>  <started_at ISO-8601 UTC>  <ended_at ISO-8601 UTC or '-'>`
@@ -608,7 +608,7 @@ So that I can audit session outcomes and filter by time range without loading fu
 **And** exit code is `2` (clap's default for parse errors)
 
 **Given** an integration test at `tests/session_list_cli.rs` using `assert_cmd`
-**When** the test seeds PG with sessions in each status, then invokes `minion session list --status running`
+**When** the test seeds PG with sessions in each status, then invokes `stepyard session list --status running`
 **Then** stdout contains only `status='running'` rows
 **And** output is ordered by `started_at DESC`
 **And** `--since 1h` filters out sessions older than 1 hour
@@ -619,7 +619,7 @@ Coverage: FR24
 
 ## Epic 3: Sandbox Environment Injection
 
-Workflow authors declare environment variables per step in workflow YAML or default vars in `.minion/defaults.yaml`, resolved from the host via `${VAR}` syntax. The engine passes only declared variables to the sandbox via argv `--env K=V` flags — never shell-interpolated, never full host env passthrough. Ships alongside Epic 2 as parallel MVP work. Introduces the `SandboxLifecycle::exec_with_env` default-impl method (D3) and cascade resolution in `Engine::prepare_step` (D6) with mandatory `injection_negative.rs` negative-control tests.
+Workflow authors declare environment variables per step in workflow YAML or default vars in `.stepyard/defaults.yaml`, resolved from the host via `${VAR}` syntax. The engine passes only declared variables to the sandbox via argv `--env K=V` flags — never shell-interpolated, never full host env passthrough. Ships alongside Epic 2 as parallel MVP work. Introduces the `SandboxLifecycle::exec_with_env` default-impl method (D3) and cascade resolution in `Engine::prepare_step` (D6) with mandatory `injection_negative.rs` negative-control tests.
 
 **Phase:** MVP (Micro-Release 2b)
 **FRs covered:** FR9, FR10, FR11, FR12
@@ -632,7 +632,7 @@ So that Epic 3 can inject env vars via the new method without changing the exist
 
 **Acceptance Criteria:**
 
-**Given** `SandboxLifecycle` trait in `crates/minion-sandbox-orchestrator/src/lib.rs` (or wherever currently defined)
+**Given** `SandboxLifecycle` trait in `crates/stepyard-sandbox-orchestrator/src/lib.rs` (or wherever currently defined)
 **When** inspected
 **Then** it gains a new method: `async fn exec_with_env(&self, id: &SandboxId, cmd: &[String], env: &HashMap<String, String>) -> Result<ExecOutput, SandboxError>`
 **And** the default impl is `self.exec(id, cmd).await` (env ignored — preserves existing behavior for unmigrated impls)
@@ -640,18 +640,18 @@ So that Epic 3 can inject env vars via the new method without changing the exist
 **And** the trait retains `#[async_trait]` (project convention, already-locked)
 
 **Given** the mock-extension safeguard
-**When** `MockLifecycle` in `crates/minion-sandbox-orchestrator/src/mock.rs` (or test-common) is extended
+**When** `MockLifecycle` in `crates/stepyard-sandbox-orchestrator/src/mock.rs` (or test-common) is extended
 **Then** `MockLifecycleCall::ExecWithEnv { id: SandboxId, cmd: Vec<String>, env: HashMap<String, String> }` is added as a variant
 **And** `MockLifecycle::exec_with_env` override records the full `env` parameter (not dropped, not lossy)
 **And** at least one unit test asserts on the recorded `env` contents — without this assertion a default impl that silently drops `env` would pass tests (mutation-resistance per testing-enforcement invariant)
 
-**Given** consumers inside `minion-harness`
+**Given** consumers inside `stepyard-harness`
 **When** any code invoking a lifecycle method is inspected
 **Then** NEW invocation sites use `exec_with_env(id, cmd, &env)` (even when `env` is empty — pass `&HashMap::new()`)
 **And** EXISTING invocation sites calling `exec(id, cmd)` are NOT refactored in this story (only Story 3.4 wires new call sites; backward-compat preserved)
 **And** `DockerLifecycle` keeps the existing `exec` method unchanged (the `sh -c` legacy carveout documented in Security Requirements remains intact)
 
-**Given** a unit test at `crates/minion-sandbox-orchestrator/src/mock.rs` (inline `#[cfg(test)] mod tests`)
+**Given** a unit test at `crates/stepyard-sandbox-orchestrator/src/mock.rs` (inline `#[cfg(test)] mod tests`)
 **When** the test calls `mock.exec_with_env(&id, &["echo".to_string(), "hello".to_string()], &env_with_FOO=BAR).await`
 **Then** `MockLifecycleCall::ExecWithEnv { env, .. }` records exactly `{"FOO": "BAR"}`
 **And** calling the default impl on a type that did NOT override `exec_with_env` records the `exec` call (not ExecWithEnv) — proves default delegation works
@@ -667,7 +667,7 @@ So that env vars pass as structured argv elements and are never shell-interpolat
 
 **Acceptance Criteria:**
 
-**Given** `DockerLifecycle` in `crates/minion-sandbox-orchestrator/src/docker.rs`
+**Given** `DockerLifecycle` in `crates/stepyard-sandbox-orchestrator/src/docker.rs`
 **When** the `exec_with_env` override is inspected
 **Then** it builds `tokio::process::Command::new("docker")` with argv `["exec"]`, then one `["--env", "K=V"]` pair per entry in the `env: &HashMap<String, String>` argument (sorted by key for deterministic argv ordering in tests)
 **And** then appends container ID as `args.push(container_name)` and finally the user command as individual argv elements: `args.extend_from_slice(cmd)`
@@ -681,16 +681,16 @@ So that env vars pass as structured argv elements and are never shell-interpolat
 
 **Given** the command itself contains user-supplied strings (e.g., `cmd = ["bash", "-c", "echo $FOO"]`)
 **When** `exec_with_env` invokes docker
-**Then** those strings pass as argv elements to `docker exec` — minion does NOT wrap or escape them
+**Then** those strings pass as argv elements to `docker exec` — stepyard does NOT wrap or escape them
 **And** if the user chose `sh -c` / `bash -c` as their command, expansion happens inside the sandbox (user responsibility per explicit escape hatch)
-**And** minion's layer never adds its own shell wrapper
+**And** stepyard's layer never adds its own shell wrapper
 
 **Given** the legacy carveout (`DockerLifecycle::exec` at `docker.rs:173`)
 **When** that method is inspected in this story
 **Then** it is NOT migrated — the `sh -c` legacy carveout documented in architecture.md remains (post-MVP tech debt)
 **And** `exec_with_env` is fully argv-only regardless of what `exec` does
 
-**Given** an integration test at `crates/minion-sandbox-orchestrator/tests/exec_with_env_docker.rs` (opt-in — skips if Docker unavailable)
+**Given** an integration test at `crates/stepyard-sandbox-orchestrator/tests/exec_with_env_docker.rs` (opt-in — skips if Docker unavailable)
 **When** the test runs `exec_with_env(id, &["printenv".to_string(), "FOO".to_string()], &env_with_FOO=bar)` against a live container
 **Then** stdout contains exactly `bar\n`
 **And** running with `env_with_FOO="$(rm -rf /)"` shows `printenv` output of `$(rm -rf /)` literally — the host filesystem is untouched (positive-control security assertion)
@@ -699,22 +699,22 @@ So that env vars pass as structured argv elements and are never shell-interpolat
 
 Coverage: FR9 executor-side, NFR7 (env isolation at exec layer), argv-not-shell rule
 
-### Story 3.3: Extend Workflow YAML Schema with `env:` Fields and `.minion/defaults.yaml` Loader
+### Story 3.3: Extend Workflow YAML Schema with `env:` Fields and `.stepyard/defaults.yaml` Loader
 
 As a workflow author,
-I want to declare step-level `env: { KEY: VAL }` and workflow-level `env: { KEY: VAL }` in YAML, plus a `.minion/defaults.yaml` file that contributes default env pairs,
+I want to declare step-level `env: { KEY: VAL }` and workflow-level `env: { KEY: VAL }` in YAML, plus a `.stepyard/defaults.yaml` file that contributes default env pairs,
 So that I can parameterize secrets and config per step, per workflow, or project-wide.
 
 **Acceptance Criteria:**
 
-**Given** the workflow YAML schema in `crates/minion-core/src/workflow.rs` (or `minion-harness` — wherever `Workflow` / `Step` structs live)
+**Given** the workflow YAML schema in `crates/stepyard-core/src/workflow.rs` (or `stepyard-harness` — wherever `Workflow` / `Step` structs live)
 **When** inspected
 **Then** `Step` gains `#[serde(default)] pub env: HashMap<String, String>`
 **And** `Workflow` gains `#[serde(default)] pub env: HashMap<String, String>` (top-level)
 **And** both use `#[serde(default)]` for strict backward compatibility (NFR18 — existing YAML without `env:` still parses)
 **And** values are plain strings, not structured types — `${VAR}` substitution is a resolution-time concern (Story 3.4), not a parse-time one
 
-**Given** a new file loader at `src/config/defaults.rs` (workspace-root binary) or `crates/minion-core/src/defaults.rs`
+**Given** a new file loader at `src/config/defaults.rs` (workspace-root binary) or `crates/stepyard-core/src/defaults.rs`
 **When** inspected
 **Then** it exports `pub fn load_defaults(path: &Path) -> Result<Defaults, DefaultsError>` where `Defaults { pub env: HashMap<String, String> }`
 **And** if the file does not exist, returns `Ok(Defaults::default())` with empty env (missing file is not an error — defaults are optional)
@@ -733,7 +733,7 @@ So that I can parameterize secrets and config per step, per workflow, or project
 **And** `step.env` is `HashMap::new()` by default
 
 **Given** a unit test at the loader module
-**When** the test loads a fixture `.minion/defaults.yaml` with `env: { FOO: bar, BAZ: qux }`
+**When** the test loads a fixture `.stepyard/defaults.yaml` with `env: { FOO: bar, BAZ: qux }`
 **Then** `Defaults::env` contains exactly `{"FOO": "bar", "BAZ": "qux"}`
 **And** loading a non-existent path returns `Ok(Defaults::default())` (empty env)
 **And** loading a malformed YAML fixture returns `Err(DefaultsError::Parse { path, .. })` with path matching the input
@@ -748,7 +748,7 @@ So that one workflow YAML can declare opt-in env with clear precedence and secre
 
 **Acceptance Criteria:**
 
-**Given** `Engine::prepare_step` in `crates/minion-harness/src/engine.rs`
+**Given** `Engine::prepare_step` in `crates/stepyard-harness/src/engine.rs`
 **When** inspected
 **Then** it computes the effective env by overlaying in precedence order: `defaults.env` < `workflow.env` < `step.env` (step wins; defaults lose — later overlays overwrite earlier keys)
 **And** after overlay, it expands any value matching the `${VAR}` syntax against `std::env::var(VAR)` (host process env)
@@ -757,7 +757,7 @@ So that one workflow YAML can declare opt-in env with clear precedence and secre
 
 **Given** a `${VAR}` reference that does not exist in host env
 **When** `Engine::prepare_step` resolves it
-**Then** it returns `Err(EngineError::EnvVarUnresolved { key, source: VariableSource::Host })` (new error variant in `minion-core/src/error.rs`)
+**Then** it returns `Err(EngineError::EnvVarUnresolved { key, source: VariableSource::Host })` (new error variant in `stepyard-core/src/error.rs`)
 **And** `#[error("…")]` message is lowercase, no trailing punctuation: `"host env variable not set: {key}"`
 **And** fails fast — no step executes with a partially-resolved env
 
@@ -771,7 +771,7 @@ So that one workflow YAML can declare opt-in env with clear precedence and secre
 **When** `prepare_step` is benchmarked
 **Then** cascade resolution for a step with ≤20 env entries completes in <10ms (O(1) `std::env::var` lookup per `${VAR}` reference)
 
-**Given** a unit test at `crates/minion-harness/tests/env_cascade.rs`
+**Given** a unit test at `crates/stepyard-harness/tests/env_cascade.rs`
 **When** the test constructs workflow YAML with `workflow.env = {"FOO": "workflow-foo", "SHARED": "wf"}`, step env `{"FOO": "step-foo"}`, defaults `{"SHARED": "def", "ONLY_DEF": "x"}` + sets `GITHUB_TOKEN=abc123` in host env and `step.env = {"TOKEN": "${GITHUB_TOKEN}"}`
 **Then** effective env is `{"FOO": "step-foo", "SHARED": "wf", "ONLY_DEF": "x", "TOKEN": "abc123"}` (step wins for FOO; workflow wins for SHARED; defaults contribute ONLY_DEF; TOKEN expands from host)
 **And** the test asserts no env value appears in any event payload (NFR8)
@@ -783,30 +783,30 @@ Coverage: FR9, FR10, FR11, FR12, D6, NFR4, NFR7, NFR8
 ### Story 3.5: Negative-Control Security Tests in `tests/injection_negative.rs`
 
 As a security reviewer,
-I want a dedicated negative-control test file that proves (a) user env values reach the container as argv elements and never execute as shell commands at the minion layer, and (b) the `sh -c` escape hatch IS user-owned (proves the boundary),
+I want a dedicated negative-control test file that proves (a) user env values reach the container as argv elements and never execute as shell commands at the stepyard layer, and (b) the `sh -c` escape hatch IS user-owned (proves the boundary),
 So that any future regression reintroducing shell interpolation is caught at CI time.
 
 **Acceptance Criteria:**
 
-**Given** a new test file `crates/minion-harness/tests/injection_negative.rs` (OR `tests/injection_negative.rs` at workspace root — per structural requirements)
+**Given** a new test file `crates/stepyard-harness/tests/injection_negative.rs` (OR `tests/injection_negative.rs` at workspace root — per structural requirements)
 **When** inspected
 **Then** it contains BOTH a positive-control AND a negative-control test (per Security Requirements)
 **And** both tests are marked `#[tokio::test]` with `#[ignore]` or behind an opt-in env flag if they require a live Docker daemon (integration-tier)
 
-**Given** the positive-control test (minion's guarantee)
-**When** the test runs a workflow with `env: { MSG: "$(touch /tmp/minion-pwned-$$)" }` and `command: ["printenv", "MSG"]`
-**Then** after execution, `/tmp/minion-pwned-*` does NOT exist on the host (the `$(…)` was NOT interpreted — minion passed it as argv)
-**And** the captured stdout literally contains `$(touch /tmp/minion-pwned-…)\n` — proving minion's argv-only guarantee
+**Given** the positive-control test (stepyard's guarantee)
+**When** the test runs a workflow with `env: { MSG: "$(touch /tmp/stepyard-pwned-$$)" }` and `command: ["printenv", "MSG"]`
+**Then** after execution, `/tmp/stepyard-pwned-*` does NOT exist on the host (the `$(…)` was NOT interpreted — stepyard passed it as argv)
+**And** the captured stdout literally contains `$(touch /tmp/stepyard-pwned-…)\n` — proving stepyard's argv-only guarantee
 **And** the test asserts on this exact stdout substring match
 
 **Given** the negative-control test (escape hatch IS user-owned)
 **When** the test runs a workflow with `env: { MSG: "pwned" }` and `command: ["sh", "-c", "echo $MSG"]`
 **Then** stdout is exactly `pwned\n` — the `sh -c` DID expand `$MSG` inside the sandbox (user's responsibility)
 **And** the test comment explicitly documents: `// Escape hatch behavior — user chose sh -c, user owns expansion safety`
-**And** this test proves minion does NOT paternalistically escape values; the boundary is clear
+**And** this test proves stepyard does NOT paternalistically escape values; the boundary is clear
 
 **Given** a second positive-control for CLI template substitution (if Story 5.x's `{{KEY}}` lands — otherwise gated)
-**When** the test uses `minion run --var MSG='$(rm -rf /)'` against a workflow `command: ["echo", "{{MSG}}"]`
+**When** the test uses `stepyard run --var MSG='$(rm -rf /)'` against a workflow `command: ["echo", "{{MSG}}"]`
 **Then** stdout is literally `$(rm -rf /)\n`
 **And** host filesystem is untouched
 **And** this story documents the test file has a placeholder section for Epic 5's substitution tests to extend later
@@ -818,7 +818,7 @@ So that any future regression reintroducing shell interpolation is caught at CI 
 
 **Given** CI integration
 **When** the test file is committed
-**Then** `cargo test -p minion-harness --test injection_negative` passes locally (and in CI when Docker is available)
+**Then** `cargo test -p stepyard-harness --test injection_negative` passes locally (and in CI when Docker is available)
 **And** the README or contributor docs note: "new crates with user-value substitution MUST add an `injection_negative.rs` with both positive and negative controls"
 **And** the existing `non_exhaustive_omitted_patterns = "deny"` lint and `-D warnings` clippy gate apply (NFR19)
 
@@ -826,7 +826,7 @@ Coverage: FR12, NFR7, NFR9, argv-not-shell rule, explicit shell escape hatch rul
 
 ## Epic 4: Parallel Agent Isolation via Git Workspaces
 
-N agents run concurrently on the same repository without interfering. Each session receives an isolated git worktree; branches merge cleanly on success via the configured strategy (`head | merge_to_head | named_branch`, D10) or preserve the temp branch and emit `MergeConflict` on failure. Stale worktrees are pruned at startup via the D8 two-phase protocol; worktrees with uncommitted changes are never auto-deleted. Introduces the `WorkspaceManager` trait + `GitWorktreeManager` impl in `minion-sandbox-orchestrator` (D4) and five new Event variants (`BranchCreated`, `MergeAttempted`, `MergeConflict`, `WorkspacePrepared`, `WorkspacePruned`). Serves Journey 1 (Bruno's parallel reviews).
+N agents run concurrently on the same repository without interfering. Each session receives an isolated git worktree; branches merge cleanly on success via the configured strategy (`head | merge_to_head | named_branch`, D10) or preserve the temp branch and emit `MergeConflict` on failure. Stale worktrees are pruned at startup via the D8 two-phase protocol; worktrees with uncommitted changes are never auto-deleted. Introduces the `WorkspaceManager` trait + `GitWorktreeManager` impl in `stepyard-sandbox-orchestrator` (D4) and five new Event variants (`BranchCreated`, `MergeAttempted`, `MergeConflict`, `WorkspacePrepared`, `WorkspacePruned`). Serves Journey 1 (Bruno's parallel reviews).
 
 **Phase:** Growth
 **FRs covered:** FR13, FR14, FR15, FR16, FR17, FR18, FR23, FR22 (partial — 5 workspace/branch events)
@@ -834,12 +834,12 @@ N agents run concurrently on the same repository without interfering. Each sessi
 ### Story 4.1: Define `WorkspaceManager` Trait and `GitWorktreeManager` Skeleton
 
 As an engine maintainer,
-I want a `WorkspaceManager` trait in `crates/minion-sandbox-orchestrator/src/workspace.rs` and a concrete `GitWorktreeManager` struct with stub method bodies,
+I want a `WorkspaceManager` trait in `crates/stepyard-sandbox-orchestrator/src/workspace.rs` and a concrete `GitWorktreeManager` struct with stub method bodies,
 So that subsequent stories can fill in `prepare` / `finalize` / `prune` behaviors against a stable trait contract without introducing a new crate (D4).
 
 **Acceptance Criteria:**
 
-**Given** a new file `crates/minion-sandbox-orchestrator/src/workspace.rs`
+**Given** a new file `crates/stepyard-sandbox-orchestrator/src/workspace.rs`
 **When** inspected
 **Then** it defines `pub trait WorkspaceManager: Send + Sync + 'static` with `#[async_trait]` (project convention)
 **And** the trait is `#[non_exhaustive]`-style extensibility via its error type (not the trait itself; traits can't carry that attribute) — future-proof via `#[async_trait]` default impls
@@ -862,7 +862,7 @@ So that subsequent stories can fill in `prepare` / `finalize` / `prune` behavior
 **When** inspected
 **Then** it has `pub fn new(repo_root: PathBuf, workspaces_dir: PathBuf, retention_hours: u64) -> Self`
 **And** implements `WorkspaceManager` with each method returning `unimplemented!("Story 4.{N}")` — stubs will be filled in sequentially
-**And** the module is re-exported from `crates/minion-sandbox-orchestrator/src/lib.rs`
+**And** the module is re-exported from `crates/stepyard-sandbox-orchestrator/src/lib.rs`
 
 **Given** a unit test in the same file (`#[cfg(test)] mod tests`)
 **When** the test constructs `let mgr: Arc<dyn WorkspaceManager> = Arc::new(GitWorktreeManager::new(...));`
@@ -880,7 +880,7 @@ So that every workspace and branch decision is in the session log before the git
 
 **Acceptance Criteria:**
 
-**Given** `crates/minion-core/src/event.rs`
+**Given** `crates/stepyard-core/src/event.rs`
 **When** inspected
 **Then** two new variants exist: `WorkspacePrepared { path: String, strategy: String }` and `BranchCreated { branch: String, base: String }`, both with `#[serde(rename_all = "snake_case")]`
 **And** strategy serializes as `"head" | "merge_to_head" | "named_branch"` (snake_case per D10)
@@ -899,16 +899,16 @@ So that every workspace and branch decision is in the session log before the git
 **Then** it runs `git worktree add` via `tokio::process::Command::new("git")` with argv-only (never `sh -c`)
 **And** for `Head`: argv is `["worktree", "add", <path>, "HEAD"]`
 **And** for `NamedBranch { name }`: argv is `["worktree", "add", "-b", <name>, <path>, <repo_head_ref>]`
-**And** for `MergeToHead { target }`: argv is `["worktree", "add", "-b", format!("minion/session-{session_uuid}"), <path>, <target>]` (temp branch named after session UUID)
+**And** for `MergeToHead { target }`: argv is `["worktree", "add", "-b", format!("stepyard/session-{session_uuid}"), <path>, <target>]` (temp branch named after session UUID)
 **And** stderr on non-zero exit maps to `WorkspaceError::GitCommand { op: "worktree add".into(), stderr }`
 
 **Given** NFR5 (worktree creation performance)
 **When** `prepare` is benchmarked against a small repo
 **Then** p50 wall-clock <5s per worktree (acceptable for workflow startup, not hot path)
 
-**Given** an integration test at `crates/minion-sandbox-orchestrator/tests/worktree_prepare.rs` (opt-in — requires real git binary + temp repo)
+**Given** an integration test at `crates/stepyard-sandbox-orchestrator/tests/worktree_prepare.rs` (opt-in — requires real git binary + temp repo)
 **When** the test creates a temp git repo, runs `prepare` with `BranchStrategy::NamedBranch { name: "feat/test".into() }`
-**Then** `<workspaces_dir>/minion-session-<uuid>` exists as a git worktree
+**Then** `<workspaces_dir>/stepyard-session-<uuid>` exists as a git worktree
 **And** `git branch` inside that worktree shows `feat/test` checked out
 **And** running `prepare` twice with the same session_id returns `Err(WorkspaceError::WorktreeExists { .. })` (no silent overwrite)
 **And** every `Command` has `.timeout(Duration::from_secs(N))` (Rule 7b)
@@ -929,7 +929,7 @@ So that I can declare how agent commits land in the repo without hardcoding per-
 
 **Acceptance Criteria:**
 
-**Given** the `Workflow` struct in `crates/minion-core/src/workflow.rs` (or wherever it lives)
+**Given** the `Workflow` struct in `crates/stepyard-core/src/workflow.rs` (or wherever it lives)
 **When** inspected
 **Then** it gains `#[serde(default)] pub branch_strategy: BranchStrategyYaml` (using snake_case serde — D10 explicit)
 **And** `BranchStrategyYaml` enum has `#[serde(rename_all = "snake_case")]` with variants `Head`, `MergeToHead`, `NamedBranch`
@@ -944,7 +944,7 @@ So that I can declare how agent commits land in the repo without hardcoding per-
 **And** `branch_name: "{{BRANCH_NAME}}"` placeholder is preserved as a literal for Epic 5's template substitution to resolve later (this story does NOT resolve `{{KEY}}` — that's Epic 5)
 
 **Given** CLI flag `--branch-strategy`
-**When** the user invokes `minion run --branch-strategy head` / `--branch-strategy merge-to-head` / `--branch-strategy named-branch:feat/foo`
+**When** the user invokes `stepyard run --branch-strategy head` / `--branch-strategy merge-to-head` / `--branch-strategy named-branch:feat/foo`
 **Then** clap parses the value into `BranchStrategy` (note: CLI uses kebab-case `named-branch`, YAML uses snake_case `named_branch` — both standard for their formats)
 **And** for `named-branch:<name>`, the `<name>` portion populates `BranchStrategy::NamedBranch { name: <name> }`
 **And** the CLI value overrides the workflow YAML `branch_strategy:` field
@@ -959,9 +959,9 @@ So that I can declare how agent commits land in the repo without hardcoding per-
 **Given** proptest coverage for CLI parsing
 **When** random inputs test `--branch-strategy <arbitrary-string>`
 **Then** the parser either produces a valid `BranchStrategy` or rejects with a parse-time error (never panics)
-**And** proptest lives in `crates/minion/src/cli/branch_strategy.rs` (or equivalent) `#[cfg(test)] mod proptest_tests` (proptest required for CLI argument parsing per testing-enforcement invariant)
+**And** proptest lives in `crates/stepyard/src/cli/branch_strategy.rs` (or equivalent) `#[cfg(test)] mod proptest_tests` (proptest required for CLI argument parsing per testing-enforcement invariant)
 
-**Given** a unit test at `crates/minion-core/src/workflow.rs`
+**Given** a unit test at `crates/stepyard-core/src/workflow.rs`
 **When** the test parses YAML fixtures: `branch_strategy: head`, `branch_strategy: merge_to_head`, `branch_strategy: named_branch\nbranch_name: feat/test`
 **Then** each parses successfully with the expected struct value
 **And** a fixture with `branch_strategy: named_branch` MISSING `branch_name:` produces `EngineError::PlaceholderUnresolved`
@@ -977,7 +977,7 @@ So that parallel agents converge automatically on clean work and conflicts are s
 
 **Acceptance Criteria:**
 
-**Given** `crates/minion-core/src/event.rs`
+**Given** `crates/stepyard-core/src/event.rs`
 **When** inspected
 **Then** two new variants exist: `MergeAttempted { source: String, target: String }` and `MergeConflict { source: String, target: String, files: Vec<String> }`, both with `#[serde(rename_all = "snake_case")]`
 **And** subscribers at `src/events/subscribers.rs` and `src/cli/display.rs` gain explicit match arms (workspace lint enforces)
@@ -993,7 +993,7 @@ So that parallel agents converge automatically on clean work and conflicts are s
 **Given** a merge conflict
 **When** the finalize path hits it
 **Then** `Engine` synchronously `session.append(Event::MergeConflict { source: temp_branch, target, files }).await?` where `files = git diff --name-only --diff-filter=U` output
-**And** the temp branch is PRESERVED — no `git branch -D minion/session-<uuid>`, no `git worktree remove`
+**And** the temp branch is PRESERVED — no `git branch -D stepyard/session-<uuid>`, no `git worktree remove`
 **And** the main working tree at `target` is reset to pre-merge state via `git merge --abort` (so the working tree is clean for the user's next operation)
 **And** `finalize` returns `Err(WorkspaceError::MergeConflict { files })` (not `Ok` — conflict IS a failure from the engine's POV, even though the branch survives)
 
@@ -1005,14 +1005,14 @@ So that parallel agents converge automatically on clean work and conflicts are s
 
 **Given** `BranchStrategy::Head` or `BranchStrategy::NamedBranch` on finalize
 **When** finalize runs
-**Then** no merge is attempted (Head: no branch to merge; NamedBranch: user owns the branch, minion doesn't touch it)
+**Then** no merge is attempted (Head: no branch to merge; NamedBranch: user owns the branch, stepyard doesn't touch it)
 **And** no `MergeAttempted` / `MergeConflict` events are emitted
 **And** finalize returns `FinalizeReport { merged: false, conflicts: vec![] }` with appropriate strategy flag
 
-**Given** an integration test at `crates/minion-sandbox-orchestrator/tests/worktree_merge.rs` (opt-in — uses real git)
+**Given** an integration test at `crates/stepyard-sandbox-orchestrator/tests/worktree_merge.rs` (opt-in — uses real git)
 **When** the test creates a temp repo with two commits on `main`, starts a session with `MergeToHead { target: "main".into() }`, makes a conflicting change on the temp branch, then finalizes
 **Then** `finalize` returns `Err(WorkspaceError::MergeConflict { files })` with the expected conflict file list
-**And** the temp branch `minion/session-<uuid>` still exists post-finalize (`git branch --list` confirms)
+**And** the temp branch `stepyard/session-<uuid>` still exists post-finalize (`git branch --list` confirms)
 **And** the session event log contains `MergeAttempted` immediately followed by `MergeConflict` with matching source/target
 **And** a second test with a clean merge returns `Ok(FinalizeReport { merged: true, .. })` and the temp branch is cleaned up afterwards (if strategy dictates — document behavior)
 **And** every `Command` has `.timeout(Duration::from_secs(N))` (Rule 7b)
@@ -1027,7 +1027,7 @@ So that stale worktrees from crashed sessions are reclaimed without risking loss
 
 **Acceptance Criteria:**
 
-**Given** `crates/minion-core/src/event.rs`
+**Given** `crates/stepyard-core/src/event.rs`
 **When** inspected
 **Then** one new variant exists: `WorkspacePruned { path: String, reason: String }` with `#[serde(rename_all = "snake_case")]`
 **And** subscribers at `src/events/subscribers.rs` and `src/cli/display.rs` gain explicit match arms
@@ -1038,7 +1038,7 @@ So that stale worktrees from crashed sessions are reclaimed without risking loss
 **When** replaced
 **Then** the first sub-phase runs `git -C <repo_root> worktree prune` via `tokio::process::Command` argv-only (cleans dangling git metadata)
 **And** exit-code-0 / stderr "nothing to prune" both treated as success (idempotent)
-**And** the second sub-phase walks `<workspaces_dir>/minion-session-*` directory entries
+**And** the second sub-phase walks `<workspaces_dir>/stepyard-session-*` directory entries
 
 **Given** the filesystem walk sub-phase
 **When** each directory entry is evaluated
@@ -1075,7 +1075,7 @@ Coverage: FR17, FR18, FR22 (WorkspacePruned), NFR6, NFR14, D8
 
 ## Epic 5: Workflow Templating & Idle Detection
 
-One workflow YAML runs across N projects via `{{KEY}}` placeholder substitution (CLI `--var KEY=VAL` flags or `.minion/defaults.yaml`). Placeholders are validated pre-execution and fail fast with a clear error. Idle agents (no stdout output for a configurable threshold) are detected via output-based timeout complementing Epic 1's wall-clock timeout. Completion-signal strings let agents exit iteration loops early. Introduces `minion_core::template::substitute` pre-parse pass (D7) with YAML-safe substitution and mandatory proptest coverage. Serves Journey 4 (workflow author parameterization).
+One workflow YAML runs across N projects via `{{KEY}}` placeholder substitution (CLI `--var KEY=VAL` flags or `.stepyard/defaults.yaml`). Placeholders are validated pre-execution and fail fast with a clear error. Idle agents (no stdout output for a configurable threshold) are detected via output-based timeout complementing Epic 1's wall-clock timeout. Completion-signal strings let agents exit iteration loops early. Introduces `stepyard_core::template::substitute` pre-parse pass (D7) with YAML-safe substitution and mandatory proptest coverage. Serves Journey 4 (workflow author parameterization).
 
 **Phase:** Growth
 **FRs covered:** FR2, FR19, FR20, FR21, FR4 (partial — idle-timeout reason), FR22 (partial — `IdleTimeoutFired` variant)
@@ -1088,14 +1088,14 @@ So that Story 5.2 can wire real streaming idle detection without breaking the ex
 
 **Acceptance Criteria:**
 
-**Given** `crates/minion-core/src/event.rs`
+**Given** `crates/stepyard-core/src/event.rs`
 **When** inspected
 **Then** it gains `Event::IdleTimeoutFired { step_index: u32, idle_threshold_ms: u64 }` with `#[serde(rename_all = "snake_case")]`
 **And** subscribers at `src/events/subscribers.rs` and `src/cli/display.rs` gain explicit match arms (workspace `non_exhaustive_omitted_patterns = "deny"` lint enforces)
 **And** CLI display renders `"step {step_index} idle for {idle_threshold_ms}ms — terminated"` (lowercase, no trailing punctuation)
 **And** this completes the D5 set of 8 new event variants (StepTimeoutFired Epic 1 + SignalReceived Epic 2 + 5 workspace events Epic 4 + IdleTimeoutFired Epic 5 = 8)
 
-**Given** `crates/minion-sandbox-orchestrator/src/lib.rs` (or wherever `SandboxLifecycle` lives)
+**Given** `crates/stepyard-sandbox-orchestrator/src/lib.rs` (or wherever `SandboxLifecycle` lives)
 **When** inspected
 **Then** a new struct `ExecOptions { pub env: HashMap<String, String>, pub idle_timeout: Option<Duration> }` exists, deriving `Debug, Clone, Default`
 **And** the trait gains `async fn exec_with_options(&self, id: &SandboxId, cmd: &[String], opts: &ExecOptions) -> Result<ExecOutput, SandboxError>`
@@ -1121,7 +1121,7 @@ So that Story 5.2 can wire real streaming idle detection without breaking the ex
 **And** `MockLifecycle::exec_with_options` override records the FULL `opts` struct (not just env, not just idle_timeout — the whole thing)
 **And** at least one unit test asserts on `opts.idle_timeout` to prevent silent regression where the default impl drops the field
 
-**Given** a unit test at `crates/minion-sandbox-orchestrator/src/mock.rs`
+**Given** a unit test at `crates/stepyard-sandbox-orchestrator/src/mock.rs`
 **When** the test calls `mock.exec_with_options(&id, &cmd, &ExecOptions { env: env_map, idle_timeout: Some(Duration::from_secs(30)) }).await`
 **Then** `MockLifecycleCall::ExecWithOptions { opts, .. }` records `opts.idle_timeout == Some(Duration::from_secs(30))`
 **And** calling on a type that did NOT override `exec_with_options` records the `ExecWithEnv` call instead (proves default delegation)
@@ -1137,7 +1137,7 @@ So that idle agents (e.g., infinite waits, deadlocks) terminate deterministicall
 
 **Acceptance Criteria:**
 
-**Given** `DockerLifecycle::exec_with_options` in `crates/minion-sandbox-orchestrator/src/docker.rs`
+**Given** `DockerLifecycle::exec_with_options` in `crates/stepyard-sandbox-orchestrator/src/docker.rs`
 **When** inspected
 **Then** it builds `tokio::process::Command::new("docker")` with `.stdout(Stdio::piped()).stderr(Stdio::piped())`
 **And** for each `--env K=V` pair (sorted by key), argv-only as in Story 3.2
@@ -1147,7 +1147,7 @@ So that idle agents (e.g., infinite waits, deadlocks) terminate deterministicall
 **And** on read timeout: kills the child via `child.start_kill()` + `child.wait().await`, returns `Err(SandboxError::IdleTimeout { idle_ms: idle_timeout.as_millis() as u64 })`
 **And** when `idle_timeout` is `None`: skips the timeout wrapper entirely (acts identically to `exec_with_env`)
 
-**Given** Engine's step executor invocation in `crates/minion-harness/src/engine.rs`
+**Given** Engine's step executor invocation in `crates/stepyard-harness/src/engine.rs`
 **When** it calls `lifecycle.exec_with_options(&self.sandbox_id, cmd, &opts).await`
 **Then** on `Err(SandboxError::IdleTimeout { idle_ms })`, Engine synchronously calls `self.session.append(Event::IdleTimeoutFired { step_index, idle_threshold_ms: idle_ms }).await?` BEFORE the destroy call
 **And** on the same `.await` chain, calls `self.lifecycle.destroy(&self.sandbox_id).await` (idempotent per NFR12 — tolerates `ContainerNotFound` since the lifecycle already killed the inner subprocess)
@@ -1165,13 +1165,13 @@ So that idle agents (e.g., infinite waits, deadlocks) terminate deterministicall
 **Then** `ExecOutput { stdout, stderr, exit_code }` is returned with the buffered output
 **And** `stdout` contains every byte emitted by the agent (no truncation due to streaming)
 
-**Given** an integration test at `crates/minion-harness/tests/idle_timeout.rs`
+**Given** an integration test at `crates/stepyard-harness/tests/idle_timeout.rs`
 **When** the test uses a `MockLifecycle` configured to return `Err(SandboxError::IdleTimeout { idle_ms: 30000 })` from `exec_with_options`
 **Then** Engine's session log contains `Event::IdleTimeoutFired { step_index: 0, idle_threshold_ms: 30000 }` BEFORE `MockLifecycleCall::Destroy`
 **And** the returned error is `EngineError::StepFailed { reason: TerminationReason::IdleTimeout { idle_ms: 30000 }, .. }`
 **And** the test uses `#[tokio::test(start_paused = true)]` (Rule 7a) with no `tokio::time::sleep(…)` calls
 
-**Given** an integration test at `crates/minion-sandbox-orchestrator/tests/docker_idle.rs` (opt-in — requires Docker)
+**Given** an integration test at `crates/stepyard-sandbox-orchestrator/tests/docker_idle.rs` (opt-in — requires Docker)
 **When** the test runs `exec_with_options(id, &["sleep".to_string(), "300".to_string()], &ExecOptions { idle_timeout: Some(Duration::from_secs(2)), .. })` against a live container
 **Then** `exec_with_options` returns `Err(SandboxError::IdleTimeout { idle_ms: 2000 })` within ~2-3 seconds wall-clock (NOT after 300s)
 **And** the container's inner `sleep` process is killed (verified via `docker ps`)
@@ -1182,12 +1182,12 @@ Coverage: FR2, FR4 (IdleTimeout reason), FR22 (IdleTimeoutFired emission path)
 ### Story 5.3: `{{KEY}}` Template Substitution Preprocessor with YAML-Safe Output
 
 As a workflow author,
-I want a `minion_core::template::substitute(text, &vars) -> Result<String, TemplateError>` pre-parse pass that replaces every `{{KEY}}` with the YAML-encoded value of `vars[KEY]` (via `serde_yaml::to_string`), running BEFORE `serde_yaml::from_str`,
+I want a `stepyard_core::template::substitute(text, &vars) -> Result<String, TemplateError>` pre-parse pass that replaces every `{{KEY}}` with the YAML-encoded value of `vars[KEY]` (via `serde_yaml::to_string`), running BEFORE `serde_yaml::from_str`,
 So that one workflow YAML file can be parameterized across N projects without risking YAML structure injection from raw value substitution (D7).
 
 **Acceptance Criteria:**
 
-**Given** a new file `crates/minion-core/src/template.rs`
+**Given** a new file `crates/stepyard-core/src/template.rs`
 **When** inspected
 **Then** it exports `pub fn substitute(text: &str, vars: &HashMap<String, String>) -> Result<String, TemplateError>`
 **And** the function is pure (no IO, no globals, no `unsafe`, no `tokio::spawn`)
@@ -1207,14 +1207,14 @@ So that one workflow YAML file can be parameterized across N projects without ri
 **And** `#[error("…")]` messages are lowercase, no trailing punctuation
 **And** `Unresolved` carries `found_at` for diagnostic context (e.g., `"workflow.steps[2].command"`)
 
-**Given** the workflow loader at `crates/minion-core/src/workflow.rs` (or wherever `Workflow::from_yaml_str` lives)
+**Given** the workflow loader at `crates/stepyard-core/src/workflow.rs` (or wherever `Workflow::from_yaml_str` lives)
 **When** loading a workflow
 **Then** the order is: `template::substitute(raw_yaml, &vars)?` → `serde_yaml::from_str::<Workflow>(&substituted_yaml)?`
 **And** if substitution fails, the loader returns `Err(EngineError::PlaceholderUnresolved { .. })` (Story 5.4 maps `TemplateError::Unresolved` to `EngineError::PlaceholderUnresolved`)
 **And** if YAML parsing fails AFTER substitution, the loader returns the standard YAML parse error (no special handling — substitution succeeded; the YAML was structurally invalid)
 
 **Given** proptest coverage (testing-enforcement invariant — substitution requires proptest)
-**When** proptest tests run at `crates/minion-core/src/template.rs` `#[cfg(test)] mod proptest_tests`
+**When** proptest tests run at `crates/stepyard-core/src/template.rs` `#[cfg(test)] mod proptest_tests`
 **Then** for every random `(text: String, vars: HashMap<String, String>)` input, `substitute` either returns `Ok(_)` or `Err(TemplateError::Unresolved { key, .. })` where `key` is a real `{{KEY}}` substring in `text` and is missing from `vars`
 **And** `substitute` NEVER panics
 **And** if `substitute(text, &vars)` returns `Ok(s)`, then `s` is parseable as YAML when `text` was parseable as YAML and all values are scalar strings
@@ -1230,12 +1230,12 @@ Coverage: FR19 substitution side, D7, security: YAML-safe substitution
 ### Story 5.4: CLI `--var KEY=VAL` Flag + Defaults Source + `EngineError::PlaceholderUnresolved` Validation
 
 As a workflow author,
-I want a `minion run --var KEY=VAL` CLI flag (multi-value) and `.minion/defaults.yaml` providing the value sources for `{{KEY}}` substitution, with `EngineError::PlaceholderUnresolved { key, found_at }` failing fast at parse time when any placeholder is missing,
+I want a `stepyard run --var KEY=VAL` CLI flag (multi-value) and `.stepyard/defaults.yaml` providing the value sources for `{{KEY}}` substitution, with `EngineError::PlaceholderUnresolved { key, found_at }` failing fast at parse time when any placeholder is missing,
 So that I can run one workflow across N projects with explicit per-run parameters and get clear errors when a key is forgotten.
 
 **Acceptance Criteria:**
 
-**Given** the `minion run` CLI in the workspace-root binary
+**Given** the `stepyard run` CLI in the workspace-root binary
 **When** inspected
 **Then** it accepts `--var KEY=VAL` as a multi-value flag (`clap::ArgAction::Append`)
 **And** the parser splits each value on the first `=` (so `--var MSG=hello=world` produces `KEY=MSG`, `VAL=hello=world`)
@@ -1244,11 +1244,11 @@ So that I can run one workflow across N projects with explicit per-run parameter
 
 **Given** the value-source resolution
 **When** building the `vars: HashMap<String, String>` for `template::substitute`
-**Then** the order is: `.minion/defaults.yaml` `vars:` field FIRST (lowest precedence), then CLI `--var KEY=VAL` flags (overrides defaults)
+**Then** the order is: `.stepyard/defaults.yaml` `vars:` field FIRST (lowest precedence), then CLI `--var KEY=VAL` flags (overrides defaults)
 **And** the `defaults.yaml` schema gains `#[serde(default)] pub vars: HashMap<String, String>` alongside the `env:` field from Story 3.3
 **And** if `defaults.yaml` is missing, `vars` is `HashMap::new()` (no error — defaults are optional)
 
-**Given** `crates/minion-core/src/error.rs`
+**Given** `crates/stepyard-core/src/error.rs`
 **When** inspected
 **Then** `EngineError` gains `PlaceholderUnresolved { key: String, found_at: String }` variant (already referenced in Story 4.3 and Story 5.3 — this story finalizes it)
 **And** `#[error("…")]` message: `"placeholder {{key}} unresolved at {found_at}"` (lowercase, no trailing punctuation; `{{key}}` is the literal `{{X}}` form for clarity)
@@ -1262,14 +1262,14 @@ So that I can run one workflow across N projects with explicit per-run parameter
 
 **Given** the negative-control extension (per Story 3.5's placeholder section)
 **When** `tests/injection_negative.rs` is extended
-**Then** a new test case runs `minion run --var MSG='$(rm -rf /)'` against a workflow with `command: ["echo", "{{MSG}}"]`
+**Then** a new test case runs `stepyard run --var MSG='$(rm -rf /)'` against a workflow with `command: ["echo", "{{MSG}}"]`
 **Then** stdout is literally `$(rm -rf /)\n` (no shell expansion at substitution time — the value passes through to argv)
 **And** the host filesystem under `/tmp/` is untouched
-**And** another negative test runs `minion run --var ATTACK='\nfoo: bar'` with `command: ["echo", "{{ATTACK}}"]`
+**And** another negative test runs `stepyard run --var ATTACK='\nfoo: bar'` with `command: ["echo", "{{ATTACK}}"]`
 **Then** the workflow loads cleanly; `echo` outputs the literal string (proving YAML escaping in Story 5.3 worked)
 
 **Given** a unit test at `src/cli/run.rs` (or wherever the run subcommand lives)
-**When** the test invokes `minion run --var FOO=bar --var BAZ=qux <workflow.yaml>`
+**When** the test invokes `stepyard run --var FOO=bar --var BAZ=qux <workflow.yaml>`
 **Then** the resolved vars passed to `template::substitute` is `{"FOO": "bar", "BAZ": "qux"}`
 **And** if `defaults.yaml` had `vars: { BAZ: from-defaults, ONLY: x }`, the resolved vars is `{"FOO": "bar", "BAZ": "qux", "ONLY": "x"}` (CLI overrides defaults; defaults contribute ONLY)
 **And** running with `--var BAR=hello` against a workflow referencing `{{MISSING}}` produces `EngineError::PlaceholderUnresolved { key: "MISSING", .. }` at load time
@@ -1285,7 +1285,7 @@ So that agents (e.g., LLM loops) can self-signal task completion without relying
 
 **Acceptance Criteria:**
 
-**Given** the `Workflow` struct in `crates/minion-core/src/workflow.rs`
+**Given** the `Workflow` struct in `crates/stepyard-core/src/workflow.rs`
 **When** inspected
 **Then** it gains `#[serde(default)] pub completion_signal: Option<String>` (top-level field — applies to the whole workflow's iteration loop, not per-step)
 **And** existing workflows without `completion_signal:` continue to parse (backward compat per NFR18)
@@ -1294,7 +1294,7 @@ So that agents (e.g., LLM loops) can self-signal task completion without relying
 **Given** Engine's iteration loop
 **When** a step produces stdout (via the streaming reader from Story 5.2)
 **Then** if `workflow.completion_signal` is `Some(signal)` AND any line of agent stdout CONTAINS `signal` as a substring
-**Then** Engine synchronously appends a new event `Event::CompletionSignaled { step_index: u32, signal: String }` (added to `crates/minion-core/src/event.rs` — note: this is a 9th event variant beyond D5's original 8; rationale documented inline)
+**Then** Engine synchronously appends a new event `Event::CompletionSignaled { step_index: u32, signal: String }` (added to `crates/stepyard-core/src/event.rs` — note: this is a 9th event variant beyond D5's original 8; rationale documented inline)
 **And** the step terminates gracefully — Engine calls `lifecycle.destroy(&self.sandbox_id).await` (idempotent)
 **And** the iteration loop exits with success (workflow status `completed`, NOT `failed`)
 **And** the emit-before-IO ordering applies: `session.append(Event::CompletionSignaled { .. }).await?` BEFORE the destroy call
@@ -1314,7 +1314,7 @@ So that agents (e.g., LLM loops) can self-signal task completion without relying
 **Then** the literal `signal` string from the workflow YAML is recorded in `Event::CompletionSignaled` (this is workflow-author-controlled config, not a credential — safe to log)
 **And** the matched stdout line itself is NOT included in the event (could contain agent-emitted PII or secrets)
 
-**Given** an integration test at `crates/minion-harness/tests/completion_signal.rs`
+**Given** an integration test at `crates/stepyard-harness/tests/completion_signal.rs`
 **When** the test constructs a workflow with `completion_signal: "TASK_COMPLETE"` and uses a `MockLifecycle` whose `exec_with_options` writes `"working...\nTASK_COMPLETE\n"` to a streaming channel
 **Then** Engine's session log contains `Event::CompletionSignaled { step_index: 0, signal: "TASK_COMPLETE" }` BEFORE `MockLifecycleCall::Destroy`
 **And** the workflow status is `completed` (not `failed`)
@@ -1341,11 +1341,11 @@ Swap Docker for Podman or cloud providers (Vercel, Daytona-style) through the ex
 
 As a platform operator,
 I want a `PodmanLifecycle` struct implementing the existing `SandboxLifecycle` trait (without changing the trait), shippable as an alternate provider via a `--sandbox-provider <docker|podman>` CLI flag,
-So that Docker-restricted hosts can run minion via Podman and we prove FR25's claim that the trait supports multiple providers without abstraction-layer redesign.
+So that Docker-restricted hosts can run stepyard via Podman and we prove FR25's claim that the trait supports multiple providers without abstraction-layer redesign.
 
 **Acceptance Criteria:**
 
-**Given** a new file `crates/minion-sandbox-orchestrator/src/podman.rs`
+**Given** a new file `crates/stepyard-sandbox-orchestrator/src/podman.rs`
 **When** inspected
 **Then** it defines `pub struct PodmanLifecycle { /* same shape as DockerLifecycle */ }` and implements `SandboxLifecycle` with `#[async_trait]`
 **And** every method (`create`, `destroy`, `exec`, `exec_with_env` from Story 3.1, `exec_with_options` from Story 5.1) is implemented
@@ -1355,7 +1355,7 @@ So that Docker-restricted hosts can run minion via Podman and we prove FR25's cl
 
 **Given** the workspace-root binary `src/main.rs` and CLI parser
 **When** inspected
-**Then** a new CLI flag `--sandbox-provider <docker|podman>` is added to `minion run` (clap `ValueEnum` with `Docker`, `Podman` variants)
+**Then** a new CLI flag `--sandbox-provider <docker|podman>` is added to `stepyard run` (clap `ValueEnum` with `Docker`, `Podman` variants)
 **And** the default is `Docker` (backward compat — existing invocations don't change)
 **And** the chosen provider produces a concrete `Arc<dyn SandboxLifecycle>` passed into `Engine::new(HarnessConfig { lifecycle: .., .. })`
 **And** the choice is recorded in a `tracing::info!(provider = %provider_name, "sandbox provider selected")` log line at startup (structured field, not format string)
@@ -1366,10 +1366,10 @@ So that Docker-restricted hosts can run minion via Podman and we prove FR25's cl
 **And** `exec_with_env` and `exec_with_options` are argv-only as in Docker
 **And** an inline comment documents: `// Podman is new code — no legacy sh -c carveout (unlike DockerLifecycle::exec)`
 
-**Given** the container naming convention from architecture (`minion-session-{uuid}`)
+**Given** the container naming convention from architecture (`stepyard-session-{uuid}`)
 **When** `PodmanLifecycle::create` runs
-**Then** it uses the same naming convention (`podman run --name minion-session-<uuid>`)
-**And** the startup reconcile from Story 2.4 phase 2 works for Podman containers identically (uses `podman ps --filter "name=minion-session-*"` when provider is Podman)
+**Then** it uses the same naming convention (`podman run --name stepyard-session-<uuid>`)
+**And** the startup reconcile from Story 2.4 phase 2 works for Podman containers identically (uses `podman ps --filter "name=stepyard-session-*"` when provider is Podman)
 **And** `src/startup.rs` reconcile is generalized to take an `Arc<dyn SandboxLifecycle>` rather than a concrete `DockerLifecycle` (or accepts a provider enum that picks the correct CLI binary)
 
 **Given** the mock-extension safeguard
@@ -1377,9 +1377,9 @@ So that Docker-restricted hosts can run minion via Podman and we prove FR25's cl
 **Then** no MockLifecycle changes are needed (it already covers `exec_with_options` from Story 5.1)
 **And** existing MockLifecycle tests pass unchanged
 
-**Given** an integration test at `crates/minion-sandbox-orchestrator/tests/podman_lifecycle.rs` (opt-in — skips if `podman` binary not on PATH)
+**Given** an integration test at `crates/stepyard-sandbox-orchestrator/tests/podman_lifecycle.rs` (opt-in — skips if `podman` binary not on PATH)
 **When** the test creates a session via `PodmanLifecycle::create`, runs `exec_with_env` with a non-trivial env, then destroys
-**Then** the container is created with the expected `minion-session-<uuid>` name (verified via `podman ps`)
+**Then** the container is created with the expected `stepyard-session-<uuid>` name (verified via `podman ps`)
 **And** `exec_with_env` returns expected stdout from `printenv FOO` matching the env-injected value
 **And** `destroy` removes the container; second `destroy` returns idempotent success (NFR12)
 **And** every `Command` has `.timeout(Duration::from_secs(N))` (Rule 7b)
@@ -1395,7 +1395,7 @@ So that providers can accept rich creation config without breaking the existing 
 
 **Acceptance Criteria:**
 
-**Given** `crates/minion-sandbox-orchestrator/src/lib.rs` (or wherever lifecycle types live)
+**Given** `crates/stepyard-sandbox-orchestrator/src/lib.rs` (or wherever lifecycle types live)
 **When** inspected
 **Then** new types exist: `pub struct CreateOptions { pub volumes: Vec<VolumeMount>, pub resource_limits: Option<ResourceLimits>, pub network_policy: NetworkPolicy }`
 **And** `pub struct VolumeMount { pub host_path: PathBuf, pub container_path: PathBuf, pub read_only: bool }` deriving `Debug, Clone, Deserialize, Serialize`
@@ -1427,14 +1427,14 @@ So that providers can accept rich creation config without breaking the existing 
 **And** `MockLifecycle::create_with_options` override records the FULL `opts` struct
 **And** at least one unit test asserts on `opts.volumes` / `opts.resource_limits.memory_bytes` to prevent silent regression
 
-**Given** a unit test at `crates/minion-core/src/workflow.rs`
+**Given** a unit test at `crates/stepyard-core/src/workflow.rs`
 **When** the test parses a YAML fixture with `sandbox: { volumes: [{host_path: /tmp/x, container_path: /workspace, read_only: false}], limits: { memory_bytes: 1073741824 }, network: bridge }`
 **Then** the parsed `Workflow.sandbox.volumes[0]` matches the input
 **And** `Workflow.sandbox.limits.memory_bytes == Some(1073741824)`
 **And** `Workflow.sandbox.network == NetworkPolicy::Bridge`
 **And** an existing fixture without `sandbox:` parses with `Workflow.sandbox` at default (empty volumes, no limits, Bridge network)
 
-**Given** an integration test at `crates/minion-sandbox-orchestrator/tests/create_with_options.rs` (opt-in — requires Docker)
+**Given** an integration test at `crates/stepyard-sandbox-orchestrator/tests/create_with_options.rs` (opt-in — requires Docker)
 **When** the test calls `create_with_options(&CreateOptions { volumes: vec![..], resource_limits: Some(ResourceLimits { memory_bytes: Some(256 * 1024 * 1024), .. }), .. })`
 **Then** the resulting container has `--memory=256m` flag (verified via `docker inspect <id>` parsing memory limit)
 **And** the volume mount appears in `docker inspect` mount list
@@ -1445,8 +1445,8 @@ Coverage: FR26, NFR9 (sandbox boundary preserved), NFR22 (backward compat via de
 ### Story 6.3: TTY Forwarding via `exec_interactive` Default-Impl Method
 
 As a DevOps engineer,
-I want a new `exec_interactive` default-impl method on `SandboxLifecycle` (returning `Err(InteractiveNotSupported)` by default) overridden by `DockerLifecycle` and `PodmanLifecycle` to use `docker exec -it` / `podman exec -it` for TTY-forwarded interactive sessions, exposed via a `minion exec --interactive <session-id>` CLI subcommand,
-So that I can debug a running session interactively without bypassing minion's container abstraction.
+I want a new `exec_interactive` default-impl method on `SandboxLifecycle` (returning `Err(InteractiveNotSupported)` by default) overridden by `DockerLifecycle` and `PodmanLifecycle` to use `docker exec -it` / `podman exec -it` for TTY-forwarded interactive sessions, exposed via a `stepyard exec --interactive <session-id>` CLI subcommand,
+So that I can debug a running session interactively without bypassing stepyard's container abstraction.
 
 **Acceptance Criteria:**
 
@@ -1469,7 +1469,7 @@ So that I can debug a running session interactively without bypassing minion's c
 **And** the parent process awaits the child's exit and returns the exit code wrapped in `Ok(ExitCode::from(code))`
 **And** if the container does not exist, returns `Err(SandboxError::ContainerNotFound)` (existing variant from Docker error classifier)
 
-**Given** a new CLI subcommand `minion exec --interactive <session-id> -- <cmd...>`
+**Given** a new CLI subcommand `stepyard exec --interactive <session-id> -- <cmd...>`
 **When** inspected
 **Then** clap parses it as `ExecInteractiveArgs { session_id: SessionId, cmd: Vec<String> }`
 **And** the handler queries PG for the session's container ID (NOT in-memory registry — D1 invariant)
@@ -1479,7 +1479,7 @@ So that I can debug a running session interactively without bypassing minion's c
 **Given** the cancel/signal-handler interaction (Epic 2)
 **When** an interactive session is in progress AND SIGTERM fires
 **Then** the broadcast channel is fired (Story 2.2)
-**And** the parent `minion exec --interactive` invocation receives the signal — clap/tokio's `tokio::signal` propagates it to the child process via terminal control (Ctrl+C → child via TTY)
+**And** the parent `stepyard exec --interactive` invocation receives the signal — clap/tokio's `tokio::signal` propagates it to the child process via terminal control (Ctrl+C → child via TTY)
 **And** the parent process exits with code 130 (SIGINT) or 143 (SIGTERM) per Story 2.2's exit code convention
 
 **Given** the mock-extension safeguard
@@ -1489,7 +1489,7 @@ So that I can debug a running session interactively without bypassing minion's c
 **And** at least one unit test asserts on the recorded `cmd` to prevent silent regression
 
 **Given** an integration test at `tests/exec_interactive_cli.rs` using `assert_cmd` (opt-in — requires Docker + a running session fixture)
-**When** the test seeds PG with a running session whose container exists and invokes `minion exec --interactive <session-id> -- echo hello`
+**When** the test seeds PG with a running session whose container exists and invokes `stepyard exec --interactive <session-id> -- echo hello`
 **Then** stdout contains `hello\n`
 **And** exit code is 0
 **And** invoking the same command against a non-running session returns a clear error and exit code != 0

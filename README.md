@@ -1,12 +1,12 @@
-# Minion Engine
+# Stepyard
 
-![Minion Engine High-Level Architecture](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-high-level.jpg)
+![Stepyard High-Level Architecture](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-high-level.jpg)
 
 **Run AI workflows in Docker. Define steps in YAML. No surprises.**
 
 ```bash
 cargo install minion-engine
-minion execute code-review.yaml -- 42
+stepyard execute code-review.yaml -- 42
 ```
 
 > Reviews every changed file in PR #42, detects each file's language, applies language-specific
@@ -18,19 +18,19 @@ minion execute code-review.yaml -- 42
 
 Every AI coding tool eventually surprises you. It refactors the wrong file, invents a dependency, or drifts mid-task. The root cause is always the same: the agent decides what to do next.
 
-Minion Engine inverts that. **You define the steps. The agent executes them.**
+Stepyard inverts that. **You define the steps. The agent executes them.**
 
 Workflows are YAML files. Each step is explicit: run a command, call the AI, check a condition, retry until tests pass. The agent never improvises — it follows the script.
 
-**Without Minion Engine**, reviewing a PR means:
+**Without Stepyard**, reviewing a PR means:
 - Open the PR, read each file manually
 - Switch context between Python, TypeScript, Rust conventions
 - Remember to check for security issues, type safety, error handling
 - Write your findings as a comment
 
-**With Minion Engine**, one command does it all:
+**With Stepyard**, one command does it all:
 ```bash
-minion execute code-review.yaml -- 42
+stepyard execute code-review.yaml -- 42
 ```
 Every changed file is reviewed with **language-specific criteria** (Python gets Python rules, TypeScript gets TypeScript rules), the project architecture is considered, and a structured report is posted as a PR comment.
 
@@ -70,11 +70,11 @@ brew install minion-engine
 cargo install minion-engine
 
 # 2. Interactive setup — checks requirements and configures API keys
-minion setup
+stepyard setup
 
 # 3. Go to your project and run a workflow
 cd /path/to/your-project
-minion execute code-review.yaml -- 42   # Review PR #42
+stepyard execute code-review.yaml -- 42   # Review PR #42
 ```
 
 That's it. Docker image is **built automatically** on first run. No manual setup needed.
@@ -86,10 +86,10 @@ That's it. Docker image is **built automatically** on first run. No manual setup
 cargo install minion-engine --features slack
 
 # Run interactive setup (includes Slack configuration)
-minion setup
+stepyard setup
 
 # Start the bot
-minion slack start
+stepyard slack start
 ```
 
 ## What Can It Do?
@@ -114,7 +114,7 @@ Every workflow runs inside an isolated Docker container. Your project is copied 
 
 ### 🔐 Secure API Proxy
 
-API keys **never enter the container**. Minion runs a host-side reverse proxy that intercepts API calls from inside the sandbox and injects authentication headers on-the-fly:
+API keys **never enter the container**. Stepyard runs a host-side reverse proxy that intercepts API calls from inside the sandbox and injects authentication headers on-the-fly:
 
 ![Secure API Proxy Mechanism](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/architecture-api-proxy.jpg)
 
@@ -124,8 +124,8 @@ API keys **never enter the container**. Minion runs a host-side reverse proxy th
 - Zero configuration required — works out of the box with `cargo install`
 
 ```bash
-minion execute code-review.yaml -- 42        # Sandbox ON (default)
-minion execute code-review.yaml --no-sandbox -- 42  # Run locally instead
+stepyard execute code-review.yaml -- 42        # Sandbox ON (default)
+stepyard execute code-review.yaml --no-sandbox -- 42  # Run locally instead
 ```
 
 ## Security Model
@@ -155,14 +155,14 @@ If your project has a `CLAUDE.md`, `ARCHITECTURE.md`, or `README.md`, the code r
 
 ### 🎯 Stack Detection & Prompt Registry
 
-Minion detects your project's tech stack (Rust, Python, TypeScript, React, Java, etc.) from file markers (`Cargo.toml`, `package.json`, `requirements.txt`) and uses it to select the right prompts and tools.
+Stepyard detects your project's tech stack (Rust, Python, TypeScript, React, Java, etc.) from file markers (`Cargo.toml`, `package.json`, `requirements.txt`) and uses it to select the right prompts and tools.
 
 ## CLI Reference
 
-### `minion execute`
+### `stepyard execute`
 
 ```bash
-minion execute <workflow.yaml> [flags] -- [target]
+stepyard execute <workflow.yaml> [flags] -- [target]
 ```
 
 | Flag | Description |
@@ -178,90 +178,90 @@ minion execute <workflow.yaml> [flags] -- [target]
 
 ```bash
 # Examples
-minion execute code-review.yaml -- 42              # Review PR #42
-minion execute fix-issue.yaml --verbose -- 247     # Fix issue with verbose output
-minion execute fix-test.yaml -- 7                  # Fix failing tests for PR #7
-minion execute security-audit.yaml                 # Security audit (no target needed)
-minion execute workflow.yaml --var mode=strict -- 5 # Pass variables
+stepyard execute code-review.yaml -- 42              # Review PR #42
+stepyard execute fix-issue.yaml --verbose -- 247     # Fix issue with verbose output
+stepyard execute fix-test.yaml -- 7                  # Fix failing tests for PR #7
+stepyard execute security-audit.yaml                 # Security audit (no target needed)
+stepyard execute workflow.yaml --var mode=strict -- 5 # Pass variables
 ```
 
-### `minion init`
+### `stepyard init`
 
 ```bash
-minion init <name> [--template <template>]
+stepyard init <name> [--template <template>]
 ```
 
 Creates a new workflow from a built-in template.
 
 Templates: `blank`, `fix-issue`, `code-review`, `security-audit`
 
-### `minion validate`
+### `stepyard validate`
 
 ```bash
-minion validate <workflow.yaml>
+stepyard validate <workflow.yaml>
 ```
 
 Parses and validates a workflow without executing it.
 
-### `minion list`
+### `stepyard list`
 
 ```bash
-minion list
+stepyard list
 ```
 
-Lists workflows found in the current directory, `./workflows/`, and `~/.minion/workflows/`.
+Lists workflows found in the current directory, `./workflows/`, and `~/.stepyard/workflows/`.
 
-### `minion inspect`
+### `stepyard inspect`
 
 ```bash
-minion inspect <workflow.yaml>
+stepyard inspect <workflow.yaml>
 ```
 
 Shows config layers, scopes, step dependency graph, and dry-run summary.
 
-### `minion config`
+### `stepyard config`
 
 Manage default configuration (model, provider, timeouts).
 
 ```bash
-minion config show          # Show current effective configuration (embedded + user + project merged)
-minion config init          # Create or edit user-level defaults (~/.minion/defaults.yaml)
-minion config set KEY VALUE # Set a config value (dot notation)
-minion config path          # Show where config files are located
+stepyard config show          # Show current effective configuration (embedded + user + project merged)
+stepyard config init          # Create or edit user-level defaults (~/.stepyard/defaults.yaml)
+stepyard config set KEY VALUE # Set a config value (dot notation)
+stepyard config path          # Show where config files are located
 ```
 
 ```bash
 # Examples
-minion config set chat.model claude-opus-4-20250514    # Change the default AI model
-minion config set chat.temperature 0.5             # Adjust creativity
-minion config set global.timeout 600s              # Increase timeout
-minion config set agent.model claude-sonnet-4-20250514   # Change agent model
+stepyard config set chat.model claude-opus-4-20250514    # Change the default AI model
+stepyard config set chat.temperature 0.5             # Adjust creativity
+stepyard config set global.timeout 600s              # Increase timeout
+stepyard config set agent.model claude-sonnet-4-20250514   # Change agent model
 ```
 
 **Config priority** (lowest → highest):
 1. **Embedded defaults** — compiled into the binary, always available
-2. **User-level** — `~/.minion/defaults.yaml` (created with `minion config init`)
-3. **Project-level** — `.minion/config.yaml` in your project root
+2. **User-level** — `~/.stepyard/defaults.yaml` (created with `stepyard config init`)
+3. **Project-level** — `.stepyard/config.yaml` in your project root
 4. **Workflow YAML** — `config:` section in each workflow file
 5. **Step inline** — `config:` on individual steps
 
 New users get sensible defaults automatically via `cargo install` — no config files needed.
 
-### `minion setup`
+### `stepyard setup`
 
 ```bash
-minion setup
+stepyard setup
 ```
 
-Interactive setup wizard — checks requirements, configures API keys, and optionally sets up Slack bot credentials. Saves config to `~/.minion/config.toml`.
+Interactive setup wizard — checks requirements, configures API keys, and optionally sets up Slack bot credentials. Saves config to `~/.stepyard/config.toml`.
 
-### `minion slack start` (requires `--features slack`)
+### `stepyard slack start` (requires `--features slack`)
 
 ```bash
-minion slack start [--port 9000]
+stepyard slack start [--port 9000]
 ```
 
-Starts the Slack bot server. Reads config from `~/.minion/config.toml` or environment variables.
+Starts the Slack bot server. Reads config from `~/.stepyard/config.toml` or environment variables.
 
 ## Workflow YAML Format
 
@@ -345,7 +345,7 @@ steps:
 
 ![Slack Bot Interaction Flow](https://raw.githubusercontent.com/allanbrunobr/minion-engine/main/docs/slack.jpg)
 
-Trigger Minion workflows from Slack by mentioning the bot:
+Trigger Stepyard workflows from Slack by mentioning the bot:
 
 ```
 @YourBot review pr #42
@@ -359,7 +359,7 @@ Trigger Minion workflows from Slack by mentioning the bot:
 #### 1. Create a Slack App
 
 1. Go to **https://api.slack.com/apps** → **Create New App** → **From Scratch**
-2. Name it (e.g., "Minion Engine") and select your workspace
+2. Name it (e.g., "Stepyard") and select your workspace
 
 #### 2. Configure Permissions
 
@@ -405,17 +405,17 @@ Wait for the **"Verified"** checkmark, then click **Save Changes**.
 
 Go to **Basic Information** → **App Credentials** → copy the **Signing Secret**.
 
-#### 5. Install and Configure Minion
+#### 5. Install and Configure Stepyard
 
 ```bash
 # Install with Slack support
 cargo install minion-engine --features slack
 
 # Run setup wizard — it will ask for your Slack tokens
-minion setup
+stepyard setup
 ```
 
-The setup wizard saves your config to `~/.minion/config.toml`:
+The setup wizard saves your config to `~/.stepyard/config.toml`:
 ```toml
 [core]
 anthropic_api_key = "sk-ant-..."
@@ -437,7 +437,7 @@ export SLACK_SIGNING_SECRET="2d91c..."
 
 ```bash
 # Make sure ngrok is running: ngrok http 9000
-minion slack start
+stepyard slack start
 ```
 
 #### 7. Invite the Bot
@@ -472,7 +472,7 @@ Then mention it:
 
 **`gh` not found inside sandbox** — run `gh auth login` on the host before executing workflows that interact with GitHub.
 
-**`minion-sandbox:latest` not found** — run `minion setup` once to trigger the image build, or let any `minion execute` call build it automatically.
+**`minion-sandbox:latest` not found** — run `stepyard setup` once to trigger the image build, or let any `stepyard execute` call build it automatically.
 
 ---
 
@@ -501,7 +501,7 @@ Workflow YAML files live in `workflows/` — the fastest way to contribute is ad
 
 ### Security testing conventions
 
-New crates or layers that flow user-supplied values into a subprocess command line (env values, CLI `--var`, templated args) MUST add an `injection_negative.rs` integration test containing BOTH a positive-control (asserting the value reaches the child verbatim, not interpreted by a host shell) AND a negative-control (asserting an explicit `sh -c` escape hatch is user-owned and not over-escaped by minion). See `tests/injection_negative.rs` for the canonical pattern. Live-Docker tests are gated by `MINION_TEST_DOCKER=1` so CI without a daemon skips them gracefully.
+New crates or layers that flow user-supplied values into a subprocess command line (env values, CLI `--var`, templated args) MUST add an `injection_negative.rs` integration test containing BOTH a positive-control (asserting the value reaches the child verbatim, not interpreted by a host shell) AND a negative-control (asserting an explicit `sh -c` escape hatch is user-owned and not over-escaped by stepyard). See `tests/injection_negative.rs` for the canonical pattern. Live-Docker tests are gated by `STEPYARD_TEST_DOCKER=1` so CI without a daemon skips them gracefully.
 
 ---
 
