@@ -46,7 +46,7 @@ enum Command {
     Execute(commands::ExecuteArgs),
     /// Validate a workflow YAML without running
     Validate(commands::ValidateArgs),
-    /// List available workflows (current dir, ./workflows/, ~/.minion/workflows/)
+    /// List available workflows (current dir, ./workflows/, ~/.stepyard/workflows/)
     List,
     /// Create a new workflow from a template
     Init(commands::InitArgs),
@@ -77,7 +77,7 @@ pub struct ConfigArgs {
 enum ConfigCommand {
     /// Show current effective configuration (embedded + user + project merged)
     Show,
-    /// Create or edit user-level defaults (~/.minion/defaults.yaml)
+    /// Create or edit user-level defaults (~/.stepyard/defaults.yaml)
     Init,
     /// Set a config value. Example: stepyard config set chat.model claude-opus-4-20250514
     Set {

@@ -2,7 +2,7 @@ name: fix-github-issue
 version: 1
 description: "Fetch a GitHub issue, plan, implement, validate, and create a PR"
 
-# Inherits all defaults from ~/.minion/defaults.yaml
+# Inherits all defaults from ~/.stepyard/defaults.yaml
 # No overrides needed — uses default model, timeout, etc.
 
 scopes:

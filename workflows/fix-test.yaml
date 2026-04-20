@@ -28,7 +28,7 @@ name: fix-test
 version: 1
 description: "Auto-detect project stack and fix test failures using stack-specific tools and prompts"
 
-# Only overrides — defaults inherited from ~/.minion/defaults.yaml
+# Only overrides — defaults inherited from ~/.stepyard/defaults.yaml
 config:
   global:
     timeout: 900s

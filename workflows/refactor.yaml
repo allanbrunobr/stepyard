@@ -24,7 +24,7 @@ name: refactor
 version: 1
 description: "Plan and execute a refactoring with lint + test validation gates"
 
-# Only overrides — defaults inherited from ~/.minion/defaults.yaml
+# Only overrides — defaults inherited from ~/.stepyard/defaults.yaml
 config:
   agent:
     system_prompt_append: |

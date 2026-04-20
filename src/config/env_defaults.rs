@@ -1,4 +1,4 @@
-//! `.minion/defaults.yaml` env loader (Story 3.3, FR10).
+//! `.stepyard/defaults.yaml` env loader (Story 3.3, FR10).
 //!
 //! This module owns ONLY the env-vars layer of the project-root defaults
 //! file. The existing [`crate::config::defaults`] module handles the
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-/// The parsed shape of `.minion/defaults.yaml` for env injection.
+/// The parsed shape of `.stepyard/defaults.yaml` for env injection.
 ///
 /// Only the `env:` field is consumed by this loader. Other fields in the
 /// same file (future layers) are tolerated because `serde_yaml` ignores
@@ -50,7 +50,7 @@ pub enum DefaultsError {
     },
 }
 
-/// Load `.minion/defaults.yaml` env defaults from `path`.
+/// Load `.stepyard/defaults.yaml` env defaults from `path`.
 ///
 /// Returns [`Defaults::default()`] when `path` does not exist — a missing
 /// file is not an error because defaults are opt-in per project (AC).

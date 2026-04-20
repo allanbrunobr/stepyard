@@ -1,4 +1,4 @@
-//! Engine-level defaults loaded from `.minion/defaults.yaml` (Story 3.3).
+//! Engine-level defaults loaded from `.stepyard/defaults.yaml` (Story 3.3).
 //!
 //! Kept as a thin wrapper over `HashMap<String, String>` so later stories
 //! can extend beyond env (e.g., defaults for step-type configs) without a

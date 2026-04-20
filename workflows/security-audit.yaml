@@ -20,7 +20,7 @@ name: security-audit
 version: 1
 description: "Run a security audit over source files — produces a prioritized findings report"
 
-# Only overrides — defaults inherited from ~/.minion/defaults.yaml
+# Only overrides — defaults inherited from ~/.stepyard/defaults.yaml
 config:
   global:
     timeout: 600s

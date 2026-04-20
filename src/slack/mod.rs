@@ -2,7 +2,7 @@
 //!
 //! Enable with: cargo install minion-engine --features slack
 //!
-//! Configuration: ~/.minion/config.toml or environment variables:
+//! Configuration: ~/.stepyard/config.toml or environment variables:
 //!   SLACK_BOT_TOKEN      — xoxb-... Bot User OAuth Token
 //!   SLACK_SIGNING_SECRET — from Slack App → Basic Information → Signing Secret
 //!   STEPYARD_WORKFLOWS_DIR — path to workflows/ directory (default: ./workflows)
@@ -446,12 +446,12 @@ async fn health() -> &'static str {
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
-/// Load config from ~/.minion/config.toml, falling back to env vars.
+/// Load config from ~/.stepyard/config.toml, falling back to env vars.
 fn load_slack_config() -> (String, String, String) {
     // Try config file first
     let config_path = dirs::home_dir()
         .unwrap_or_default()
-        .join(".minion/config.toml");
+        .join(".stepyard/config.toml");
 
     let (file_token, file_secret, file_dir) = if config_path.exists() {
         let content = std::fs::read_to_string(&config_path).unwrap_or_default();
@@ -479,12 +479,12 @@ fn load_slack_config() -> (String, String, String) {
     let token = env::var("SLACK_BOT_TOKEN")
         .ok()
         .or(file_token)
-        .expect("SLACK_BOT_TOKEN must be set (env var or ~/.minion/config.toml)");
+        .expect("SLACK_BOT_TOKEN must be set (env var or ~/.stepyard/config.toml)");
 
     let secret = env::var("SLACK_SIGNING_SECRET")
         .ok()
         .or(file_secret)
-        .expect("SLACK_SIGNING_SECRET must be set (env var or ~/.minion/config.toml)");
+        .expect("SLACK_SIGNING_SECRET must be set (env var or ~/.stepyard/config.toml)");
 
     let workflows_dir = env::var("STEPYARD_WORKFLOWS_DIR")
         .ok()
@@ -510,20 +510,20 @@ const EMBEDDED_WORKFLOWS: &[(&str, &str)] = &[
 
 /// Resolve workflows directory with fallback chain:
 /// 1. `./workflows` (if exists — developer running from repo)
-/// 2. `~/.minion/workflows/` (extract embedded if needed — cargo install users)
+/// 2. `~/.stepyard/workflows/` (extract embedded if needed — cargo install users)
 fn resolve_workflows_dir() -> String {
     // If local ./workflows exists, use it (developer mode)
     if std::path::Path::new("./workflows").is_dir() {
         return "./workflows".to_string();
     }
 
-    // Otherwise, extract embedded workflows to ~/.minion/workflows/
+    // Otherwise, extract embedded workflows to ~/.stepyard/workflows/
     let home_dir = dirs::home_dir().expect("Cannot determine home directory");
     let workflows_path = home_dir.join(".stepyard").join("workflows");
 
     if !workflows_path.exists() {
         std::fs::create_dir_all(&workflows_path)
-            .expect("Failed to create ~/.minion/workflows/");
+            .expect("Failed to create ~/.stepyard/workflows/");
 
         for (name, content) in EMBEDDED_WORKFLOWS {
             let file_path = workflows_path.join(name);
@@ -533,7 +533,7 @@ fn resolve_workflows_dir() -> String {
         info!(
             path = %workflows_path.display(),
             count = EMBEDDED_WORKFLOWS.len(),
-            "Extracted embedded workflows to ~/.minion/workflows/"
+            "Extracted embedded workflows to ~/.stepyard/workflows/"
         );
     }
 

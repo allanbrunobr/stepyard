@@ -23,7 +23,7 @@ name: weekly-report
 version: 1
 description: "Generate a weekly progress report from git history and GitHub activity"
 
-# Only overrides — defaults inherited from ~/.minion/defaults.yaml
+# Only overrides — defaults inherited from ~/.stepyard/defaults.yaml
 config:
   global:
     timeout: 120s
