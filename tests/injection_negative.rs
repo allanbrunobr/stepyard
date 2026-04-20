@@ -4,7 +4,7 @@
 //! This file is the living CI enforcement of a single rule: user env
 //! values reach the container as argv elements, never as shell code.
 //! If any future refactor reintroduces a `format!("KEY={value}", …)` or
-//! a joined `sh -c` string at the minion layer, the positive-control
+//! a joined `sh -c` string at the stepyard layer, the positive-control
 //! below fails.
 //!
 //! # Running
@@ -94,12 +94,12 @@ async fn teardown(name: &str) {
     .await;
 }
 
-/// Positive-control (minion's argv-only guarantee).
+/// Positive-control (stepyard's argv-only guarantee).
 ///
 /// Given an env pair whose value contains `$(touch <host-marker>)`, the
 /// `printenv` invocation must (a) emit the payload verbatim, and (b)
 /// leave the host filesystem untouched. A joined `sh -c "KEY=$value …"`
-/// at any minion call site would expand `$(…)` on the HOST before docker
+/// at any stepyard call site would expand `$(…)` on the HOST before docker
 /// ever saw the value — the host marker would then exist, failing the
 /// second assertion.
 #[tokio::test]
@@ -200,10 +200,10 @@ async fn negative_control_user_owned_sh_c_expansion() {
 
 /// Epic 5 placeholder — CLI template substitution (`{{KEY}}`).
 ///
-/// When Epic 5 Story 5.x lands `minion run --var KEY=VALUE`, replace the
+/// When Epic 5 Story 5.x lands `stepyard run --var KEY=VALUE`, replace the
 /// body with the test described in Story 3.5 AC4:
 ///
-/// * `minion run --var MSG='$(rm -rf /)'` against a workflow with
+/// * `stepyard run --var MSG='$(rm -rf /)'` against a workflow with
 ///   `command: ["echo", "{{MSG}}"]`
 /// * assert stdout is literally `$(rm -rf /)\n`
 /// * assert host filesystem is untouched

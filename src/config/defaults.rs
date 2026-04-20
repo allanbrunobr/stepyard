@@ -59,12 +59,12 @@ fn override_config_paths() -> Vec<PathBuf> {
     //    On macOS:   /Users/<user>/.minion/defaults.yaml
     //    On Linux:   /home/<user>/.minion/defaults.yaml
     if let Some(home) = dirs::home_dir() {
-        paths.push(home.join(".minion").join("defaults.yaml"));
+        paths.push(home.join(".stepyard").join("defaults.yaml"));
     }
 
     // 2. Project-level: .minion/config.yaml (relative to CWD)
     if let Ok(cwd) = std::env::current_dir() {
-        paths.push(cwd.join(".minion").join("config.yaml"));
+        paths.push(cwd.join(".stepyard").join("config.yaml"));
     }
 
     paths

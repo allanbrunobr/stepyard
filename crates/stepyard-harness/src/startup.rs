@@ -23,7 +23,7 @@
 //! # Why this lives in the harness crate
 //!
 //! The binary's `src/startup.rs` re-exports this module. Placing the logic
-//! here lets `crates/minion-harness/tests/startup_reconcile.rs` exercise it
+//! here lets `crates/stepyard-harness/tests/startup_reconcile.rs` exercise it
 //! without the workspace growing a circular `minion-engine → minion-harness`
 //! build edge.
 

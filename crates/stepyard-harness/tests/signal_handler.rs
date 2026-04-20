@@ -1,7 +1,7 @@
 //! Story 2.2 — End-to-end SIGTERM → canonical exit code 143 within
 //! `grace_s + 1` seconds (NFR1 + D2).
 //!
-//! Spawns the `minion` binary as a subprocess, gives it a beat to start the
+//! Spawns the `stepyard` binary as a subprocess, gives it a beat to start the
 //! step, SIGTERMs it, and asserts the process exits with code 143 inside the
 //! grace window. `MINION_SHUTDOWN_GRACE_S=2` keeps the test under 5s wall.
 //!
@@ -14,8 +14,8 @@
 //!   - `MINION_HARNESS_DATABASE_URL` is unset (the binary needs a PG session
 //!     pool before it reaches the step loop — no DB means no step to
 //!     interrupt, which is a test-environment gap, not a defect under test),
-//!   - the workspace `target/debug/minion` binary is not built
-//!     (`cargo build --bin minion` fixes it), or
+//!   - the workspace `target/debug/stepyard` binary is not built
+//!     (`cargo build --bin stepyard` fixes it), or
 //!   - we're on a non-Unix target (signals are Unix-only per D2).
 
 use std::path::PathBuf;
@@ -25,14 +25,14 @@ use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use wait_timeout::ChildExt;
 
-fn minion_bin() -> Option<PathBuf> {
+fn stepyard_bin() -> Option<PathBuf> {
     // `assert_cmd::cargo_bin` reads `CARGO_BIN_EXE_<name>`, which is only set
-    // inside the crate that declares `[[bin]]` — `minion-harness` doesn't.
-    // Fall back to the canonical workspace-root `target/debug/minion` path.
+    // inside the crate that declares `[[bin]]` — `stepyard-harness` doesn't.
+    // Fall back to the canonical workspace-root `target/debug/stepyard` path.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let candidates = [
-        manifest.join("../../target/debug/minion"),
-        manifest.join("../../target/release/minion"),
+        manifest.join("../../target/debug/stepyard"),
+        manifest.join("../../target/release/stepyard"),
     ];
     candidates.into_iter().find(|p| p.exists())
 }
@@ -54,8 +54,8 @@ fn write_fixture(dir: &TempDir) -> PathBuf {
 #[test]
 #[cfg(unix)]
 fn sigterm_yields_exit_143_within_grace() {
-    let Some(bin) = minion_bin() else {
-        eprintln!("[skip] workspace minion binary not built: `cargo build --bin minion`");
+    let Some(bin) = stepyard_bin() else {
+        eprintln!("[skip] workspace stepyard binary not built: `cargo build --bin stepyard`");
         return;
     };
     let Ok(db_url) = std::env::var("MINION_HARNESS_DATABASE_URL") else {
@@ -82,12 +82,12 @@ fn sigterm_yields_exit_143_within_grace() {
         .arg("v2")
         .env("MINION_SHUTDOWN_GRACE_S", "2")
         .env("DATABASE_URL", &db_url)
-        // Detach from the test's pid group so our kill only hits minion.
+        // Detach from the test's pid group so our kill only hits stepyard.
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn minion");
+        .expect("spawn stepyard");
 
     // Give the binary time to enter `tokio::select!` and register the SIGTERM
     // stream — until `signal(SignalKind::terminate())` resolves, the kernel's
@@ -106,7 +106,7 @@ fn sigterm_yields_exit_143_within_grace() {
         .success();
     assert!(kill_ok, "kill -TERM {pid} failed");
 
-    // Bounded wait (Rule 7b semantic equivalent). If minion hasn't exited in
+    // Bounded wait (Rule 7b semantic equivalent). If stepyard hasn't exited in
     // 5s, something is wrong — fail loudly rather than hang the test.
     let status = child
         .wait_timeout(Duration::from_secs(5))
@@ -129,7 +129,7 @@ fn sigterm_yields_exit_143_within_grace() {
         None => {
             let _ = child.kill();
             panic!(
-                "minion did not exit within 5s of SIGTERM (elapsed={elapsed:?}); \
+                "stepyard did not exit within 5s of SIGTERM (elapsed={elapsed:?}); \
                  signal handler likely never fired",
             );
         }

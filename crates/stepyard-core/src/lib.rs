@@ -3,7 +3,7 @@
 //! This crate is the contract crate of the workspace. Other crates depend on
 //! it; it depends on no runtime (no tokio, no sqlx, no reqwest). If you find
 //! yourself wanting to add an IO dependency here, the type probably belongs
-//! in a downstream crate (`minion-session`, `minion-harness`,
+//! in a downstream crate (`minion-session`, `stepyard-harness`,
 //! `minion-sandbox-orchestrator`).
 //!
 //! See `minion-engine/ARCHITECTURE.md` § "minion-core".

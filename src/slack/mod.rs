@@ -1,4 +1,4 @@
-//! Minion Slack Bot — listens for @minion mentions and dispatches workflows
+//! Minion Slack Bot — listens for @stepyard mentions and dispatches workflows
 //!
 //! Enable with: cargo install minion-engine --features slack
 //!
@@ -280,13 +280,13 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
     )
     .await;
 
-    let minion_bin = which_minion();
+    let stepyard_bin = which_stepyard();
 
     info!(
         workflow = %wf.workflow,
         target = %wf.target,
         repo = ?wf.repo,
-        bin = %minion_bin,
+        bin = %stepyard_bin,
         "Launching workflow"
     );
 
@@ -303,7 +303,7 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
     }
     cmd_args.extend(["--".to_string(), wf.target.clone()]);
 
-    let result = Command::new(&minion_bin)
+    let result = Command::new(&stepyard_bin)
         .args(&cmd_args)
         .envs(std::env::vars())
         .env("PATH", &enhanced_path) // Must come AFTER envs() to override the inherited PATH
@@ -341,7 +341,7 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
                 )
             }
         }
-        Err(e) => ("💥", format!("Failed to spawn minion: {}", e)),
+        Err(e) => ("💥", format!("Failed to spawn stepyard: {}", e)),
     };
 
     post_message(
@@ -355,14 +355,14 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
     .await;
 }
 
-fn which_minion() -> String {
+fn which_stepyard() -> String {
     if let Ok(home) = env::var("HOME") {
-        let cargo_bin = format!("{}/.cargo/bin/minion", home);
+        let cargo_bin = format!("{}/.cargo/bin/stepyard", home);
         if std::path::Path::new(&cargo_bin).exists() {
             return cargo_bin;
         }
     }
-    "minion".to_string()
+    "stepyard".to_string()
 }
 
 // ── HTTP Handler ────────────────────────────────────────────────────────────
@@ -419,11 +419,11 @@ async fn slack_events(
                                 &SlackMessage {
                                     channel,
                                     text: "🤔 I didn't understand that command. Try:\n\
-                                        • `@minion fix issue https://github.com/owner/repo/issues/10`\n\
-                                        • `@minion review pr https://github.com/owner/repo/pull/42`\n\
-                                        • `@minion security audit https://github.com/owner/repo`\n\
-                                        • `@minion generate docs https://github.com/owner/repo`\n\
-                                        • `@minion fix ci https://github.com/owner/repo/pull/8`\n\
+                                        • `@stepyard fix issue https://github.com/owner/repo/issues/10`\n\
+                                        • `@stepyard review pr https://github.com/owner/repo/pull/42`\n\
+                                        • `@stepyard security audit https://github.com/owner/repo`\n\
+                                        • `@stepyard generate docs https://github.com/owner/repo`\n\
+                                        • `@stepyard fix ci https://github.com/owner/repo/pull/8`\n\
                                         \nYou can also use just numbers (e.g. `fix issue #10`) if the bot is running inside the repo."
                                         .to_string(),
                                     thread_ts: Some(ts),
@@ -519,7 +519,7 @@ fn resolve_workflows_dir() -> String {
 
     // Otherwise, extract embedded workflows to ~/.minion/workflows/
     let home_dir = dirs::home_dir().expect("Cannot determine home directory");
-    let workflows_path = home_dir.join(".minion").join("workflows");
+    let workflows_path = home_dir.join(".stepyard").join("workflows");
 
     if !workflows_path.exists() {
         std::fs::create_dir_all(&workflows_path)

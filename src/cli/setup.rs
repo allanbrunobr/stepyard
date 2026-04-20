@@ -28,7 +28,7 @@ struct SlackConfig {
 fn config_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".minion")
+        .join(".stepyard")
 }
 
 fn config_path() -> PathBuf {
@@ -195,12 +195,12 @@ pub async fn run_setup() -> anyhow::Result<()> {
     println!("\x1b[32m✓ Setup complete!\x1b[0m Config saved to {}", config_path().display());
     println!();
     println!("\x1b[1mNext steps:\x1b[0m");
-    println!("  minion list                                    List workflows");
-    println!("  minion execute workflows/code-review.yaml -- 42  Run a workflow");
+    println!("  stepyard list                                    List workflows");
+    println!("  stepyard execute workflows/code-review.yaml -- 42  Run a workflow");
 
     #[cfg(feature = "slack")]
     if config.slack.is_some() {
-        println!("  minion slack start                             Start Slack bot");
+        println!("  stepyard slack start                             Start Slack bot");
         println!();
         println!("\x1b[1mSlack setup:\x1b[0m");
         println!("  1. Start ngrok:  ngrok http 9000");
@@ -208,7 +208,7 @@ pub async fn run_setup() -> anyhow::Result<()> {
         println!("     https://<your-ngrok>.ngrok-free.app/slack/events");
         println!("  3. Subscribe to bot event: app_mention");
         println!("  4. Invite bot to channel: /invite @YourBot");
-        println!("  5. Run: minion slack start");
+        println!("  5. Run: stepyard slack start");
     }
 
     println!();

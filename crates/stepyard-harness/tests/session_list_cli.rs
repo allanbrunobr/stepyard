@@ -1,22 +1,22 @@
-//! Story 2.5 — `minion session list --status` integration test.
+//! Story 2.5 — `stepyard session list --status` integration test.
 //!
 //! Seeds PG with one session in each lifecycle status (running / completed /
-//! failed / cancelled), then spawns the real `minion` binary with varying
+//! failed / cancelled), then spawns the real `stepyard` binary with varying
 //! filter arguments and asserts stdout + exit codes.
 //!
 //! Skipped gracefully (printed `[skip]` + `return`) when:
 //! * `MINION_HARNESS_DATABASE_URL` is unset, or
-//! * the workspace `target/debug/minion` (or release) binary is not built —
-//!   `cargo build --bin minion` fixes it.
+//! * the workspace `target/debug/stepyard` (or release) binary is not built —
+//!   `cargo build --bin stepyard` fixes it.
 //!
 //! Every `tokio::process::Command` is wrapped in `tokio::time::timeout(..)`
 //! per Rule 7b — `tokio::process::Command` has no `.timeout(..)` of its own,
 //! so the wrap is the semantic equivalent of `assert_cmd`'s `.timeout(..)`.
 //! `assert_cmd::cargo_bin` cannot be used here: it reads the
 //! `CARGO_BIN_EXE_<name>` env var which cargo only sets in the crate that
-//! declares `[[bin]]`, and `minion-harness` does not. We fall back to the
-//! canonical workspace-root `target/debug/minion` path, following the
-//! precedent in `crates/minion-harness/tests/signal_handler.rs`.
+//! declares `[[bin]]`, and `stepyard-harness` does not. We fall back to the
+//! canonical workspace-root `target/debug/stepyard` path, following the
+//! precedent in `crates/stepyard-harness/tests/signal_handler.rs`.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -27,11 +27,11 @@ use uuid::Uuid;
 
 const CMD_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn minion_bin() -> Option<PathBuf> {
+fn stepyard_bin() -> Option<PathBuf> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     [
-        manifest.join("../../target/debug/minion"),
-        manifest.join("../../target/release/minion"),
+        manifest.join("../../target/debug/stepyard"),
+        manifest.join("../../target/release/stepyard"),
     ]
     .into_iter()
     .find(|p| p.exists())
@@ -48,8 +48,8 @@ async fn pool_and_url() -> Option<(sqlx::PgPool, String)> {
     Some((pool, url))
 }
 
-/// Invoke `minion <args>` with `DATABASE_URL` set, bounded by `CMD_TIMEOUT`.
-async fn run_minion(bin: &PathBuf, db_url: &str, args: &[&str]) -> std::process::Output {
+/// Invoke `stepyard <args>` with `DATABASE_URL` set, bounded by `CMD_TIMEOUT`.
+async fn run_stepyard(bin: &PathBuf, db_url: &str, args: &[&str]) -> std::process::Output {
     tokio::time::timeout(
         CMD_TIMEOUT,
         tokio::process::Command::new(bin)
@@ -59,14 +59,14 @@ async fn run_minion(bin: &PathBuf, db_url: &str, args: &[&str]) -> std::process:
             .output(),
     )
     .await
-    .expect("minion did not exit before timeout")
-    .expect("minion spawn")
+    .expect("stepyard did not exit before timeout")
+    .expect("stepyard spawn")
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn session_list_filters_by_status_and_since() {
-    let Some(bin) = minion_bin() else {
-        eprintln!("[skip] workspace minion binary not built: `cargo build --bin minion`");
+    let Some(bin) = stepyard_bin() else {
+        eprintln!("[skip] workspace stepyard binary not built: `cargo build --bin stepyard`");
         return;
     };
     let Some((pool, db_url)) = pool_and_url().await else {
@@ -102,7 +102,7 @@ async fn session_list_filters_by_status_and_since() {
     let cancelled_id = cancelled.id().as_uuid().to_string();
 
     // ── `--status running` → only running rows appear ─────────────────────
-    let out = run_minion(&bin, &db_url, &["session", "list", "--status", "running"]).await;
+    let out = run_stepyard(&bin, &db_url, &["session", "list", "--status", "running"]).await;
     assert!(
         out.status.success(),
         "exit 0 expected, status={:?}, stderr={}",
@@ -122,7 +122,7 @@ async fn session_list_filters_by_status_and_since() {
     }
 
     // ── `--status completed` → only completed rows appear ─────────────────
-    let out = run_minion(&bin, &db_url, &["session", "list", "--status", "completed"]).await;
+    let out = run_stepyard(&bin, &db_url, &["session", "list", "--status", "completed"]).await;
     assert!(out.status.success(), "exit 0 expected for --status completed");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -135,7 +135,7 @@ async fn session_list_filters_by_status_and_since() {
     );
 
     // ── invalid `--status foobar` → clap parse error, exit code 2 ─────────
-    let out = run_minion(&bin, &db_url, &["session", "list", "--status", "foobar"]).await;
+    let out = run_stepyard(&bin, &db_url, &["session", "list", "--status", "foobar"]).await;
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -148,7 +148,7 @@ async fn session_list_filters_by_status_and_since() {
     // AC: `invalid durations produce a clap-layer error at parse time (not
     // runtime)`. `humantime::Duration::from_str` surfaces the error through
     // clap's value parsing, so the DB is never touched.
-    let out = run_minion(
+    let out = run_stepyard(
         &bin,
         &db_url,
         &["session", "list", "--status", "running", "--since", "notaduration"],
@@ -176,7 +176,7 @@ async fn session_list_filters_by_status_and_since() {
         .await
         .expect("backdate started_at");
 
-    let out = run_minion(
+    let out = run_stepyard(
         &bin,
         &db_url,
         &["session", "list", "--status", "running", "--since", "1h"],
@@ -201,7 +201,7 @@ async fn session_list_filters_by_status_and_since() {
         .expect("newer running session");
     let newer_id = newer.id().as_uuid().to_string();
 
-    let out = run_minion(&bin, &db_url, &["session", "list", "--status", "running"]).await;
+    let out = run_stepyard(&bin, &db_url, &["session", "list", "--status", "running"]).await;
     assert!(out.status.success(), "exit 0 expected for ordering check");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let newer_pos = stdout.find(&newer_id).expect("newer session present");
