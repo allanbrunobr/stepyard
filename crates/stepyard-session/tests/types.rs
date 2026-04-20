@@ -1,7 +1,7 @@
 //! Unit tests for types that do not require a live PostgreSQL.
 //!
 //! Integration tests covering append/replay/load against a real database live
-//! in `tests/integration.rs` and are gated behind the `MINION_SESSION_DATABASE_URL`
+//! in `tests/integration.rs` and are gated behind the `STEPYARD_SESSION_DATABASE_URL`
 //! environment variable.
 
 use stepyard_session::{Session, SessionEvent, SessionId, SessionStatus};

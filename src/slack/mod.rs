@@ -5,7 +5,7 @@
 //! Configuration: ~/.minion/config.toml or environment variables:
 //!   SLACK_BOT_TOKEN      — xoxb-... Bot User OAuth Token
 //!   SLACK_SIGNING_SECRET — from Slack App → Basic Information → Signing Secret
-//!   MINION_WORKFLOWS_DIR — path to workflows/ directory (default: ./workflows)
+//!   STEPYARD_WORKFLOWS_DIR — path to workflows/ directory (default: ./workflows)
 
 use std::env;
 use std::process::Stdio;
@@ -486,7 +486,7 @@ fn load_slack_config() -> (String, String, String) {
         .or(file_secret)
         .expect("SLACK_SIGNING_SECRET must be set (env var or ~/.minion/config.toml)");
 
-    let workflows_dir = env::var("MINION_WORKFLOWS_DIR")
+    let workflows_dir = env::var("STEPYARD_WORKFLOWS_DIR")
         .ok()
         .or(file_dir)
         .unwrap_or_else(|| resolve_workflows_dir());

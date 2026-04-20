@@ -4,7 +4,7 @@
 //! emits — this closes the "cancelled session advanced after reload" gap,
 //! symmetric with `step_timeout_replay.rs` (architecture.md §D9 + NFR13).
 //!
-//! Skipped gracefully if `MINION_HARNESS_DATABASE_URL` is unset.
+//! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
 
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("MINION_HARNESS_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_HARNESS_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&url)
@@ -30,7 +30,7 @@ async fn pool() -> Option<sqlx::PgPool> {
 #[tokio::test]
 async fn reloaded_cancelled_session_refuses_to_advance() {
     let Some(pool) = pool().await else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 

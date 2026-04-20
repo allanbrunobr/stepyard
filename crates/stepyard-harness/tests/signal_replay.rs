@@ -5,7 +5,7 @@
 //! symmetric with `step_timeout_replay.rs` and `step_cancel_replay.rs`
 //! (architecture.md §D9 + NFR13).
 //!
-//! Skipped gracefully if `MINION_HARNESS_DATABASE_URL` is unset.
+//! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -22,7 +22,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("MINION_HARNESS_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_HARNESS_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&url)
@@ -56,7 +56,7 @@ impl StepExecutor for BlockingExecutor {
 #[tokio::test(flavor = "current_thread")]
 async fn reloaded_signalled_session_refuses_to_advance() {
     let Some(pool) = pool().await else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 

@@ -17,7 +17,7 @@
 //! `start_paused`. Same Rule 7a deviation already documented in
 //! `step_timeout.rs`.
 //!
-//! Skipped gracefully if `MINION_HARNESS_DATABASE_URL` is unset.
+//! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -36,7 +36,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("MINION_HARNESS_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_HARNESS_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&url)
@@ -75,7 +75,7 @@ impl StepExecutor for BlockingExecutor {
 #[tokio::test(flavor = "current_thread")]
 async fn shutdown_broadcast_emits_signal_received_destroys_sandbox_and_returns_step_failed() {
     let Some(pool) = pool().await else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 

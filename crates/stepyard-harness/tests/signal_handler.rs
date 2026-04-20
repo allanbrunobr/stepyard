@@ -3,7 +3,7 @@
 //!
 //! Spawns the `stepyard` binary as a subprocess, gives it a beat to start the
 //! step, SIGTERMs it, and asserts the process exits with code 143 inside the
-//! grace window. `MINION_SHUTDOWN_GRACE_S=2` keeps the test under 5s wall.
+//! grace window. `STEPYARD_SHUTDOWN_GRACE_S=2` keeps the test under 5s wall.
 //!
 //! Rule 7b deviation: `assert_cmd::Command` doesn't expose `.timeout(..)` on
 //! a spawned `Child` — we use a `std::process::Child` and the `wait-timeout`
@@ -11,7 +11,7 @@
 //! never hang past N seconds). Documented in the Story 2.2 Dev Agent Record.
 //!
 //! Skips gracefully when:
-//!   - `MINION_HARNESS_DATABASE_URL` is unset (the binary needs a PG session
+//!   - `STEPYARD_HARNESS_DATABASE_URL` is unset (the binary needs a PG session
 //!     pool before it reaches the step loop — no DB means no step to
 //!     interrupt, which is a test-environment gap, not a defect under test),
 //!   - the workspace `target/debug/stepyard` binary is not built
@@ -58,8 +58,8 @@ fn sigterm_yields_exit_143_within_grace() {
         eprintln!("[skip] workspace stepyard binary not built: `cargo build --bin stepyard`");
         return;
     };
-    let Ok(db_url) = std::env::var("MINION_HARNESS_DATABASE_URL") else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+    let Ok(db_url) = std::env::var("STEPYARD_HARNESS_DATABASE_URL") else {
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 
@@ -68,7 +68,7 @@ fn sigterm_yields_exit_143_within_grace() {
 
     // `--no-sandbox` avoids needing Docker for `cmd` steps. Minion's v2
     // engine requires a PG session pool — we hand it the harness test DB via
-    // `DATABASE_URL`. `MINION_SHUTDOWN_GRACE_S=2` caps the grace at 2s so the
+    // `DATABASE_URL`. `STEPYARD_SHUTDOWN_GRACE_S=2` caps the grace at 2s so the
     // whole test finishes within the 5s wall-clock budget.
     let mut child = Command::new(&bin)
         .arg("execute")
@@ -80,7 +80,7 @@ fn sigterm_yields_exit_143_within_grace() {
         // grace loop would exit in <50ms without exercising the deadline.
         .arg("--engine")
         .arg("v2")
-        .env("MINION_SHUTDOWN_GRACE_S", "2")
+        .env("STEPYARD_SHUTDOWN_GRACE_S", "2")
         .env("DATABASE_URL", &db_url)
         // Detach from the test's pid group so our kill only hits stepyard.
         .stdin(Stdio::null())

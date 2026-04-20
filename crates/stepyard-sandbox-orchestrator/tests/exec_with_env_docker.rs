@@ -1,6 +1,6 @@
 //! Integration tests for `DockerLifecycle::exec_with_env`.
 //!
-//! Gated on `MINION_TEST_DOCKER=1` — CI environments without a daemon skip
+//! Gated on `STEPYARD_TEST_DOCKER=1` — CI environments without a daemon skip
 //! these without failing. Every `Command` and every future carries a
 //! `.timeout(Duration::from_secs(N))` (Rule 7b).
 
@@ -17,7 +17,7 @@ use uuid::Uuid;
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn docker_enabled() -> bool {
-    std::env::var("MINION_TEST_DOCKER")
+    std::env::var("STEPYARD_TEST_DOCKER")
         .map(|v| v == "1")
         .unwrap_or(false)
 }
@@ -77,7 +77,7 @@ async fn exec_with_env_injects_env_var_verbatim() {
     // AC5 (positive control, benign value): `printenv FOO` with FOO=bar
     // yields `bar\n` exactly.
     if !docker_enabled() {
-        eprintln!("[skip] MINION_TEST_DOCKER not set to 1");
+        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
         return;
     }
     let session_id = Uuid::new_v4();
@@ -111,7 +111,7 @@ async fn exec_with_env_passes_shell_metacharacters_as_literal_string() {
     // `$(rm -rf /)` must be surfaced to the child process as a literal
     // string; no shell expansion, no filesystem damage.
     if !docker_enabled() {
-        eprintln!("[skip] MINION_TEST_DOCKER not set to 1");
+        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
         return;
     }
     let session_id = Uuid::new_v4();
@@ -180,7 +180,7 @@ async fn exec_with_env_deterministic_ordering_on_repeated_calls() {
     // construction is repeatable. We can't introspect argv directly, but
     // we can assert the child's view of env vars sort identically.
     if !docker_enabled() {
-        eprintln!("[skip] MINION_TEST_DOCKER not set to 1");
+        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
         return;
     }
     let session_id = Uuid::new_v4();

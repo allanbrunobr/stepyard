@@ -1,7 +1,7 @@
 //! Lifecycle tests.
 //!
 //! Mock-based tests always run. Docker-backed tests are gated by the
-//! `MINION_TEST_DOCKER=1` env var so CI without a daemon does not fail.
+//! `STEPYARD_TEST_DOCKER=1` env var so CI without a daemon does not fail.
 
 use std::sync::Arc;
 
@@ -78,13 +78,13 @@ async fn reuse_or_create_is_recorded_separately_from_create() {
 // ── Docker tests (require daemon, gated by env var) ───────────────────
 
 fn docker_enabled() -> bool {
-    std::env::var("MINION_TEST_DOCKER").map(|v| v == "1").unwrap_or(false)
+    std::env::var("STEPYARD_TEST_DOCKER").map(|v| v == "1").unwrap_or(false)
 }
 
 #[tokio::test]
 async fn docker_create_exec_destroy_roundtrip() {
     if !docker_enabled() {
-        eprintln!("[skip] MINION_TEST_DOCKER not set to 1");
+        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
         return;
     }
     let lifecycle = DockerLifecycle::default();
@@ -120,7 +120,7 @@ async fn docker_create_exec_destroy_roundtrip() {
 #[tokio::test]
 async fn docker_destroy_is_idempotent() {
     if !docker_enabled() {
-        eprintln!("[skip] MINION_TEST_DOCKER not set to 1");
+        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
         return;
     }
     let lifecycle = DockerLifecycle::default();
@@ -139,7 +139,7 @@ async fn docker_destroy_by_session_reaches_override_through_trait_object() {
     // falls back to the default (which delegates to the no-op `destroy`) —
     // that would leave real containers running.
     if !docker_enabled() {
-        eprintln!("[skip] MINION_TEST_DOCKER not set to 1");
+        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
         return;
     }
     let lifecycle: Arc<dyn SandboxLifecycle> = Arc::new(DockerLifecycle::default());

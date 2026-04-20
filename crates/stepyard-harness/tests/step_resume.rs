@@ -1,6 +1,6 @@
 //! Step/resume/cancel contract tests for [`Engine`].
 //!
-//! Requires a PostgreSQL reachable via `MINION_HARNESS_DATABASE_URL`. Tests
+//! Requires a PostgreSQL reachable via `STEPYARD_HARNESS_DATABASE_URL`. Tests
 //! skip gracefully (with a note) if the env var is not set — CI without a
 //! database sidecar stays green.
 
@@ -13,7 +13,7 @@ use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("MINION_HARNESS_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_HARNESS_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(8)
         .connect(&url)
@@ -26,7 +26,7 @@ async fn pool() -> Option<sqlx::PgPool> {
 macro_rules! db_test {
     ($pool:ident, $body:block) => {{
         let Some($pool) = pool().await else {
-            eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+            eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
             return;
         };
         $body

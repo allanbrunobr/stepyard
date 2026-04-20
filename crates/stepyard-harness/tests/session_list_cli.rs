@@ -5,7 +5,7 @@
 //! filter arguments and asserts stdout + exit codes.
 //!
 //! Skipped gracefully (printed `[skip]` + `return`) when:
-//! * `MINION_HARNESS_DATABASE_URL` is unset, or
+//! * `STEPYARD_HARNESS_DATABASE_URL` is unset, or
 //! * the workspace `target/debug/stepyard` (or release) binary is not built —
 //!   `cargo build --bin stepyard` fixes it.
 //!
@@ -38,7 +38,7 @@ fn stepyard_bin() -> Option<PathBuf> {
 }
 
 async fn pool_and_url() -> Option<(sqlx::PgPool, String)> {
-    let url = std::env::var("MINION_HARNESS_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_HARNESS_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&url)
@@ -70,7 +70,7 @@ async fn session_list_filters_by_status_and_since() {
         return;
     };
     let Some((pool, db_url)) = pool_and_url().await else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 

@@ -23,7 +23,7 @@
 //! The invariant under test (timeout arm wins → emit → destroy → fail) is
 //! independent of the specific duration, so a small real value proves it.
 //!
-//! Skipped gracefully if `MINION_HARNESS_DATABASE_URL` is unset.
+//! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,7 +40,7 @@ use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
-    let url = std::env::var("MINION_HARNESS_DATABASE_URL").ok()?;
+    let url = std::env::var("STEPYARD_HARNESS_DATABASE_URL").ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&url)
@@ -78,7 +78,7 @@ impl StepExecutor for BlockingExecutor {
 #[tokio::test(flavor = "current_thread")]
 async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
     let Some(pool) = pool().await else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 
@@ -208,7 +208,7 @@ async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
 #[tokio::test(flavor = "current_thread")]
 async fn step_with_no_timeout_is_not_affected_by_timeout_branch() {
     let Some(pool) = pool().await else {
-        eprintln!("[skip] MINION_HARNESS_DATABASE_URL not set");
+        eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 
