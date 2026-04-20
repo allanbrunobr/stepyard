@@ -112,7 +112,7 @@ struct DashboardState {
 }
 
 /// Collects step-level events during workflow execution and sends a complete
-/// payload to the Minion Dashboard API (`POST /api/events`) when the workflow
+/// payload to the Stepyard Dashboard API (`POST /api/events`) when the workflow
 /// finishes.
 ///
 /// Unlike WebhookSubscriber (which fires per-event), this subscriber batches

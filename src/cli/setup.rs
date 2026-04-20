@@ -5,7 +5,7 @@ use dialoguer::{Confirm, Input};
 
 /// Config file structure (~/.stepyard/config.toml)
 #[derive(serde::Serialize, serde::Deserialize, Default)]
-struct MinionConfig {
+struct StepyardConfig {
     #[serde(default)]
     core: CoreConfig,
     #[serde(default)]
@@ -35,17 +35,17 @@ fn config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
-fn load_config() -> MinionConfig {
+fn load_config() -> StepyardConfig {
     let path = config_path();
     if path.exists() {
         let content = std::fs::read_to_string(&path).unwrap_or_default();
         toml::from_str(&content).unwrap_or_default()
     } else {
-        MinionConfig::default()
+        StepyardConfig::default()
     }
 }
 
-fn save_config(config: &MinionConfig) -> anyhow::Result<()> {
+fn save_config(config: &StepyardConfig) -> anyhow::Result<()> {
     let dir = config_dir();
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create {}", dir.display()))?;
@@ -56,7 +56,7 @@ fn save_config(config: &MinionConfig) -> anyhow::Result<()> {
 
 pub async fn run_setup() -> anyhow::Result<()> {
     println!();
-    println!("\x1b[1m🔧 Minion Engine Setup\x1b[0m");
+    println!("\x1b[1m🔧 Stepyard Setup\x1b[0m");
     println!("\x1b[2m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m");
     println!();
 

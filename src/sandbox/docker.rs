@@ -59,7 +59,7 @@ impl DockerSandbox {
     /// Auto-build the default sandbox image from the embedded Dockerfile.
     /// Writes the Dockerfile to a temp dir and runs `docker build`.
     pub async fn auto_build_image(image: &str) -> Result<()> {
-        let tmp = std::env::temp_dir().join("minion-sandbox-build");
+        let tmp = std::env::temp_dir().join("stepyard-sandbox-build");
         std::fs::create_dir_all(&tmp)
             .context("Failed to create temp dir for Docker build")?;
 
