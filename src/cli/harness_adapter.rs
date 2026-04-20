@@ -24,6 +24,11 @@ pub enum AdapterError {
 }
 
 /// Convert a parsed [`WorkflowDef`] into the harness-facing [`Workflow`].
+///
+/// Carries both workflow-level (`def.env`) and step-level (`s.env`) env maps
+/// through to the harness types so the v2 engine's cascade resolver (Story 3.4)
+/// can merge them. Without this the YAML `env:` fields parse but never reach
+/// the engine — a silent drop.
 pub fn adapt(def: &WorkflowDef) -> Result<Workflow, AdapterError> {
     let mut steps = Vec::with_capacity(def.steps.len());
     for s in &def.steps {
@@ -35,7 +40,7 @@ pub fn adapt(def: &WorkflowDef) -> Result<Workflow, AdapterError> {
                     .ok_or_else(|| AdapterError::CmdMissingRun {
                         name: s.name.clone(),
                     })?;
-                steps.push(Step::cmd(s.name.clone(), cmd));
+                steps.push(Step::cmd(s.name.clone(), cmd).with_env(s.env.clone()));
             }
             other => {
                 return Err(AdapterError::UnsupportedStepType {
@@ -44,7 +49,9 @@ pub fn adapt(def: &WorkflowDef) -> Result<Workflow, AdapterError> {
             }
         }
     }
-    Ok(Workflow::new(def.name.clone(), steps))
+    let mut wf = Workflow::new(def.name.clone(), steps);
+    wf.env = def.env.clone();
+    Ok(wf)
 }
 
 #[cfg(test)]
@@ -81,6 +88,42 @@ steps:
         assert_eq!(wf.steps.len(), 2);
         assert_eq!(wf.steps[0].name, "one");
         assert_eq!(wf.steps[1].command, "echo 2");
+    }
+
+    #[test]
+    fn carries_env_at_workflow_and_step_scopes() {
+        let yaml = r#"
+name: adapter-env
+env:
+  WF_VAR: workflow_value
+  SHARED: from_workflow
+steps:
+  - name: one
+    type: cmd
+    run: "echo 1"
+    env:
+      STEP_VAR: step_value
+      SHARED: from_step
+  - name: two
+    type: cmd
+    run: "echo 2"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).unwrap();
+
+        assert_eq!(wf.env.get("WF_VAR").map(String::as_str), Some("workflow_value"));
+        assert_eq!(wf.env.get("SHARED").map(String::as_str), Some("from_workflow"));
+
+        let step_one_env = &wf.steps[0].env;
+        assert_eq!(step_one_env.get("STEP_VAR").map(String::as_str), Some("step_value"));
+        assert_eq!(step_one_env.get("SHARED").map(String::as_str), Some("from_step"));
+
+        assert!(
+            wf.steps[1].env.is_empty(),
+            "step without env: should have empty map, got {:?}",
+            wf.steps[1].env
+        );
     }
 
     #[test]
