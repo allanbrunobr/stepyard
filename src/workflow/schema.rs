@@ -27,10 +27,10 @@ pub struct WorkflowDef {
     #[serde(default)]
     pub scopes: HashMap<String, ScopeDef>,
     pub steps: Vec<StepDef>,
-    /// Workflow-level env vars (Story 3.3 mirror). Cascade resolver in
-    /// Story 3.4 merges step > workflow > defaults > host `${VAR}`.
+    /// Workflow-level env vars. Threaded into `minion_harness::Workflow.env`
+    /// by the adapter; the v2 engine's cascade resolver (Story 3.4) merges
+    /// step > workflow > defaults > host `${VAR}`.
     #[serde(default)]
-    #[allow(dead_code)]
     pub env: HashMap<String, String>,
 }
 
@@ -138,10 +138,10 @@ pub struct StepDef {
     #[serde(default)]
     pub async_exec: Option<bool>,
 
-    /// Step-level env vars (Story 3.3 mirror). Highest precedence in the
-    /// cascade (Story 3.4): step > workflow > defaults > host `${VAR}`.
+    /// Step-level env vars. Threaded into `minion_harness::Step.env` by the
+    /// adapter; highest precedence in the cascade (step > workflow > defaults
+    /// > host `${VAR}`).
     #[serde(default)]
-    #[allow(dead_code)]
     pub env: HashMap<String, String>,
 }
 
