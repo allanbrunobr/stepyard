@@ -3,8 +3,8 @@
 # ============================================================
 #
 # Usage:
-#   minion execute workflows/security-audit.yaml
-#   minion execute workflows/security-audit.yaml --args '{"path": "src/"}'
+#   stepyard execute workflows/security-audit.yaml
+#   stepyard execute workflows/security-audit.yaml --args '{"path": "src/"}'
 #
 # What it does:
 #   1. Finds all source files in the project (or given path)

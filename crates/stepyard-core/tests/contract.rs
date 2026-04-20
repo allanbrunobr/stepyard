@@ -1,4 +1,4 @@
-//! Contract tests for the public surface of `minion-core`. These freeze the
+//! Contract tests for the public surface of `stepyard-core`. These freeze the
 //! externally visible behavior:
 //!
 //! * Event JSON discriminator and field names are stable (Story 2.1 AC).

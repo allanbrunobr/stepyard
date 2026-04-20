@@ -3,8 +3,8 @@
 # ============================================================
 #
 # Usage:
-#   minion execute workflows/flaky-test-fix.yaml
-#   minion execute workflows/flaky-test-fix.yaml --args '{"runs": "5", "pattern": ".*auth.*"}'
+#   stepyard execute workflows/flaky-test-fix.yaml
+#   stepyard execute workflows/flaky-test-fix.yaml --args '{"runs": "5", "pattern": ".*auth.*"}'
 #
 # What it does:
 #   1. Runs the test suite N times to identify which tests fail inconsistently

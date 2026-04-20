@@ -1,4 +1,4 @@
-// Shared types for the minion-engine dashboard
+// Shared types for the Stepyard dashboard
 
 export interface WorkflowRun {
   run_id: string;

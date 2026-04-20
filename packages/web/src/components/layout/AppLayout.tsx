@@ -16,7 +16,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-background">
       <header className="border-b">
         <div className="container mx-auto flex h-14 items-center px-6">
-          <span className="text-lg font-semibold mr-8">Minion Engine</span>
+          <span className="text-lg font-semibold mr-8">Stepyard</span>
           <nav className="flex gap-4">
             {navItems.map((item) => (
               <Link

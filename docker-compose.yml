@@ -33,7 +33,7 @@ services:
       STEPYARD_DISPATCH_SSH_HOST: ${STEPYARD_DISPATCH_SSH_HOST:-}
       STEPYARD_WORKFLOWS_DIR: ${STEPYARD_WORKFLOWS_DIR:-/root/.stepyard/workflows}
       # `DATABASE_URL:STEPYARD_HOST_DATABASE_URL` remaps — api container's DATABASE_URL
-      # points at `db` (compose network), but minion on the host needs `localhost`.
+      # points at `db` (compose network), but stepyard on the host needs `localhost`.
       STEPYARD_SSH_ENV_FORWARD: "DATABASE_URL:STEPYARD_HOST_DATABASE_URL,GH_TOKEN,ANTHROPIC_API_KEY"
       DATABASE_URL: "postgres://${POSTGRES_USER:-minion}:${POSTGRES_PASSWORD:-minion_secret}@db:5432/${POSTGRES_DB:-minion_engine}"
       STEPYARD_HOST_DATABASE_URL: ${STEPYARD_HOST_DATABASE_URL:-postgres://minion:minion_dashboard_2026@localhost:5432/minion_dashboard}
@@ -46,7 +46,7 @@ services:
       - ./packages/api/src:/app/src
       - ./packages/api/migrations:/app/migrations
       - ./types:/app/types
-      # Read-only mount of host SSH dir so api can spawn `minion` on the host
+      # Read-only mount of host SSH dir so api can spawn `stepyard` on the host
       # via STEPYARD_DISPATCH_SSH_HOST. Host must accept the key in authorized_keys.
       - ${HOST_SSH_DIR:-/root/.ssh}:/root/.ssh:ro
       # Workflow YAMLs live on the host; api validates they exist before dispatch.

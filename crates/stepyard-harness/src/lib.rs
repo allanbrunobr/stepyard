@@ -1,4 +1,4 @@
-//! The harness loop of Minion Engine v2.
+//! The harness loop of Stepyard Engine v2.
 //!
 //! This crate ships the [`Engine`] type — the central entry point that
 //! decomposes the old monolithic `Engine::run()` into three composable

@@ -16,7 +16,7 @@ scopes:
 steps:
   - name: greet
     type: cmd
-    run: "echo Hello from Minion Engine!"
+    run: "echo Hello from Stepyard!"
 
   - name: show_target
     type: cmd

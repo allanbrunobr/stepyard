@@ -3,8 +3,8 @@
 # ============================================================
 #
 # Usage:
-#   minion execute workflows/refactor.yaml --target <DESCRIPTION>
-#   Example: minion execute workflows/refactor.yaml \
+#   stepyard execute workflows/refactor.yaml --target <DESCRIPTION>
+#   Example: stepyard execute workflows/refactor.yaml \
 #              --target "extract database logic from UserController into UserRepository"
 #
 # What it does:
