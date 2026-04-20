@@ -6,7 +6,7 @@
 //! ```toml
 //! url = "http://187.45.254.82:3001"
 //! secret = "<API_SECRET>"
-//! default_repo = "allanbrunobr/minion-engine"   # optional
+//! default_repo = "allanbrunobr/stepyard"   # optional
 //! ```
 //!
 //! Story 5.2 (Epic 5 — Remote-First Execution).

@@ -38,7 +38,7 @@ Create `~/.stepyard/remote.toml`:
 ```toml
 url = "http://187.45.254.82:3001"
 secret = "<API_SECRET from dashboard .env on the VPS>"
-# default_repo = "allanbrunobr/minion-engine"   # optional — used when --repo omitted
+# default_repo = "allanbrunobr/stepyard"   # optional — used when --repo omitted
 ```
 
 Then:
