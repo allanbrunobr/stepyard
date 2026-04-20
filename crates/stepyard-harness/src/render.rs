@@ -38,16 +38,29 @@ pub enum RenderError {
     Tera(String),
 }
 
+/// Iteration-local view exposed to templates rendered inside a
+/// `call` / `repeat` / `map` scope body (PR 3 of Task #31). Bound to
+/// `{{ scope.value }}` and `{{ scope.index }}` — v1 parity.
+///
+/// `value` is `serde_json::Value` (not `String`) so map iterations over
+/// a JSON array expose the raw element to Tera (e.g. `{{ scope.value.id }}`
+/// when the item is an object). For `call` / `repeat` the value holds
+/// the container step's `initial_value:` seed, or `null` when the seed
+/// is absent.
+#[derive(Debug, Serialize)]
+pub struct ScopeView {
+    pub value: serde_json::Value,
+    pub index: u32,
+}
+
 /// Immutable view of the data a template can reference.
 ///
 /// Lifetime-tied to the engine call site so no cloning happens when we
 /// only need to render one string. `steps` is rebuilt from the session
 /// log in `Engine::resume`; `target` / `vars` come from [`RunContext`].
-///
-/// `scope` is intentionally absent — the field will appear in PR 3 with
-/// `repeat`/`map`/`call` executors that actually bind it. Exposing it
-/// now with nothing behind it would be the same contract-without-substance
-/// anti-pattern as accepting `break`/`skip` gate actions in PR 2.
+/// `scope` is populated by the scope runner (PR 3) when rendering a
+/// cmd command or gate condition inside a `call` / `repeat` / `map`
+/// body — `None` for top-level steps.
 ///
 /// [`RunContext`]: crate::RunContext
 #[derive(Debug, Serialize)]
@@ -55,6 +68,10 @@ pub struct RenderContext<'a> {
     pub steps: &'a HashMap<String, StepOutputSnapshot>,
     pub target: &'a str,
     pub vars: &'a HashMap<String, String>,
+    /// Active scope frame. Absent for top-level steps (no `scope.value`
+    /// / `scope.index` visible to the template).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ScopeView>,
 }
 
 /// Render `template` against `ctx` using a throwaway Tera instance.
@@ -97,6 +114,7 @@ mod tests {
             steps: &steps,
             target: &target,
             vars: &vars,
+            scope: None,
         };
 
         let out = render("{{ steps.build.exit_code }}", &ctx).unwrap();
@@ -112,6 +130,7 @@ mod tests {
             steps: &steps,
             target: &target,
             vars: &vars,
+            scope: None,
         };
 
         let out = render("msg={{ steps.greet.stdout }}", &ctx).unwrap();
@@ -125,6 +144,7 @@ mod tests {
             steps: &steps,
             target: &target,
             vars: &vars,
+            scope: None,
         };
 
         let out = render("deploy to {{ target }}", &ctx).unwrap();
@@ -140,6 +160,7 @@ mod tests {
             steps: &steps,
             target: &target,
             vars: &vars,
+            scope: None,
         };
 
         let out = render("{{ vars.branch }}", &ctx).unwrap();
@@ -153,6 +174,7 @@ mod tests {
             steps: &steps,
             target: &target,
             vars: &vars,
+            scope: None,
         };
 
         let err = render("{{ steps.missing.exit_code }}", &ctx).unwrap_err();
@@ -167,9 +189,47 @@ mod tests {
             steps: &steps,
             target: &target,
             vars: &vars,
+            scope: None,
         };
 
         let out = render("echo hello", &ctx).unwrap();
         assert_eq!(out, "echo hello");
+    }
+
+    #[test]
+    fn scope_bindings_render() {
+        // PR 3 of #31: scope.value + scope.index must reach templates.
+        let (steps, target, vars) = ctx_with(HashMap::new(), "", HashMap::new());
+        let ctx = RenderContext {
+            steps: &steps,
+            target: &target,
+            vars: &vars,
+            scope: Some(ScopeView {
+                value: serde_json::json!("hello"),
+                index: 3,
+            }),
+        };
+
+        let out = render("{{ scope.value }} @ {{ scope.index }}", &ctx).unwrap();
+        assert_eq!(out, "hello @ 3");
+    }
+
+    #[test]
+    fn scope_value_can_hold_object_and_index_fields() {
+        // Map iterations over a JSON array of objects expose
+        // scope.value.<field> directly (no string coercion).
+        let (steps, target, vars) = ctx_with(HashMap::new(), "", HashMap::new());
+        let ctx = RenderContext {
+            steps: &steps,
+            target: &target,
+            vars: &vars,
+            scope: Some(ScopeView {
+                value: serde_json::json!({ "name": "alpha", "port": 8080 }),
+                index: 0,
+            }),
+        };
+
+        let out = render("{{ scope.value.name }}:{{ scope.value.port }}", &ctx).unwrap();
+        assert_eq!(out, "alpha:8080");
     }
 }

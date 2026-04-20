@@ -1,47 +1,81 @@
 //! Gate executor — the first non-cmd step kind on the v2 path.
 //!
-//! PR 2 of Task #31. Evaluates a rendered Tera expression and, based on
-//! `on_pass`/`on_fail`, either continues the workflow or terminates it.
+//! PR 2 of Task #31 landed top-level gates with `continue`/`fail`. PR 3
+//! widens the action vocabulary to `skip` / `break` for gates that live
+//! **inside** a `call` / `repeat` / `map` scope body — those actions do
+//! not make sense at the top level (no loop to skip, no scope to break)
+//! so they route through a separate [`GateAction::parse_scoped`] entry
+//! point and the top-level [`GateAction::parse`] keeps rejecting them.
 //! Lives in its own module — not inline in `engine.rs` — to set the
 //! pattern for `agent`/`chat`/`script` in later PRs.
 //!
-//! # PR 2 contract
+//! # PR 3 contract
 //!
 //! * `condition` is required. A gate without a condition is a validation
 //!   error at execution time (the YAML parser itself still admits the
 //!   field as optional to keep the data model cmd-compatible).
 //! * `on_pass` / `on_fail` default to `"continue"` when absent.
-//! * Only `"continue"` and `"fail"` are legal action values in PR 2.
-//!   `"break"` and `"skip"` need loop/scope context and land with
-//!   repeat/map/call in PR 3. We reject them early so we don't accept a
-//!   contract with no executor behind it.
+//! * Top-level gates accept `"continue"` and `"fail"` only.
+//! * Scoped gates additionally accept `"skip"` (end this iteration) and
+//!   `"break"` (end the containing `repeat` / `map`; for `call` a break
+//!   ends the scope body like skip — v1 parity). The adapter layer
+//!   already rejects `break`/`skip` at the top level with a friendlier
+//!   error shape; this module's `parse()` keeps the fallback in place
+//!   so a manually-constructed [`Step`](crate::workflow::Step) can't
+//!   bypass validation.
 
 /// Action to apply after a gate evaluates.
 ///
-/// String-to-enum conversion happens at [`GateAction::parse`]; anything
-/// outside `continue` / `fail` becomes a [`GateError::UnsupportedAction`]
-/// so the engine surfaces a structured error rather than a late render
-/// failure.
+/// String-to-enum conversion splits by gate position: top-level gates go
+/// through [`GateAction::parse`] and reject `skip`/`break`; scoped gates
+/// go through [`GateAction::parse_scoped`] and accept them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GateAction {
-    /// Carry on with the next step.
+    /// Carry on with the next step (or next scope body step).
     Continue,
     /// Abort the workflow with a failure.
     Fail,
+    /// End the current scope iteration early. `repeat`/`map` advance to
+    /// the next iteration; `call` treats this as end-of-scope (v1
+    /// parity). Only valid for scoped gates.
+    Skip,
+    /// End the containing scope entirely. `repeat`/`map` exit the loop
+    /// and the container completes successfully. Only valid for scoped
+    /// gates.
+    Break,
 }
 
 impl GateAction {
-    const ALLOWED: &'static [&'static str] = &["continue", "fail"];
+    const ALLOWED_TOP_LEVEL: &'static [&'static str] = &["continue", "fail"];
+    const ALLOWED_SCOPED: &'static [&'static str] = &["continue", "fail", "skip", "break"];
 
-    /// Parse an `on_pass` / `on_fail` string, defaulting to
-    /// [`GateAction::Continue`] when `None`.
+    /// Parse a top-level gate's `on_pass` / `on_fail` string, defaulting
+    /// to [`GateAction::Continue`] when `None`. Rejects `skip` / `break`
+    /// — those are scope-body-only actions (PR 3 of Task #31).
     pub fn parse(raw: Option<&str>) -> Result<Self, GateError> {
         match raw.map(str::trim) {
             None | Some("") | Some("continue") => Ok(Self::Continue),
             Some("fail") => Ok(Self::Fail),
             Some(other) => Err(GateError::UnsupportedAction {
                 got: other.to_string(),
-                allowed: Self::ALLOWED,
+                allowed: Self::ALLOWED_TOP_LEVEL,
+            }),
+        }
+    }
+
+    /// Parse a scoped gate's `on_pass` / `on_fail` string. Accepts the
+    /// top-level vocabulary plus `skip` and `break`. Scope runners call
+    /// this when walking a `call` / `repeat` / `map` body (PR 3 of
+    /// Task #31).
+    pub fn parse_scoped(raw: Option<&str>) -> Result<Self, GateError> {
+        match raw.map(str::trim) {
+            None | Some("") | Some("continue") => Ok(Self::Continue),
+            Some("fail") => Ok(Self::Fail),
+            Some("skip") => Ok(Self::Skip),
+            Some("break") => Ok(Self::Break),
+            Some(other) => Err(GateError::UnsupportedAction {
+                got: other.to_string(),
+                allowed: Self::ALLOWED_SCOPED,
             }),
         }
     }
@@ -54,8 +88,7 @@ pub enum GateError {
     MissingCondition { step: String },
 
     #[error(
-        "gate action `{got}` not supported in PR 2 of #31 \
-         (allowed: {}; `break`/`skip` land with repeat/map/call in PR 3)",
+        "gate action `{got}` not supported (allowed: {})",
         allowed.join(", ")
     )]
     UnsupportedAction {
@@ -94,8 +127,15 @@ pub fn evaluate_bool(step: &str, rendered: &str) -> Result<bool, GateError> {
 /// Terminal outcome after applying `on_pass`/`on_fail`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum GateOutcome {
-    /// Continue to the next step.
+    /// Continue to the next step (top-level) or next scope body step.
     Continue,
+    /// End the current scope iteration early. Scoped gates only — a
+    /// top-level gate never produces this outcome because
+    /// [`GateAction::parse`] rejects `skip`.
+    Skip,
+    /// End the containing scope. Scoped gates only — same guardrail as
+    /// `Skip`.
+    Break,
     /// Abort the workflow. `message` is the operator-visible reason —
     /// either the step's `message:` field (when set) or a generic line
     /// naming the branch that fired.
@@ -116,6 +156,8 @@ pub fn outcome_for(
     let action = if passed { on_pass } else { on_fail };
     match action {
         GateAction::Continue => GateOutcome::Continue,
+        GateAction::Skip => GateOutcome::Skip,
+        GateAction::Break => GateOutcome::Break,
         GateAction::Fail => {
             let reason = message
                 .map(str::to_string)
@@ -154,13 +196,17 @@ mod tests {
     }
 
     #[test]
-    fn action_parse_rejects_break_and_skip_explicitly() {
+    fn action_parse_rejects_break_and_skip_outside_scope() {
+        // Top-level gates can't emit skip/break — those actions require a
+        // containing scope. Adapter already catches this with a richer
+        // error shape; parse() stays the last line of defence so a
+        // manually-constructed Step can't slip through.
         for bad in ["break", "skip"] {
             let err = GateAction::parse(Some(bad)).unwrap_err();
             let msg = err.to_string();
             assert!(
-                msg.contains(bad) && msg.contains("PR 3"),
-                "expected {bad} rejection to mention PR 3: {msg}"
+                msg.contains(bad) && msg.contains("continue"),
+                "expected {bad} rejection to mention allowed set: {msg}"
             );
         }
     }
@@ -169,6 +215,46 @@ mod tests {
     fn action_parse_rejects_arbitrary_noise() {
         let err = GateAction::parse(Some("halt")).unwrap_err();
         assert!(err.to_string().contains("halt"));
+    }
+
+    #[test]
+    fn action_parse_scoped_defaults_to_continue() {
+        assert_eq!(
+            GateAction::parse_scoped(None).unwrap(),
+            GateAction::Continue
+        );
+        assert_eq!(
+            GateAction::parse_scoped(Some("")).unwrap(),
+            GateAction::Continue
+        );
+    }
+
+    #[test]
+    fn action_parse_scoped_accepts_skip_and_break() {
+        assert_eq!(
+            GateAction::parse_scoped(Some("skip")).unwrap(),
+            GateAction::Skip
+        );
+        assert_eq!(
+            GateAction::parse_scoped(Some("break")).unwrap(),
+            GateAction::Break
+        );
+        assert_eq!(
+            GateAction::parse_scoped(Some("fail")).unwrap(),
+            GateAction::Fail
+        );
+        assert_eq!(
+            GateAction::parse_scoped(Some("continue")).unwrap(),
+            GateAction::Continue
+        );
+    }
+
+    #[test]
+    fn action_parse_scoped_rejects_arbitrary_noise() {
+        let err = GateAction::parse_scoped(Some("explode")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("explode"), "msg={msg}");
+        assert!(msg.contains("break"), "scoped msg should list break: {msg}");
     }
 
     #[test]
@@ -197,6 +283,21 @@ mod tests {
     fn outcome_pass_continue() {
         let out = outcome_for(true, GateAction::Continue, GateAction::Fail, None);
         assert_eq!(out, GateOutcome::Continue);
+    }
+
+    #[test]
+    fn outcome_skip_and_break_route_through() {
+        // Scoped gates can configure Skip/Break on either branch — the
+        // outcome mirrors the action directly (gates never attach a
+        // message to Skip/Break, v1 parity).
+        assert_eq!(
+            outcome_for(true, GateAction::Skip, GateAction::Continue, None),
+            GateOutcome::Skip
+        );
+        assert_eq!(
+            outcome_for(false, GateAction::Continue, GateAction::Break, None),
+            GateOutcome::Break
+        );
     }
 
     #[test]
