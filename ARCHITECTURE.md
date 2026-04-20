@@ -1,14 +1,14 @@
-# Minion Engine v2 — Architecture
+# Stepyard v2 — Architecture
 
 **Status:** Draft (v2.0.0 pending)
 **Author:** Winston (BMAD architect)
 **Date:** 2026-04-13
 **Review cadence:** trimestral (ADR-010 [ref-2])
 
-Este documento descreve a arquitetura do **Minion Engine v2**, o workflow
+Este documento descreve a arquitetura do **Stepyard v2**, o workflow
 engine em Rust que orquestra o Claude Code CLI em containers Docker
 efemeros e expoe eventos para o modulo Agent Dashboard. Substitui
-informalmente o codigo v0.7.6 (binario unico `minion` com harness,
+informalmente o codigo v0.7.6 (binario unico `stepyard` com harness,
 sandbox e subscribers no mesmo crate) pela topologia hibrida aprovada
 em ADR-011 e ADR-012.
 
@@ -33,27 +33,27 @@ Code CLI dentro de um container Docker efemero (`Sandbox`), e emite
 `Event`s para subscribers (stdout, webhook, SSE, DashboardSubscriber).
 Credenciais OAuth para MCP servers nunca entram na memoria do engine
 nem do container do agent — vivem no vault e sao proxyficadas por um
-**binario separado** `minion-mcp-proxy` em seu proprio container.
+**binario separado** `stepyard-mcp-proxy` em seu proprio container.
 
 Workspace Rust com cinco crates empacotados em **dois binarios**:
 
 ```
 minion-engine/
 ├── crates/
-│   ├── minion-core/              # types, traits, Event, WorkflowDef
-│   ├── minion-session/           # Session append-only + StepRecord
-│   ├── minion-harness/           # Engine::step / Engine::resume
-│   ├── minion-sandbox-orchestrator/ # container lifecycle, cattle
-│   └── minion-mcp-proxy/         # OAuth token broker (binario separado)
-├── src/bin/minion.rs             # binario 1: engine + harness + sandbox
-└── src/bin/mcp-proxy.rs          # binario 2: minion-mcp-proxy
+│   ├── stepyard-core/              # types, traits, Event, WorkflowDef
+│   ├── stepyard-session/           # Session append-only + StepRecord
+│   ├── stepyard-harness/           # Engine::step / Engine::resume
+│   ├── stepyard-sandbox-orchestrator/ # container lifecycle, cattle
+│   └── stepyard-mcp-proxy/         # OAuth token broker (binario separado)
+├── src/bin/stepyard.rs             # binario 1: engine + harness + sandbox
+└── src/bin/mcp-proxy.rs          # binario 2: stepyard-mcp-proxy
 ```
 
 Topologia de runtime (ADR-011):
 
 ```
 ┌─────────────────────────┐        ┌───────────────────────────┐
-│ minion (binario unico)  │        │ minion-mcp-proxy          │
+│ stepyard (binario unico)  │        │ stepyard-mcp-proxy          │
 │  ├ harness              │  HTTP  │  (container Docker proprio)│
 │  ├ session              │◄──────►│  fetch tokens do vault    │
 │  └ sandbox-orchestrator │  unix  │  scope por session_id JWT │
@@ -68,17 +68,17 @@ Topologia de runtime (ADR-011):
 
 ## Entry Points
 
-- `minion-engine/src/bin/minion.rs` — CLI principal. Subcommands
+- `minion-engine/src/bin/stepyard.rs` — CLI principal. Subcommands
   `execute`, `dispatch`, `migrate`, `serve`. Ponto de entrada para
   operadores e para o dashboard (HTTP local).
 - `minion-engine/src/bin/mcp-proxy.rs` — binario separado que roda
-  no container `minion-mcp-proxy`. HTTP server em unix socket ou
+  no container `stepyard-mcp-proxy`. HTTP server em unix socket ou
   `localhost:<porta>`; nao fala com o mundo externo alem do vault.
-- `minion-engine/crates/minion-harness/src/engine.rs` — `Engine`
+- `minion-engine/crates/stepyard-harness/src/engine.rs` — `Engine`
   struct com metodos `Engine::step(session_id)` e `Engine::resume(
   session_id)`. Toda execucao de step passa por aqui (fase B do
   refactor).
-- `minion-engine/crates/minion-session/src/session.rs` — `Session`
+- `minion-engine/crates/stepyard-session/src/session.rs` — `Session`
   com `append(event)` e `replay() -> Vec<SessionEvent>`. Fonte de
   verdade para replay e audit.
 - `tests/` — testes de integracao end-to-end, cada um dispara o
@@ -90,7 +90,7 @@ Tour dos crates. Citamos apenas types e traits publicos **que
 definem contratos**. Implementacao interna (modulos privados,
 structs auxiliares, traits helper) nao esta aqui — leia o codigo.
 
-### minion-core
+### stepyard-core
 
 O alicerce. Types e traits compartilhados pelos outros crates.
 Nenhum I/O, nenhuma dependencia de runtime alem de `serde` e
@@ -111,7 +111,7 @@ Publico:
 - `EngineError` — erro de dominio. Sem `anyhow::Error` em APIs
   publicas.
 
-### minion-session
+### stepyard-session
 
 `Session` e a **primitiva central** do engine v2 (fase A do refactor).
 Todo o contexto que o harness reconstroi entre `step`s vem do replay
@@ -127,7 +127,7 @@ Publico:
 - **Invariante:** uma vez escrito, nunca editado. Truncar = novo
   session_id.
 
-### minion-harness
+### stepyard-harness
 
 O loop de execucao. Consome `WorkflowDef`, emite `Event`s, spawna
 sandboxes, chama Claude Code CLI. Versao v2 decompoe o `Engine::run()`
@@ -145,9 +145,9 @@ Publico:
   (fase E).
 
 **Invariante do harness:** nao carrega credenciais OAuth em memoria.
-Todas as tool calls MCP passam pelo `minion-mcp-proxy` via HTTP local.
+Todas as tool calls MCP passam pelo `stepyard-mcp-proxy` via HTTP local.
 
-### minion-sandbox-orchestrator
+### stepyard-sandbox-orchestrator
 
 Responsavel por criar, reutilizar e destruir containers Docker.
 Containers sao "cattle" [ref-4] — fungiveis, sem estado persistente
@@ -166,7 +166,7 @@ Publico:
 perda — qualquer estado relevante esta no `Session` log ou em volume
 persistente.
 
-### minion-mcp-proxy
+### stepyard-mcp-proxy
 
 **Binario separado** (ADR-011). Roda em container Docker proprio,
 com seu proprio SELinux/AppArmor profile. Unica parte do sistema
@@ -203,7 +203,7 @@ o engine.
 ### Config
 
 Fonte unica: `config.toml` no diretorio da session + overrides por
-env var (`MINION_*`). `HarnessConfig` e imutavel apos `Engine::new`.
+env var (`STEPYARD_*`). `HarnessConfig` e imutavel apos `Engine::new`.
 
 ### Observability
 
@@ -216,7 +216,7 @@ logs (debug), (3) metricas Prometheus expostas pelo binario `serve`
 Invariantes que **devem** ser verdade. Violar qualquer um e bug.
 
 1. **Credenciais OAuth nunca entram no processo do harness nem no
-   container do agent.** Tokens vivem no vault; `minion-mcp-proxy` e
+   container do agent.** Tokens vivem no vault; `stepyard-mcp-proxy` e
    o unico consumer autorizado, rodando em container separado. Racional:
    um memory bug em `unsafe` Rust ou dep C no harness nao pode
    comprometer multi-tenant (ADR-011 [ref-4]).
@@ -232,7 +232,7 @@ Invariantes que **devem** ser verdade. Violar qualquer um e bug.
    subscribers usam `#[serde(other)]` ou equivalente.
 5. **YAML v1 roda ate 2026-10-13** (180 dias apos v2 GA hipotetico
    2026-04-13, ADR-012). Depois dessa data, o parser rejeita v1 com
-   erro explicito e link para `minion migrate`.
+   erro explicito e link para `stepyard migrate`.
 6. **`WorkflowDef` e enum tagged** (`V1 | V2`). Type system garante
    que nenhum code path esquece de tratar uma das versoes durante a
    janela de compat.
@@ -250,7 +250,7 @@ Invariantes que **devem** ser verdade. Violar qualquer um e bug.
 11. **O harness nao tem estado em memoria entre `step`s.** Tudo que
     precisa saber para continuar vem do `Session::replay()`. Restart
     do processo nao perde progress.
-12. **`minion-mcp-proxy` autentica todo request via JWT `session_id`
+12. **`stepyard-mcp-proxy` autentica todo request via JWT `session_id`
     short-lived (15min, HS256).** Sem JWT valido, o proxy recusa
     antes de tocar o vault.
 
@@ -268,7 +268,7 @@ delas, precisa atualizar este documento primeiro.
 - **Nao persistimos codigo-fonte do cliente em nenhum banco.** So
   metadata. Conteudo vive em volume da sandbox, que e cattle.
 - **Nao rodamos MCP servers dentro do engine.** Todos via
-  `minion-mcp-proxy`. Isso vale inclusive para MCP "stdlib"
+  `stepyard-mcp-proxy`. Isso vale inclusive para MCP "stdlib"
   (filesystem, git) se algum dia forem OAuth-gated.
 - **Nao suportamos cold-start sem PostgreSQL.** Sem `Session`
   backend, engine recusa start. Sem dependencia "opcional" de
@@ -282,7 +282,7 @@ delas, precisa atualizar este documento primeiro.
   firme em v3.
 - **Nao rodamos o Claude Code CLI fora de sandbox.** Nao ha path
   "local unsafe mode" em producao. Dev-only `--no-sandbox` flag e
-  recusado se `MINION_ENV=production`.
+  recusado se `STEPYARD_ENV=production`.
 - **Nao proxyficamos nenhuma credencial alem do que MCP servers
   pedem.** Nao viramos broker generico de OAuth para o app do cliente.
 - **Nao mantemos WebSocket persistente entre dashboard e engine.**
@@ -298,13 +298,13 @@ contratos sao breaking changes.
 - **Dashboard → Engine** via `POST /workflows/dispatch` (fase D).
   Body: `{workflow_id, inputs, tenant_id}`. Response: `{session_id}`.
   Autenticacao: mutual TLS ou bearer token de service account.
-- **CLI operator → Engine** via `minion execute <file.yaml>` e
-  `minion dispatch <workflow-name>`. Mesmo code path que HTTP, so
+- **CLI operator → Engine** via `stepyard execute <file.yaml>` e
+  `stepyard dispatch <workflow-name>`. Mesmo code path que HTTP, so
   que local.
 - **Events consumer → Engine** via `GET /sessions/:id/events` (SSE).
   Stream de `Event` serializados. Reconnect faz replay do zero —
   subscribers sao idempotentes por contrato (invariante 7).
-- **Migration tool** via `minion migrate workflow.yaml` — converte
+- **Migration tool** via `stepyard migrate workflow.yaml` — converte
   v1 → v2 com teste de equivalencia. Saida em stdout.
 
 ### Outbound
@@ -316,12 +316,12 @@ contratos sao breaking changes.
   OpenAI). Usado para steps LLM "puros" (sem tool calls), fallback,
   e provider abstraction [ref-8].
 - **Engine → PostgreSQL** via `sqlx`. Uma database por tenant;
-  schema controlado por migrations em `minion-session/migrations/`.
-- **Engine → minion-mcp-proxy** via HTTP unix socket
-  (`/var/run/minion/mcp.sock`) ou `localhost:8787`.
-- **minion-mcp-proxy → Vault** via HTTP (Hashicorp Vault API ou
+  schema controlado por migrations em `stepyard-session/migrations/`.
+- **Engine → stepyard-mcp-proxy** via HTTP unix socket
+  (`/var/run/stepyard/mcp.sock`) ou `localhost:8787`.
+- **stepyard-mcp-proxy → Vault** via HTTP (Hashicorp Vault API ou
   compat). Autenticacao via AppRole no boot do container.
-- **minion-mcp-proxy → MCP server externo** via HTTPS (conforme
+- **stepyard-mcp-proxy → MCP server externo** via HTTPS (conforme
   registry do tenant). Tokens OAuth injetados pelo proxy, nao pelo
   harness.
 
@@ -352,7 +352,7 @@ revisitado).
 
 ```
                        ┌─────────────────────────┐
-   dashboard ──HTTP──► │ minion (binario 1)      │
+   dashboard ──HTTP──► │ stepyard (binario 1)      │
    (remoto)            │ ┌─────────────────────┐ │
                        │ │ HTTP server (serve) │ │
                        │ ├─────────────────────┤ │
@@ -371,7 +371,7 @@ revisitado).
                                     │ tool call
                                     ▼ via localhost
                        ┌─────────────────────────┐
-                       │ minion-mcp-proxy        │
+                       │ stepyard-mcp-proxy        │
                        │ (binario 2, container)  │
                        │  ┌───────────────────┐  │
                        │  │ JWT validator     │  │
@@ -403,20 +403,20 @@ minion-engine/
 ├── ARCHITECTURE.md                  # este documento
 ├── README.md
 ├── crates/
-│   ├── minion-core/
+│   ├── stepyard-core/
 │   │   └── src/{lib.rs, event.rs, workflow.rs, subscriber.rs}
-│   ├── minion-session/
+│   ├── stepyard-session/
 │   │   ├── src/{lib.rs, session.rs, store.rs}
 │   │   └── migrations/
-│   ├── minion-harness/
+│   ├── stepyard-harness/
 │   │   └── src/{lib.rs, engine.rs, executor.rs, plan.rs}
-│   ├── minion-sandbox-orchestrator/
+│   ├── stepyard-sandbox-orchestrator/
 │   │   └── src/{lib.rs, sandbox.rs, docker.rs}
-│   └── minion-mcp-proxy/
+│   └── stepyard-mcp-proxy/
 │       └── src/{lib.rs, jwt.rs, vault.rs, forwarder.rs}
 ├── src/
 │   ├── bin/
-│   │   ├── minion.rs                # binario 1 (agrega crates 1..4)
+│   │   ├── stepyard.rs                # binario 1 (agrega crates 1..4)
 │   │   └── mcp-proxy.rs             # binario 2 (crate 5)
 │   └── cli/                         # subcommands: execute/dispatch/migrate/serve
 ├── workflows/                       # exemplos v1 e v2

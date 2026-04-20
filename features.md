@@ -30,7 +30,7 @@
 - Status: done
 
 ## Feature 6: Install SIGINT/SIGTERM Handlers and Graceful Shutdown Deadline
-- Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.2] As a platform operator, I want the minion binary to intercept SIGINT/SIGTERM, fire the broadcast channel, wait up to shutdown_grace_s for in-flight engines, then exit with the canonical signal exit code, so that container cleanup starts within 1s and never hits the kernel's 30s SIGKILL deadline. Source: _bmad-output/sandcastle-features/epics.md
+- Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.2] As a platform operator, I want the stepyard binary to intercept SIGINT/SIGTERM, fire the broadcast channel, wait up to shutdown_grace_s for in-flight engines, then exit with the canonical signal exit code, so that container cleanup starts within 1s and never hits the kernel's 30s SIGKILL deadline. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 5
 - Status: done
 
@@ -40,12 +40,12 @@
 - Status: done
 
 ## Feature 8: Startup Crash Recovery — Reconcile Orphan Sessions and Containers
-- Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.4] As a platform operator, I want minion to run a three-phase reconcile at startup that marks orphan running sessions as failed, destroys orphan containers, and stubs the worktree pruning slot, so that a restart after OOM/crash/hard-kill leaves the engine consistent without manual intervention. Source: _bmad-output/sandcastle-features/epics.md
+- Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.4] As a platform operator, I want stepyard to run a three-phase reconcile at startup that marks orphan running sessions as failed, destroys orphan containers, and stubs the worktree pruning slot, so that a restart after OOM/crash/hard-kill leaves the engine consistent without manual intervention. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 7
 - Status: done
 
-## Feature 9: Add minion session list --status CLI Subcommand
-- Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.5] As a DevOps engineer, I want minion session list --status <running|completed|failed|cancelled> [--since <duration>] backed by a PostgreSQL query on sessions.status, so that I can audit session outcomes and filter by time range without loading full event logs. Source: _bmad-output/sandcastle-features/epics.md
+## Feature 9: Add stepyard session list --status CLI Subcommand
+- Description: [Epic 2: Crash-Safe Process Lifecycle & Session Visibility, Story 2.5] As a DevOps engineer, I want stepyard session list --status <running|completed|failed|cancelled> [--since <duration>] backed by a PostgreSQL query on sessions.status, so that I can audit session outcomes and filter by time range without loading full event logs. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 8
 - Status: done
 
@@ -59,8 +59,8 @@
 - Dependencies: Feature 10
 - Status: in_progress
 
-## Feature 12: Extend Workflow YAML Schema with env: Fields and .minion/defaults.yaml Loader
-- Description: [Epic 3: Sandbox Environment Injection, Story 3.3] As a workflow author, I want step-level env: {KEY: VAL} and workflow-level env: {KEY: VAL} in YAML plus a .minion/defaults.yaml file contributing default env pairs, so that I can parameterize secrets and config per step, per workflow, or project-wide. Source: _bmad-output/sandcastle-features/epics.md
+## Feature 12: Extend Workflow YAML Schema with env: Fields and .stepyard/defaults.yaml Loader
+- Description: [Epic 3: Sandbox Environment Injection, Story 3.3] As a workflow author, I want step-level env: {KEY: VAL} and workflow-level env: {KEY: VAL} in YAML plus a .stepyard/defaults.yaml file contributing default env pairs, so that I can parameterize secrets and config per step, per workflow, or project-wide. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 11
 - Status: in_progress
 
@@ -75,7 +75,7 @@
 - Status: in_progress
 
 ## Feature 15: Define WorkspaceManager Trait and GitWorktreeManager Skeleton
-- Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.1] As an engine maintainer, I want a WorkspaceManager trait in minion-sandbox-orchestrator/src/workspace.rs and a GitWorktreeManager struct with stub method bodies, so that subsequent stories fill in prepare/finalize/prune against a stable trait contract without a new crate. Source: _bmad-output/sandcastle-features/epics.md
+- Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.1] As an engine maintainer, I want a WorkspaceManager trait in stepyard-sandbox-orchestrator/src/workspace.rs and a GitWorktreeManager struct with stub method bodies, so that subsequent stories fill in prepare/finalize/prune against a stable trait contract without a new crate. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 9
 - Status: pending
 
@@ -110,12 +110,12 @@
 - Status: pending
 
 ## Feature 22: {{KEY}} Template Substitution Preprocessor with YAML-Safe Output
-- Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.3] As a workflow author, I want a minion_core::template::substitute(text, &vars) pre-parse pass that replaces every {{KEY}} with the YAML-encoded value via serde_yaml::to_string running BEFORE serde_yaml::from_str, so that one workflow YAML can be parameterized across N projects without YAML structure injection from raw value substitution. Source: _bmad-output/sandcastle-features/epics.md
+- Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.3] As a workflow author, I want a stepyard_core::template::substitute(text, &vars) pre-parse pass that replaces every {{KEY}} with the YAML-encoded value via serde_yaml::to_string running BEFORE serde_yaml::from_str, so that one workflow YAML can be parameterized across N projects without YAML structure injection from raw value substitution. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 21
 - Status: pending
 
 ## Feature 23: CLI --var KEY=VAL Flag + Defaults Source + EngineError::PlaceholderUnresolved Validation
-- Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.4] As a workflow author, I want minion run --var KEY=VAL as a multi-value CLI flag and .minion/defaults.yaml providing value sources for {{KEY}}, with EngineError::PlaceholderUnresolved failing fast at parse time when any placeholder is missing, so that I can run one workflow across N projects with explicit per-run parameters and clear errors on missing keys. Source: _bmad-output/sandcastle-features/epics.md
+- Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.4] As a workflow author, I want stepyard run --var KEY=VAL as a multi-value CLI flag and .stepyard/defaults.yaml providing value sources for {{KEY}}, with EngineError::PlaceholderUnresolved failing fast at parse time when any placeholder is missing, so that I can run one workflow across N projects with explicit per-run parameters and clear errors on missing keys. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 22
 - Status: pending
 
@@ -125,7 +125,7 @@
 - Status: pending
 
 ## Feature 25: Implement PodmanLifecycle to Validate Multi-Provider Support via Existing Trait
-- Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.1] As a platform operator, I want a PodmanLifecycle struct implementing the existing SandboxLifecycle trait (without changing the trait) shippable as an alternate provider via --sandbox-provider <docker|podman> CLI flag, so that Docker-restricted hosts can run minion via Podman and we prove the trait supports multiple providers without abstraction-layer redesign. Source: _bmad-output/sandcastle-features/epics.md
+- Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.1] As a platform operator, I want a PodmanLifecycle struct implementing the existing SandboxLifecycle trait (without changing the trait) shippable as an alternate provider via --sandbox-provider <docker|podman> CLI flag, so that Docker-restricted hosts can run stepyard via Podman and we prove the trait supports multiple providers without abstraction-layer redesign. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 24
 - Status: pending
 
@@ -135,6 +135,6 @@
 - Status: pending
 
 ## Feature 27: TTY Forwarding via exec_interactive Default-Impl Method
-- Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.3] As a DevOps engineer, I want a new exec_interactive default-impl on SandboxLifecycle (Err(InteractiveNotSupported) by default) overridden by DockerLifecycle/PodmanLifecycle to use docker/podman exec -it for TTY-forwarded sessions, exposed via minion exec --interactive <session-id>, so that I can debug a running session interactively without bypassing minion's container abstraction. Source: _bmad-output/sandcastle-features/epics.md
+- Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.3] As a DevOps engineer, I want a new exec_interactive default-impl on SandboxLifecycle (Err(InteractiveNotSupported) by default) overridden by DockerLifecycle/PodmanLifecycle to use docker/podman exec -it for TTY-forwarded sessions, exposed via stepyard exec --interactive <session-id>, so that I can debug a running session interactively without bypassing stepyard's container abstraction. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 26
 - Status: pending

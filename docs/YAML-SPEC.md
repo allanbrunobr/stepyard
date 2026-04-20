@@ -1,6 +1,6 @@
 # YAML Specification
 
-Reference for the `workflow.yaml` format accepted by `minion execute`.
+Reference for the `workflow.yaml` format accepted by `stepyard execute`.
 
 ## Top-level schema
 
@@ -69,7 +69,7 @@ Available in any rendered string (`run`, `prompt`, `condition`, `message`, `item
 
 | Variable                              | Origin                                                       |
 |---------------------------------------|--------------------------------------------------------------|
-| `{{ target }}`                        | Positional arg after `--` (e.g., `minion execute wf.yaml -- 42`) |
+| `{{ target }}`                        | Positional arg after `--` (e.g., `stepyard execute wf.yaml -- 42`) |
 | `{{ args.<key> }}`                    | Values set via `--var KEY=VALUE`                             |
 | `{{ steps.<name>.stdout / stderr / exit_code }}` | Step outputs (cmd)                                |
 | `{{ steps.<name>.response }}`         | Agent/chat response text                                     |
@@ -98,7 +98,7 @@ steps:
 ```
 
 ```bash
-minion execute hello.yaml -- world
+stepyard execute hello.yaml -- world
 # → Hello world
 ```
 
@@ -147,7 +147,7 @@ steps:
 
 ## Validation
 
-Run `minion validate workflow.yaml` to check syntax before execution. Validation catches:
+Run `stepyard validate workflow.yaml` to check syntax before execution. Validation catches:
 
 - Missing required fields (`name`, `steps`, step-type–specific fields)
 - Unknown `type:` values

@@ -1,6 +1,6 @@
 # Docker Sandbox
 
-Minion Engine runs workflows inside a Docker container by default. Each step
+Stepyard runs workflows inside a Docker container by default. Each step
 (or only agent steps, depending on the mode) executes in an isolated environment
 with bounded network and resource access.
 
@@ -9,15 +9,15 @@ with bounded network and resource access.
 - Docker Desktop **4.40+** (or Docker Engine with equivalent features)
 - Docker daemon reachable from the host (the CLI shells out to `docker run`)
 
-If the daemon isn't reachable, `minion execute` exits with a clear message and
+If the daemon isn't reachable, `stepyard execute` exits with a clear message and
 no partial state. Use `--no-sandbox` to run locally on the host instead.
 
 ## CLI flags
 
 ```bash
-minion execute workflow.yaml -- <target>               # sandboxed by default
-minion execute --no-sandbox workflow.yaml -- <target>  # run on host
-minion execute --repo OWNER/REPO workflow.yaml -- <target>  # clone repo inside the container
+stepyard execute workflow.yaml -- <target>               # sandboxed by default
+stepyard execute --no-sandbox workflow.yaml -- <target>  # run on host
+stepyard execute --repo OWNER/REPO workflow.yaml -- <target>  # clone repo inside the container
 ```
 
 ## Sandbox modes
@@ -78,7 +78,7 @@ Architecture diagram: `docs/architecture-api-proxy.jpg`.
 
 ## Lifecycle
 
-1. `minion execute` starts
+1. `stepyard execute` starts
 2. If not `Disabled`, `sandbox_up()` creates the container
 3. Steps execute (dispatched to host or container per mode)
 4. `sandbox_down()` destroys the container

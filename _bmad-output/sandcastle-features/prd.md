@@ -3,7 +3,7 @@ stepsCompleted: ['step-01-init', 'step-02-discovery', 'step-02b-vision', 'step-0
 completedAt: '2026-04-16T00:00:00Z'
 vision:
   summary: "Most robust, crash-safe AI agent orchestrator — autonomous agents run in isolation, always clean up, never lose state"
-  differentiator: "Sandcastle-style DX (pluggable providers, branch strategies, process safety) on top of Minion's unique append-only session durability"
+  differentiator: "Sandcastle-style DX (pluggable providers, branch strategies, process safety) on top of Stepyard's unique append-only session durability"
   coreInsight: "Ergonomics and safety are not at odds with persistence and auditability — you can have both"
 inputDocuments:
   - _bmad-output/planning-artifacts/architecture.md
@@ -13,7 +13,7 @@ inputDocuments:
   - _bmad-output/agent-dashboard/prd.md
   - external-ref:sandcastle-codebase-analysis
 workflowType: 'prd'
-project_name: 'Minion Engine — Sandcastle-Inspired Features'
+project_name: 'Stepyard — Sandcastle-Inspired Features'
 user_name: 'Bruno'
 date: '2026-04-15'
 documentCounts:
@@ -28,39 +28,39 @@ classification:
   projectContext: brownfield
 ---
 
-# Product Requirements Document - Minion Engine — Sandcastle-Inspired Features
+# Product Requirements Document - Stepyard — Sandcastle-Inspired Features
 
 **Author:** Bruno
 **Date:** 2026-04-15
 
 ## Executive Summary
 
-Minion Engine is a Rust-based workflow orchestrator that runs AI coding agents (Claude Code, Codex) inside Docker sandboxes with persistent, append-only session logs. Engine v2 (partially complete: session persistence, harness step/resume/cancel, sandbox orchestrator) provides crash-safe execution — but lacks the operational safety and developer ergonomics required for production autonomous agent workloads.
+Stepyard is a Rust-based workflow orchestrator that runs AI coding agents (Claude Code, Codex) inside Docker sandboxes with persistent, append-only session logs. Engine v2 (partially complete: session persistence, harness step/resume/cancel, sandbox orchestrator) provides crash-safe execution — but lacks the operational safety and developer ergonomics required for production autonomous agent workloads.
 
-This PRD defines engine-level improvements inspired by Sandcastle (`@ai-hero/sandcastle`), a TypeScript framework for isolated AI agent execution. Analysis of Sandcastle revealed six critical gaps in Minion Engine: no step timeout (stuck agents block forever), orphaned containers on process crash (no signal handler), no environment variable passing to sandboxes, no git workspace isolation for parallel agents, no branch strategy abstraction, and no prompt templating for reusable workflows.
+This PRD defines engine-level improvements inspired by Sandcastle (`@ai-hero/sandcastle`), a TypeScript framework for isolated AI agent execution. Analysis of Sandcastle revealed six critical gaps in Stepyard: no step timeout (stuck agents block forever), orphaned containers on process crash (no signal handler), no environment variable passing to sandboxes, no git workspace isolation for parallel agents, no branch strategy abstraction, and no prompt templating for reusable workflows.
 
 Target users: Bruno's team at EdenRed and Afya, running code review, bug fix, and security audit workflows via Slack bot dispatch to a KingHost VPS. The improvements directly address production incidents: agents that hang indefinitely, containers accumulating after crashes, and the inability to run parallel agents on separate branches.
 
 ### What Makes This Special
 
-Unlike Sandcastle — which is ephemeral (run once, merge, discard) — Minion Engine persists every step as an append-only event log in PostgreSQL. Sessions survive process crashes and can be resumed from the exact step where they stopped. The Sandcastle-inspired features add what's missing on top of this durability: pluggable sandbox providers (Docker, Podman, future cloud runtimes), git worktree management with typed branch strategies (head, merge-to-head, named-branch), process-level signal handlers that guarantee container cleanup, step timeout that kills stuck agents, and environment variable cascading for parameterized workflows.
+Unlike Sandcastle — which is ephemeral (run once, merge, discard) — Stepyard persists every step as an append-only event log in PostgreSQL. Sessions survive process crashes and can be resumed from the exact step where they stopped. The Sandcastle-inspired features add what's missing on top of this durability: pluggable sandbox providers (Docker, Podman, future cloud runtimes), git worktree management with typed branch strategies (head, merge-to-head, named-branch), process-level signal handlers that guarantee container cleanup, step timeout that kills stuck agents, and environment variable cascading for parameterized workflows.
 
-The core insight: ergonomics and operational safety are not at odds with persistence and auditability. Sandcastle proved the UX patterns; Minion's session-as-log architecture provides the durable substrate. Combining both produces an orchestrator where autonomous agents run in complete isolation, always clean up after themselves, and never lose state.
+The core insight: ergonomics and operational safety are not at odds with persistence and auditability. Sandcastle proved the UX patterns; Stepyard's session-as-log architecture provides the durable substrate. Combining both produces an orchestrator where autonomous agents run in complete isolation, always clean up after themselves, and never lose state.
 
 ## Project Classification
 
 - **Project Type:** Developer tool — Rust CLI + library for AI agent orchestration
 - **Domain:** General (fintech/healthcare compliance inherited from consuming organizations)
 - **Complexity:** High — container lifecycle management, process isolation, signal safety, multi-provider abstraction, concurrent agent execution, crash recovery
-- **Project Context:** Brownfield — extending Engine v2 crate architecture (4 crates: `minion-core`, `minion-session`, `minion-sandbox-orchestrator`, `minion-harness`; Epics 1-2 complete)
+- **Project Context:** Brownfield — extending Engine v2 crate architecture (4 crates: `stepyard-core`, `stepyard-session`, `stepyard-sandbox-orchestrator`, `stepyard-harness`; Epics 1-2 complete)
 
 ## Success Criteria
 
 ### User Success
 
 - **Zero-hang guarantee:** No workflow step blocks the engine indefinitely. A stuck agent or command is killed after a configurable step timeout (default 10 min), the step emits `StepFailed` with reason "step timeout", and the session remains resumable.
-- **Crash-safe cleanup:** If the `minion` process is killed (SIGTERM, SIGINT, OOM), all sandbox containers owned by active sessions are destroyed within 5 seconds. Zero orphaned containers accumulate.
-- **Parameterized workflows:** Users define environment variables in workflow YAML or `.minion/defaults.yaml` and they reach the sandbox container — no hardcoding `export FOO=bar` in step commands.
+- **Crash-safe cleanup:** If the `stepyard` process is killed (SIGTERM, SIGINT, OOM), all sandbox containers owned by active sessions are destroyed within 5 seconds. Zero orphaned containers accumulate.
+- **Parameterized workflows:** Users define environment variables in workflow YAML or `.stepyard/defaults.yaml` and they reach the sandbox container — no hardcoding `export FOO=bar` in step commands.
 - **Parallel agent isolation:** Two agents triggered on the same repo run on separate git worktrees with independent branches, never interfering with each other's working directory.
 
 ### Business Success
@@ -71,7 +71,7 @@ The core insight: ergonomics and operational safety are not at odds with persist
 
 ### Technical Success
 
-- All features implemented within the existing v2 crate architecture (`minion-core`, `minion-session`, `minion-sandbox-orchestrator`, `minion-harness`) — no new crates required.
+- All features implemented within the existing v2 crate architecture (`stepyard-core`, `stepyard-session`, `stepyard-sandbox-orchestrator`, `stepyard-harness`) — no new crates required.
 - Cancel path fix: `finalise_cancel()` destroys the correct container by session ID (not `SandboxId::default()`).
 - Zero regression: all existing 16 tests (8 unit + 8 integration) continue to pass.
 - New features covered by >=70% unit test coverage per modified crate.
@@ -98,7 +98,7 @@ The core insight: ergonomics and operational safety are not at odds with persist
 
 ### Growth Features (Post-MVP)
 
-5. **Branch strategies** — `BranchStrategy` enum (Head, MergeToHead, NamedBranch) in `minion-core`, used by harness to manage git state pre/post workflow
+5. **Branch strategies** — `BranchStrategy` enum (Head, MergeToHead, NamedBranch) in `stepyard-core`, used by harness to manage git state pre/post workflow
 6. **WorkspaceManager** — trait for git worktree create/prune/merge, enabling parallel agents on the same repo
 7. **Prompt templating** — `{{KEY}}` placeholder substitution and `` !`cmd` `` shell expansion in workflow step definitions
 8. **Completion signal** — agent emits a configurable string (`<COMPLETE>`) to exit iteration loop early
@@ -116,27 +116,27 @@ The core insight: ergonomics and operational safety are not at odds with persist
 
 **Opening Scene**: Bruno has 5 PRs queued for code review on the `payment-gateway` repo. Today he dispatches them one at a time via Slack bot, waiting for each to finish before starting the next. It takes 25 minutes. He wants to fire all 5 at once.
 
-**Rising Action**: Bruno triggers `minion remote exec code-review --repo allanbrunobr/payment-gateway --branch pr/101 -- pr/102 pr/103 pr/104 pr/105`. The engine spawns 5 sessions, each on its own git worktree (`sandcastle/code-review/20260415-143022-1` through `-5`). Each session gets its own sandbox container. Environment variables (`GITHUB_TOKEN`, `ANTHROPIC_API_KEY`) are injected from `defaults.yaml` — no hardcoding.
+**Rising Action**: Bruno triggers `stepyard remote exec code-review --repo allanbrunobr/payment-gateway --branch pr/101 -- pr/102 pr/103 pr/104 pr/105`. The engine spawns 5 sessions, each on its own git worktree (`sandcastle/code-review/20260415-143022-1` through `-5`). Each session gets its own sandbox container. Environment variables (`GITHUB_TOKEN`, `ANTHROPIC_API_KEY`) are injected from `defaults.yaml` — no hardcoding.
 
 **Climax**: PR #103's review agent gets stuck in an infinite loop analyzing a 2000-line generated file. After 10 minutes of no output, the step timeout fires. The step emits `StepFailed { error: "step timeout: 600s elapsed" }`, the container is destroyed, and the session is marked failed. The other 4 reviews complete normally. Each auto-merges its review comments to the target branch via `merge-to-head` strategy.
 
-**Resolution**: Bruno checks `minion remote status` and sees 4 successes, 1 timeout. He adjusts the workflow for PR #103 (adds `--exclude "generated/**"`) and re-dispatches just that one. Total time: 6 minutes instead of 25. No orphaned containers, no manual cleanup.
+**Resolution**: Bruno checks `stepyard remote status` and sees 4 successes, 1 timeout. He adjusts the workflow for PR #103 (adds `--exclude "generated/**"`) and re-dispatches just that one. Total time: 6 minutes instead of 25. No orphaned containers, no manual cleanup.
 
 ### Journey 2: VPS Process Crash — "The OOM killer strikes"
 
-**Opening Scene**: It's 3 AM. The VPS is running a heavy security audit workflow that spawns a Claude Code agent inside a Docker container. The agent consumes too much memory, and the Linux OOM killer terminates the `minion` process.
+**Opening Scene**: It's 3 AM. The VPS is running a heavy security audit workflow that spawns a Claude Code agent inside a Docker container. The agent consumes too much memory, and the Linux OOM killer terminates the `stepyard` process.
 
-**Rising Action**: The SIGTERM signal arrives. The process-level signal handler activates. It walks the active session registry, finds one running session (`session-7a3f...`), and calls `lifecycle.destroy_by_session(7a3f...)`. The Docker container `minion-session-7a3f...` is force-removed. The session status in PostgreSQL is set to `cancelled`.
+**Rising Action**: The SIGTERM signal arrives. The process-level signal handler activates. It walks the active session registry, finds one running session (`session-7a3f...`), and calls `lifecycle.destroy_by_session(7a3f...)`. The Docker container `stepyard-session-7a3f...` is force-removed. The session status in PostgreSQL is set to `cancelled`.
 
-**Climax**: At 9 AM, Bruno checks `minion remote status` and sees the cancelled session with reason "process killed (SIGTERM)". He runs `minion remote exec security-audit --resume session-7a3f...`. The engine loads the session log, replays events, discovers that 3 of 5 steps completed successfully, and resumes from step 4. A fresh container is created. The audit completes.
+**Climax**: At 9 AM, Bruno checks `stepyard remote status` and sees the cancelled session with reason "process killed (SIGTERM)". He runs `stepyard remote exec security-audit --resume session-7a3f...`. The engine loads the session log, replays events, discovers that 3 of 5 steps completed successfully, and resumes from step 4. A fresh container is created. The audit completes.
 
 **Resolution**: Zero orphaned containers. Zero lost progress. The append-only session log preserved exactly where the workflow stopped. Bruno didn't need to SSH into the VPS or manually clean up anything.
 
 ### Journey 3: DevOps Engineer — "Audit the fleet"
 
-**Opening Scene**: The team's compliance review is next week. The DevOps engineer needs to verify that the Minion Engine deployment is clean: no orphaned containers, no stuck sessions, no resource leaks.
+**Opening Scene**: The team's compliance review is next week. The DevOps engineer needs to verify that the Stepyard deployment is clean: no orphaned containers, no stuck sessions, no resource leaks.
 
-**Rising Action**: He SSHs into the VPS and runs `docker ps --filter name=minion-session-`. Zero containers — the signal handler and step timeout have been doing their job. He checks `minion session list --status=running` — zero stale sessions. He checks `minion session list --status=failed --since 30d` — 3 failures, all with clear error messages (2 timeouts, 1 API rate limit).
+**Rising Action**: He SSHs into the VPS and runs `docker ps --filter name=stepyard-session-`. Zero containers — the signal handler and step timeout have been doing their job. He checks `stepyard session list --status=running` — zero stale sessions. He checks `stepyard session list --status=failed --since 30d` — 3 failures, all with clear error messages (2 timeouts, 1 API rate limit).
 
 **Climax**: He runs `docker system df` and sees Docker disk usage is stable — worktrees are pruned after workflow completion, containers don't accumulate. The PostgreSQL session_events table has clean audit trails: every step has a start event, a completion or failure event, and a duration.
 
@@ -146,7 +146,7 @@ The core insight: ergonomics and operational safety are not at odds with persist
 
 **Opening Scene**: A developer wants to create a reusable `code-review` workflow that works across all repos without editing the YAML per-project. Today, environment variables are hardcoded in step commands.
 
-**Rising Action**: He edits `code-review.yaml` and replaces hardcoded values with placeholders: `command: "gh pr review {{PR_NUMBER}} --repo {{REPO}}"`. In `.minion/defaults.yaml`, he adds `env: { GITHUB_TOKEN: "${GITHUB_TOKEN}" }` for cascading resolution. When dispatched, the engine resolves `{{PR_NUMBER}}` from the CLI args and `GITHUB_TOKEN` from the host environment, passing both to the sandbox via `docker exec --env`.
+**Rising Action**: He edits `code-review.yaml` and replaces hardcoded values with placeholders: `command: "gh pr review {{PR_NUMBER}} --repo {{REPO}}"`. In `.stepyard/defaults.yaml`, he adds `env: { GITHUB_TOKEN: "${GITHUB_TOKEN}" }` for cascading resolution. When dispatched, the engine resolves `{{PR_NUMBER}}` from the CLI args and `GITHUB_TOKEN` from the host environment, passing both to the sandbox via `docker exec --env`.
 
 **Climax**: The same workflow YAML runs against `payment-gateway`, `user-service`, and `billing-api` — zero edits. Each dispatch gets the right env vars, the right PR number, and the right repo. The sandbox container receives exactly the declared variables, nothing more (no env leakage).
 
@@ -170,13 +170,13 @@ The core insight: ergonomics and operational safety are not at odds with persist
 - **Rust async safety:** All types crossing task boundaries must be `Send + Sync`. No `Mutex<T>` held across `.await` points (prior bug: `Mutex<Option<Instant>>` made `Engine` futures `!Send`). Use `&mut self` exclusivity or `AtomicBool` for shared state.
 - **Container runtime dependency:** Engine assumes `docker` CLI is on `$PATH`. No embedded Docker client (bollard) — subprocess via `tokio::process::Command` is the interface. Error messages are string-parsed, not typed.
 - **Session-log-as-truth:** The engine holds zero in-memory state between steps. All progress is reconstructed from `Session::replay()`. Any new feature (timeout, branch strategy, env dict) must be expressible as events in the session log — otherwise resume-after-crash cannot reconstruct state.
-- **Single-binary constraint:** Features land in existing crates. No new binaries (ADR-011 reserves `minion-mcp-proxy` for MCP credential isolation). No new crate unless justified.
+- **Single-binary constraint:** Features land in existing crates. No new binaries (ADR-011 reserves `stepyard-mcp-proxy` for MCP credential isolation). No new crate unless justified.
 
 ### Integration Requirements
 
 - **Docker CLI:** `docker run`, `docker exec`, `docker rm -f` are the only required Docker commands. New features (env passing) must work with these primitives only.
 - **PostgreSQL:** Session events table (`session_events`) is the only persistent store. New event types (e.g., `IdleTimeoutFired`, `SignalReceived`) must be backward-compatible variants of the `Event` enum (`#[non_exhaustive]`, `#[serde(other)]`).
-- **Existing CLI:** New flags (e.g., `--timeout`, `--branch-strategy`) must coexist with the existing CLI surface without breaking `minion execute` / `minion remote exec`.
+- **Existing CLI:** New flags (e.g., `--timeout`, `--branch-strategy`) must coexist with the existing CLI surface without breaking `stepyard execute` / `stepyard remote exec`.
 
 ### Risk Register
 
@@ -195,15 +195,15 @@ This consolidated register covers technical, innovation, and implementation risk
 
 ## Innovation & Novel Patterns
 
-The features in this PRD are not individually novel — Sandcastle, OpenHands, and Codex CLI each implement subsets. The innovation lies in combining them with Minion's unique session durability.
+The features in this PRD are not individually novel — Sandcastle, OpenHands, and Codex CLI each implement subsets. The innovation lies in combining them with Stepyard's unique session durability.
 
 ### Detected Innovation Areas
 
-1. **Persistent-session agent orchestration**: Existing tools (Sandcastle, OpenHands, Codex CLI) are ephemeral — run once, get results, state is gone. Minion combines Sandcastle's ergonomic patterns with an append-only session log that survives crashes, enabling `resume` as a first-class operation. No current open-source agent orchestrator has this.
+1. **Persistent-session agent orchestration**: Existing tools (Sandcastle, OpenHands, Codex CLI) are ephemeral — run once, get results, state is gone. Stepyard combines Sandcastle's ergonomic patterns with an append-only session log that survives crashes, enabling `resume` as a first-class operation. No current open-source agent orchestrator has this.
 
-2. **Output-based idle detection with session durability**: Sandcastle's idle timeout is process-local (lost on crash). Minion can emit `IdleTimeoutFired` as a session event — meaning the timeout decision is auditable and the exact moment of kill is recorded for post-mortem. This turns a safety mechanism into a diagnostic tool.
+2. **Output-based idle detection with session durability**: Sandcastle's idle timeout is process-local (lost on crash). Stepyard can emit `IdleTimeoutFired` as a session event — meaning the timeout decision is auditable and the exact moment of kill is recorded for post-mortem. This turns a safety mechanism into a diagnostic tool.
 
-3. **Branch strategies as session-log events**: Sandcastle's branch strategies are runtime-only (merge-to-head happens at process exit). Minion can record `BranchCreated`, `MergeAttempted`, `MergeConflict` as session events — making the git lifecycle of parallel agents fully traceable and resumable.
+3. **Branch strategies as session-log events**: Sandcastle's branch strategies are runtime-only (merge-to-head happens at process exit). Stepyard can record `BranchCreated`, `MergeAttempted`, `MergeConflict` as session events — making the git lifecycle of parallel agents fully traceable and resumable.
 
 ### Competitive Landscape
 
@@ -213,17 +213,17 @@ The features in this PRD are not individually novel — Sandcastle, OpenHands, a
 | OpenHands | Yes | No | No | No | No |
 | Codex CLI | Yes | No | No | No | No |
 | Claude Code | Yes | Partial (conversation) | No | No | No |
-| **Minion Engine (post-PRD)** | **No** | **Yes (PostgreSQL)** | **Yes** | **Yes (3 types)** | **Yes (event-logged)** |
+| **Stepyard (post-PRD)** | **No** | **Yes (PostgreSQL)** | **Yes** | **Yes (3 types)** | **Yes (event-logged)** |
 
 ### Validation Approach
 
 - **Step timeout**: Stress test with intentionally stuck agent (`sleep infinity`). Verify: timeout fires at configured interval, `StepFailed` event emitted, session resumable after timeout.
-- **Crash recovery**: `kill -9` the minion process mid-step. Verify: signal handler cleans up containers, session status is `cancelled`, `resume` picks up from last completed step.
+- **Crash recovery**: `kill -9` the stepyard process mid-step. Verify: signal handler cleans up containers, session status is `cancelled`, `resume` picks up from last completed step.
 - **Branch strategy**: 5 parallel agents on same repo. Verify: separate worktrees, independent branches, merge-to-head produces clean history, merge conflict preserves temp branch.
 
 ## Technical Architecture
 
-> This section covers architecture considerations specific to Minion Engine as a developer tool — Rust toolchain, distribution, and API surface changes.
+> This section covers architecture considerations specific to Stepyard as a developer tool — Rust toolchain, distribution, and API surface changes.
 
 ### Rust Toolchain Requirements
 
@@ -234,7 +234,7 @@ The features in this PRD are not individually novel — Sandcastle, OpenHands, a
 
 ### Distribution
 
-- Primary: `cargo install --path .` on VPS, then `cp target/release/minion /usr/local/bin/minion` (dispatch uses this path)
+- Primary: `cargo install --path .` on VPS, then `cp target/release/stepyard /usr/local/bin/stepyard` (dispatch uses this path)
 - The engine creates Docker containers — it does not run inside one
 
 ### API Surface Changes
@@ -245,8 +245,8 @@ The features in this PRD are not individually novel — Sandcastle, OpenHands, a
 | `SandboxLifecycle::create()` | `(session_id) -> Sandbox` | No change (config lives in `DockerLifecycleConfig`) |
 | `Engine::step()` | No timeout | `tokio::time::timeout(duration, ...)` wrapping exec |
 | `Engine::finalise_cancel()` | `SandboxId::default()` | `self.session.id()` passed to `destroy_by_session()` |
-| CLI: `minion execute` | No `--timeout` flag | `--timeout <seconds>` flag |
-| CLI: `minion execute` | No `--branch-strategy` | `--branch-strategy head\|merge-to-head\|branch:<name>` (Growth) |
+| CLI: `stepyard execute` | No `--timeout` flag | `--timeout <seconds>` flag |
+| CLI: `stepyard execute` | No `--branch-strategy` | `--branch-strategy head\|merge-to-head\|branch:<name>` (Growth) |
 | `Event` enum | 7 variants | +3: `IdleTimeoutFired`, `SignalReceived`, `BranchCreated` (Growth) |
 | New trait | — | `WorkspaceManager` (Growth) |
 
@@ -295,10 +295,10 @@ steps:
 
 | Scope # | Feature | Crate | Lines Changed (est.) | Rationale |
 |---------|---------|-------|---------------------|-----------|
-| 1 | Step timeout | minion-harness | ~20 | Without this, a single stuck agent blocks the VPS indefinitely. |
-| 2 | Cancel cleanup fix | minion-harness | ~3 | **Bug fix.** `SandboxId::default()` -> actual session ID. Blocks everything else. |
-| 3 | Env dict on exec | minion-sandbox-orchestrator | ~30 | Without this, every workflow hardcodes secrets in command strings. |
-| 4 | Process signal handler | minion-harness + CLI | ~50 | Without this, `kill -9` leaves orphaned containers forever. |
+| 1 | Step timeout | stepyard-harness | ~20 | Without this, a single stuck agent blocks the VPS indefinitely. |
+| 2 | Cancel cleanup fix | stepyard-harness | ~3 | **Bug fix.** `SandboxId::default()` -> actual session ID. Blocks everything else. |
+| 3 | Env dict on exec | stepyard-sandbox-orchestrator | ~30 | Without this, every workflow hardcodes secrets in command strings. |
+| 4 | Process signal handler | stepyard-harness + CLI | ~50 | Without this, `kill -9` leaves orphaned containers forever. |
 
 **Explicitly NOT in MVP:** Branch strategies, prompt templating, new Event variants, CLI `--branch-strategy` flag. Step timeout set via workflow YAML `timeout:` field, not CLI flag.
 
@@ -308,7 +308,7 @@ steps:
 
 | Scope # | Feature | Dependency | Effort |
 |---------|---------|------------|--------|
-| 5 | `BranchStrategy` enum in `minion-core` | None | Low |
+| 5 | `BranchStrategy` enum in `stepyard-core` | None | Low |
 | 6 | `WorkspaceManager` trait + git impl | #5 | Medium |
 | 7 | Prompt `{{KEY}}` templating | None | Low |
 | 8 | Completion signal detection | None | Low |
@@ -347,7 +347,7 @@ Features 1-2 (step timeout + cancel fix) can ship independently as a micro-relea
 ### Sandbox Environment
 
 - **FR9:** Workflow authors can declare environment variables per step in workflow YAML, and the engine passes them to the sandbox container at execution time.
-- **FR10:** Workflow authors can declare default environment variables in `.minion/defaults.yaml` that apply to all steps unless overridden at the step level.
+- **FR10:** Workflow authors can declare default environment variables in `.stepyard/defaults.yaml` that apply to all steps unless overridden at the step level.
 - **FR11:** The engine can resolve environment variable values from the host process environment using `${VAR}` syntax in workflow YAML.
 - **FR12:** The engine can restrict environment variables passed to the sandbox to only those explicitly declared in the workflow or defaults (no full host env passthrough).
 

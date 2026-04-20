@@ -116,7 +116,7 @@ more.
 
 ## Debugging resolved config
 
-Use `minion inspect <workflow.yaml>` to print the config resolved for every
+Use `stepyard inspect <workflow.yaml>` to print the config resolved for every
 step (shows exactly which keys come from which layer).
 
 `--dry-run` also prints resolved config per step without executing anything.
