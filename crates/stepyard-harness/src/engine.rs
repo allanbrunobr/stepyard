@@ -526,6 +526,16 @@ impl Engine {
 
         match exec_result {
             Ok(output) if output.is_success() => {
+                // Persist stdout/stderr/exit_code in the session log so a later
+                // gate step's `{{ steps.X.stdout }}` survives a process crash
+                // and reloads via `progress_from_log` — without the snapshot
+                // the harness would need per-session memory between steps and
+                // break Invariante 11 on resume (PR 2 of Task #31).
+                let snapshot = stepyard_core::StepOutputSnapshot {
+                    stdout: output.stdout.clone(),
+                    stderr: output.stderr.clone(),
+                    exit_code: output.exit_code,
+                };
                 self.emit(Event::StepCompleted {
                     step_name: step.name.clone(),
                     step_type: "cmd".into(),
@@ -535,6 +545,7 @@ impl Engine {
                     output_tokens: None,
                     cost_usd: None,
                     sandboxed: true,
+                    output: Some(snapshot),
                 })
                 .await?;
                 Ok(StepOutcome::StepCompleted {
