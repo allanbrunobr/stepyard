@@ -7,7 +7,7 @@
 //! * EventSubscriber is dyn-compatible.
 
 use chrono::TimeZone;
-use stepyard_core::{EngineError, Event, EventSubscriber, TerminationReason};
+use stepyard_core::{EngineError, Event, EventSubscriber, StepOutputSnapshot, TerminationReason};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -43,13 +43,61 @@ fn step_completed_omits_optional_fields_when_none() {
         output_tokens: None,
         cost_usd: None,
         sandboxed: false,
+        output: None,
     };
     let value: serde_json::Value = serde_json::to_value(&event).unwrap();
     let obj = value.as_object().unwrap();
     assert!(!obj.contains_key("input_tokens"));
     assert!(!obj.contains_key("output_tokens"));
     assert!(!obj.contains_key("cost_usd"));
+    // Backward-compat: the `output` field added in PR 2 of Task #31 must stay
+    // absent on the wire when None, so old subscribers keep deserializing the
+    // same JSON shape they've always seen.
+    assert!(!obj.contains_key("output"));
     assert_eq!(obj["sandboxed"], json!(false));
+}
+
+#[test]
+fn step_completed_with_output_snapshot_roundtrips() {
+    let ts = chrono::Utc.with_ymd_and_hms(2026, 4, 13, 12, 0, 2).unwrap();
+    let original = Event::StepCompleted {
+        step_name: "build".into(),
+        step_type: "cmd".into(),
+        duration_ms: 17,
+        timestamp: ts,
+        input_tokens: None,
+        output_tokens: None,
+        cost_usd: None,
+        sandboxed: true,
+        output: Some(StepOutputSnapshot {
+            stdout: "hello\n".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        }),
+    };
+
+    let value = serde_json::to_value(&original).unwrap();
+    let obj = value.as_object().unwrap();
+    let snapshot = obj.get("output").expect("output must be present when Some");
+    assert_eq!(snapshot["stdout"], json!("hello\n"));
+    assert_eq!(snapshot["exit_code"], json!(0));
+    // Empty stderr is skipped by the per-field `skip_serializing_if` to keep
+    // logged JSON compact — still valid input for the roundtrip below.
+    assert!(!snapshot.as_object().unwrap().contains_key("stderr"));
+
+    let s = serde_json::to_string(&original).unwrap();
+    let back: Event = serde_json::from_str(&s).unwrap();
+    match back {
+        Event::StepCompleted {
+            output: Some(snap),
+            ..
+        } => {
+            assert_eq!(snap.stdout, "hello\n");
+            assert_eq!(snap.stderr, "");
+            assert_eq!(snap.exit_code, 0);
+        }
+        other => panic!("roundtrip produced unexpected variant: {other:?}"),
+    }
 }
 
 #[test]

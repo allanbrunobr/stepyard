@@ -25,6 +25,11 @@ sqlx = { version = "0.8", features = [
     "uuid",
     "chrono",
 ] }
+# PR 2 of Task #31 — harness-local Tera renderer for gate conditions and
+# cross-step template refs (`{{ steps.X.stdout }}`, `{{ target }}`, `{{ vars.* }}`).
+# Matches the `tera = "1"` pin in the workspace root so Cargo dedupes against
+# the v1 engine's template module at `src/engine/template.rs`.
+tera = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util", "rt-multi-thread", "macros"] }

@@ -49,6 +49,15 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         cost_usd: Option<f64>,
         sandboxed: bool,
+        /// Output snapshot persisted to the session log so cross-step template
+        /// references (`{{ steps.X.stdout }}` etc.) survive a process crash and
+        /// reload — the harness rebuilds its output map from the log in
+        /// `progress_from_log` rather than holding in-memory state (PR 2 of
+        /// Task #31). `None` for non-cmd step kinds that don't produce exec
+        /// output (e.g. `gate`). Redaction / size caps are deliberately out of
+        /// this PR's scope.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<StepOutputSnapshot>,
     },
     /// A step finished with an error.
     StepFailed {
@@ -86,6 +95,25 @@ pub enum Event {
     SignalReceived {
         signal: String,
     },
+}
+
+/// Frozen exec output attached to [`Event::StepCompleted`] so the harness can
+/// rebuild a cross-step reference map from the session log alone (no in-memory
+/// state between `step` calls — preserves Invariante 11 under post-crash
+/// replay). Added in PR 2 of Task #31.
+///
+/// Fields are persisted verbatim. Redaction and size caps are deferred to a
+/// later PR; the harness writes whatever the executor produced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepOutputSnapshot {
+    /// Standard output of the step, verbatim.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stdout: String,
+    /// Standard error of the step, verbatim.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stderr: String,
+    /// Process exit code (0 on success for cmd steps).
+    pub exit_code: i32,
 }
 
 #[cfg(test)]
