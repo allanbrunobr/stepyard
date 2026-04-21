@@ -7,9 +7,9 @@
 //! PR 3 adds the container fields (`scope` / `max_iterations` / `items` /
 //! `parallel` / `initial_value` / `outputs`) that `call` / `repeat` / `map`
 //! need, plus the scope runner that executes them. **Executable kinds
-//! today:** `cmd`, `gate`, `call`, `repeat`, `map`. Other kinds
-//! (`agent` / `chat` / `parallel` / `template` / `script`) still round-trip
-//! through serde but are rejected by the CLI adapter
+//! today:** `cmd`, `gate`, `call`, `repeat`, `map`, `template`, `script`.
+//! Other kinds (`agent` / `chat` / `parallel`) still round-trip through
+//! serde but are rejected by the CLI adapter
 //! (`src/cli/harness_adapter.rs`).
 
 use std::collections::HashMap;
@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 /// Every step kind the harness can represent.
 ///
 /// Executable today: [`StepKind::Cmd`], [`StepKind::Gate`], [`StepKind::Call`],
-/// [`StepKind::Repeat`], [`StepKind::Map`]. The remaining variants
-/// (`Agent` / `Chat` / `Parallel` / `Template` / `Script`) round-trip through
-/// serde but are rejected at the CLI adapter boundary until follow-up PRs
-/// wire each executor.
+/// [`StepKind::Repeat`], [`StepKind::Map`], [`StepKind::Template`],
+/// [`StepKind::Script`]. The remaining variants (`Agent` / `Chat` /
+/// `Parallel`) round-trip through serde but are rejected at the CLI
+/// adapter boundary until follow-up PRs wire each executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepKind {
@@ -83,6 +83,12 @@ pub struct Workflow {
     /// YAML without a `scopes:` block parseable.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub scopes: HashMap<String, Scope>,
+    /// Directory where `template` steps look up `<name>.md.tera` files.
+    /// Interpreted relative to the harness process's working directory
+    /// when it's not absolute. Absent = fall back to `"prompts"` (v1
+    /// parity with `src/engine/context.rs:58`). PR 4 of Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompts_dir: Option<String>,
 }
 
 impl Workflow {
@@ -92,6 +98,7 @@ impl Workflow {
             steps,
             env: HashMap::new(),
             scopes: HashMap::new(),
+            prompts_dir: None,
         }
     }
 }
@@ -107,8 +114,9 @@ pub struct Scope {
     pub outputs: Option<String>,
 }
 
-/// One step in a workflow. Only [`StepKind::Cmd`] is executed today; other
-/// kinds round-trip through serde but are rejected by the CLI adapter.
+/// One step in a workflow. Executable kinds are dispatched by
+/// `crates/stepyard-harness/src/engine.rs`; unsupported kinds still
+/// round-trip through serde but are rejected by the CLI adapter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Step {
     pub name: String,
@@ -122,8 +130,9 @@ pub struct Step {
         skip_serializing_if = "StepKind::is_cmd"
     )]
     pub kind: StepKind,
-    /// Shell command for [`StepKind::Cmd`] steps. Empty for other kinds
-    /// until their executors land.
+    /// Shell command for [`StepKind::Cmd`] steps and Rhai source for
+    /// [`StepKind::Script`] steps — both map to the same legacy YAML field
+    /// (`run:`). Empty for other kinds.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub command: String,
     /// Wall-clock step timeout in milliseconds. Absent = no timeout.
@@ -188,6 +197,12 @@ pub struct Step {
     /// scope-body step's output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outputs: Option<String>,
+    /// [`StepKind::Template`] only: Tera expression rendered once to
+    /// produce the prompt-file basename. Absent → fall back to
+    /// `step.name`. Two-pass render matches v1
+    /// `src/steps/template_step.rs:32-36`. PR 4 of Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 impl Step {
@@ -234,6 +249,24 @@ impl Step {
         step
     }
 
+    /// Constructor for a [`StepKind::Template`] step — renders the
+    /// `{prompts_dir}/{prompt or name}.md.tera` file against the current
+    /// render context. PR 4 of Task #31.
+    pub fn template(name: impl Into<String>, prompt: Option<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Template);
+        step.prompt = prompt;
+        step
+    }
+
+    /// Constructor for a [`StepKind::Script`] step — evaluates the Rhai
+    /// `source` against a flat snapshot of the harness render context and
+    /// emits the return value as `stdout`. PR 4 of Task #31.
+    pub fn script(name: impl Into<String>, source: impl Into<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Script);
+        step.command = source.into();
+        step
+    }
+
     fn empty(name: impl Into<String>, kind: StepKind) -> Self {
         Self {
             name: name.into(),
@@ -251,6 +284,7 @@ impl Step {
             items: None,
             parallel: None,
             outputs: None,
+            prompt: None,
         }
     }
 

@@ -17,15 +17,26 @@
 //!   ([`AdapterError::NestedScopesNotSupported`]). A later PR that lifts
 //!   this restriction can add a `scope_path` frame without reshaping the
 //!   event log; see `stepyard_core::event::ScopeContext`.
+//! * Scope bodies currently execute only `cmd` and `gate` steps. Other
+//!   non-container kinds are rejected at the adapter boundary until their
+//!   scoped replay/render semantics are implemented.
 //! * Gate actions split by position: `break` and `skip` only make sense
 //!   inside a scope body, so a top-level gate that declares them fails
 //!   with [`AdapterError::TopLevelGateUnsupportedAction`]; a scoped
 //!   gate that declares an unknown action fails with
 //!   [`AdapterError::ScopedGateUnsupportedAction`].
 //!
-//! Executors for `call` / `repeat` / `map` land in the scope-runner commit.
-//! Kinds not yet executable (`agent` / `chat` / `template` / `script` /
-//! `parallel`) continue to fail with [`AdapterError::UnsupportedStepType`].
+//! PR 4 of Task #31 adds `template` — a pure Tera-render step that reads
+//! `<prompts_dir>/<rendered_name>.md.tera`, with `prompts_dir` threaded
+//! from the legacy [`WorkflowDef`] (default `"prompts"`) — and `script`,
+//! an in-process Rhai evaluation whose return value lands on the unified
+//! cmd output shape (`stdout`) so cross-step refs work without a new
+//! event variant. The script step's source lives in the YAML `run:` field,
+//! reusing the same slot as cmd (v1 parity, `src/steps/script.rs`).
+//!
+//! Executors for `call` / `repeat` / `map` landed in the scope-runner commit.
+//! Kinds not yet executable (`agent` / `chat` / `parallel`)
+//! continue to fail with [`AdapterError::UnsupportedStepType`].
 
 use std::collections::{HashMap, HashSet};
 
@@ -37,12 +48,15 @@ use crate::workflow::schema::{ScopeDef, StepDef, StepType, WorkflowDef};
 pub enum AdapterError {
     #[error(
         "step type `{step_type}` not yet supported by v2 engine — use --engine v1 \
-         or migrate the workflow to a supported kind (cmd, gate, call, repeat, map)"
+         or migrate the workflow to a supported kind (cmd, gate, call, repeat, map, template, script)"
     )]
     UnsupportedStepType { step_type: StepType },
 
     #[error("step `{name}` has type cmd but no `run:` field")]
     CmdMissingRun { name: String },
+
+    #[error("script step `{name}` has no `run:` source")]
+    ScriptMissingRun { name: String },
 
     #[error("gate step `{name}` is missing `condition:`")]
     GateMissingCondition { name: String },
@@ -97,6 +111,17 @@ pub enum AdapterError {
     },
 
     #[error(
+        "scope `{scope}` contains step `{inner_name}` of type `{step_type}` \
+         which is not supported inside v2 scope bodies in PR 4 of #31 \
+         (allowed inside scopes: cmd, gate)"
+    )]
+    ScopedStepUnsupported {
+        scope: String,
+        inner_name: String,
+        step_type: StepType,
+    },
+
+    #[error(
         "step `{name}` field `{field}:` value is not representable as JSON \
          (harness stores container seeds as JSON): {error}"
     )]
@@ -116,10 +141,11 @@ enum StepPosition {
 /// Convert a parsed [`WorkflowDef`] into the harness-facing [`Workflow`].
 ///
 /// Walks the top-level step list and every declared scope body. Executable
-/// kinds (`cmd` / `gate` / `call` / `repeat` / `map`) are adapted; scoped
-/// bodies additionally reject nested containers. Env maps (workflow-level
-/// and step-level) are threaded through so the cascade resolver (Story 3.4)
-/// has the values the v2 engine expects.
+/// kinds (`cmd` / `gate` / `call` / `repeat` / `map` / `template` / `script`)
+/// are adapted; scoped bodies additionally reject nested containers and
+/// unsupported non-container kinds. Env maps (workflow-level and step-level)
+/// are threaded through so the cascade
+/// resolver (Story 3.4) has the values the v2 engine expects.
 pub fn adapt(def: &WorkflowDef) -> Result<Workflow, AdapterError> {
     let scope_names: HashSet<&str> = def.scopes.keys().map(String::as_str).collect();
 
@@ -136,6 +162,10 @@ pub fn adapt(def: &WorkflowDef) -> Result<Workflow, AdapterError> {
     let mut wf = Workflow::new(def.name.clone(), steps);
     wf.env = def.env.clone();
     wf.scopes = scopes;
+    // PR 4 of #31: thread `prompts_dir:` from legacy YAML so template
+    // steps resolve the same files v1 did. Absent → harness default
+    // (`"prompts"`, per `stepyard_harness::template_exec::DEFAULT_PROMPTS_DIR`).
+    wf.prompts_dir = def.prompts_dir.clone();
     Ok(wf)
 }
 
@@ -153,6 +183,13 @@ fn adapt_scope(
                 scope: scope_name.to_string(),
                 inner_name: inner.name.clone(),
                 kind,
+            });
+        }
+        if !scope_body_kind_supported(&inner.step_type) {
+            return Err(AdapterError::ScopedStepUnsupported {
+                scope: scope_name.to_string(),
+                inner_name: inner.name.clone(),
+                step_type: inner.step_type.clone(),
             });
         }
         body.push(adapt_step(inner, scope_names, StepPosition::Scoped)?);
@@ -174,6 +211,8 @@ fn adapt_step(
         StepType::Call => adapt_call(s, scope_names),
         StepType::Repeat => adapt_repeat(s, scope_names),
         StepType::Map => adapt_map(s, scope_names),
+        StepType::Template => adapt_template(s),
+        StepType::Script => adapt_script(s),
         other => Err(AdapterError::UnsupportedStepType {
             step_type: other.clone(),
         }),
@@ -227,6 +266,29 @@ fn adapt_repeat(s: &StepDef, scope_names: &HashSet<&str>) -> Result<Step, Adapte
     Ok(step)
 }
 
+fn adapt_template(s: &StepDef) -> Result<Step, AdapterError> {
+    // Template has no required fields: both `prompt` (resolves the file
+    // basename) and `name` (fallback) exist. v1 parity — template_step.rs
+    // accepts missing prompt and falls back to step name.
+    let mut step = Step::template(s.name.clone(), s.prompt.clone());
+    step.env = s.env.clone();
+    Ok(step)
+}
+
+fn adapt_script(s: &StepDef) -> Result<Step, AdapterError> {
+    // `run:` is the Rhai source (v1 parity with `src/steps/script.rs`).
+    // Reject empty sources at the adapter so the harness never dispatches
+    // a script step with nothing to evaluate.
+    let source = s
+        .run
+        .clone()
+        .filter(|r| !r.trim().is_empty())
+        .ok_or_else(|| AdapterError::ScriptMissingRun {
+            name: s.name.clone(),
+        })?;
+    Ok(Step::script(s.name.clone(), source).with_env(s.env.clone()))
+}
+
 fn adapt_map(s: &StepDef, scope_names: &HashSet<&str>) -> Result<Step, AdapterError> {
     let scope = require_scope_ref(s, "map", scope_names)?;
     // Guardrail 4: presence only. The render-time shape check stays with the
@@ -260,6 +322,10 @@ fn container_kind(step_type: &StepType) -> Option<&'static str> {
         StepType::Map => Some("map"),
         _ => None,
     }
+}
+
+fn scope_body_kind_supported(step_type: &StepType) -> bool {
+    matches!(step_type, StepType::Cmd | StepType::Gate)
 }
 
 fn require_scope_ref(
@@ -689,6 +755,43 @@ scopes:
     }
 
     #[test]
+    fn template_and_script_inside_scope_are_rejected_until_scoped_semantics_land() {
+        for (kind, body) in [
+            ("template", "        prompt: greet"),
+            ("script", "        run: \"40 + 2\""),
+        ] {
+            let yaml = format!(
+                r#"
+name: scoped-{kind}
+steps:
+  - name: outer
+    type: call
+    scope: body
+scopes:
+  body:
+    steps:
+      - name: inner
+        type: {kind}
+{body}
+"#
+            );
+            let file = write_tmp(&yaml);
+            let def = parser::parse_file(file.path()).unwrap();
+            let err = adapt(&def).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    AdapterError::ScopedStepUnsupported {
+                        ref step_type,
+                        ..
+                    } if step_type.to_string() == kind
+                ),
+                "kind={kind} got {err:?}"
+            );
+        }
+    }
+
+    #[test]
     fn scoped_gate_accepts_skip_and_break() {
         for (field, value) in [
             ("on_pass", "skip"),
@@ -723,6 +826,86 @@ scopes:
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[test]
+    fn accepts_template_step_with_prompt_and_threads_prompts_dir() {
+        // PR 4 of #31: `template` adapts, and `prompts_dir:` at workflow
+        // level threads through to `Workflow.prompts_dir` so the harness
+        // reads the same directory v1 did.
+        let yaml = r#"
+name: adapter-template
+prompts_dir: ./custom-prompts
+steps:
+  - name: greet
+    type: template
+    prompt: "fix-lint/{{ vars.stack }}"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).unwrap();
+        assert_eq!(wf.prompts_dir.as_deref(), Some("./custom-prompts"));
+        let step = &wf.steps[0];
+        assert_eq!(step.kind, stepyard_harness::StepKind::Template);
+        assert_eq!(step.prompt.as_deref(), Some("fix-lint/{{ vars.stack }}"));
+    }
+
+    #[test]
+    fn template_without_prompt_falls_back_to_step_name() {
+        // v1 parity (`src/steps/template_step.rs`): a template step may
+        // omit the `prompt:` field; the harness then uses `step.name` as
+        // the file basename.
+        let yaml = r#"
+name: adapter-template-no-prompt
+steps:
+  - name: bare
+    type: template
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).unwrap();
+        let step = &wf.steps[0];
+        assert_eq!(step.kind, stepyard_harness::StepKind::Template);
+        assert!(step.prompt.is_none());
+        // `prompts_dir` absent in YAML → harness falls back to its
+        // `DEFAULT_PROMPTS_DIR` ("prompts"); adapter leaves it `None`.
+        assert!(wf.prompts_dir.is_none());
+    }
+
+    #[test]
+    fn accepts_script_step_with_run_source() {
+        // PR 4 of #31 commit 2: `script` adapts, reusing the YAML `run:`
+        // field as the Rhai source (v1 parity with `src/steps/script.rs`).
+        let yaml = r#"
+name: adapter-script
+steps:
+  - name: compute
+    type: script
+    run: "40 + 2"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).unwrap();
+        let step = &wf.steps[0];
+        assert_eq!(step.kind, stepyard_harness::StepKind::Script);
+        assert_eq!(step.command, "40 + 2");
+    }
+
+    #[test]
+    fn rejects_script_without_run_source() {
+        let yaml = r#"
+name: adapter-script-no-run
+steps:
+  - name: naked
+    type: script
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::ScriptMissingRun { ref name } if name == "naked"),
+            "got {err:?}"
+        );
     }
 
     #[test]

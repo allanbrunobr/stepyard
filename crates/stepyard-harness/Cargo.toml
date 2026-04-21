@@ -30,6 +30,10 @@ sqlx = { version = "0.8", features = [
 # Matches the `tera = "1"` pin in the workspace root so Cargo dedupes against
 # the v1 engine's template module at `src/engine/template.rs`.
 tera = "1"
+# PR 4 of Task #31 (commit 2) — Rhai embedded scripting engine for the
+# `script` step type. Matches the `rhai = "1"` pin in the workspace root so
+# Cargo dedupes against v1 engine's script module (`src/steps/script.rs`).
+rhai = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util", "rt-multi-thread", "macros"] }
