@@ -23,9 +23,13 @@
 //!   gate that declares an unknown action fails with
 //!   [`AdapterError::ScopedGateUnsupportedAction`].
 //!
-//! Executors for `call` / `repeat` / `map` land in the scope-runner commit.
-//! Kinds not yet executable (`agent` / `chat` / `template` / `script` /
-//! `parallel`) continue to fail with [`AdapterError::UnsupportedStepType`].
+//! PR 4 of Task #31 adds `template` — a pure Tera-render step that reads
+//! `<prompts_dir>/<rendered_name>.md.tera`, with `prompts_dir` threaded
+//! from the legacy [`WorkflowDef`] (default `"prompts"`).
+//!
+//! Executors for `call` / `repeat` / `map` landed in the scope-runner commit.
+//! Kinds not yet executable (`agent` / `chat` / `script` / `parallel`)
+//! continue to fail with [`AdapterError::UnsupportedStepType`].
 
 use std::collections::{HashMap, HashSet};
 
@@ -37,7 +41,7 @@ use crate::workflow::schema::{ScopeDef, StepDef, StepType, WorkflowDef};
 pub enum AdapterError {
     #[error(
         "step type `{step_type}` not yet supported by v2 engine — use --engine v1 \
-         or migrate the workflow to a supported kind (cmd, gate, call, repeat, map)"
+         or migrate the workflow to a supported kind (cmd, gate, call, repeat, map, template)"
     )]
     UnsupportedStepType { step_type: StepType },
 
@@ -116,7 +120,7 @@ enum StepPosition {
 /// Convert a parsed [`WorkflowDef`] into the harness-facing [`Workflow`].
 ///
 /// Walks the top-level step list and every declared scope body. Executable
-/// kinds (`cmd` / `gate` / `call` / `repeat` / `map`) are adapted; scoped
+/// kinds (`cmd` / `gate` / `call` / `repeat` / `map` / `template`) are adapted; scoped
 /// bodies additionally reject nested containers. Env maps (workflow-level
 /// and step-level) are threaded through so the cascade resolver (Story 3.4)
 /// has the values the v2 engine expects.
@@ -136,6 +140,10 @@ pub fn adapt(def: &WorkflowDef) -> Result<Workflow, AdapterError> {
     let mut wf = Workflow::new(def.name.clone(), steps);
     wf.env = def.env.clone();
     wf.scopes = scopes;
+    // PR 4 of #31: thread `prompts_dir:` from legacy YAML so template
+    // steps resolve the same files v1 did. Absent → harness default
+    // (`"prompts"`, per `stepyard_harness::template_exec::DEFAULT_PROMPTS_DIR`).
+    wf.prompts_dir = def.prompts_dir.clone();
     Ok(wf)
 }
 
@@ -174,6 +182,7 @@ fn adapt_step(
         StepType::Call => adapt_call(s, scope_names),
         StepType::Repeat => adapt_repeat(s, scope_names),
         StepType::Map => adapt_map(s, scope_names),
+        StepType::Template => adapt_template(s),
         other => Err(AdapterError::UnsupportedStepType {
             step_type: other.clone(),
         }),
@@ -224,6 +233,15 @@ fn adapt_repeat(s: &StepDef, scope_names: &HashSet<&str>) -> Result<Step, Adapte
     let mut step = Step::repeat(s.name.clone(), scope);
     step.max_iterations = s.max_iterations;
     apply_common_container_fields(&mut step, s)?;
+    Ok(step)
+}
+
+fn adapt_template(s: &StepDef) -> Result<Step, AdapterError> {
+    // Template has no required fields: both `prompt` (resolves the file
+    // basename) and `name` (fallback) exist. v1 parity — template_step.rs
+    // accepts missing prompt and falls back to step name.
+    let mut step = Step::template(s.name.clone(), s.prompt.clone());
+    step.env = s.env.clone();
     Ok(step)
 }
 
@@ -723,6 +741,50 @@ scopes:
                 _ => unreachable!(),
             }
         }
+    }
+
+    #[test]
+    fn accepts_template_step_with_prompt_and_threads_prompts_dir() {
+        // PR 4 of #31: `template` adapts, and `prompts_dir:` at workflow
+        // level threads through to `Workflow.prompts_dir` so the harness
+        // reads the same directory v1 did.
+        let yaml = r#"
+name: adapter-template
+prompts_dir: ./custom-prompts
+steps:
+  - name: greet
+    type: template
+    prompt: "fix-lint/{{ vars.stack }}"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).unwrap();
+        assert_eq!(wf.prompts_dir.as_deref(), Some("./custom-prompts"));
+        let step = &wf.steps[0];
+        assert_eq!(step.kind, stepyard_harness::StepKind::Template);
+        assert_eq!(step.prompt.as_deref(), Some("fix-lint/{{ vars.stack }}"));
+    }
+
+    #[test]
+    fn template_without_prompt_falls_back_to_step_name() {
+        // v1 parity (`src/steps/template_step.rs`): a template step may
+        // omit the `prompt:` field; the harness then uses `step.name` as
+        // the file basename.
+        let yaml = r#"
+name: adapter-template-no-prompt
+steps:
+  - name: bare
+    type: template
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).unwrap();
+        let step = &wf.steps[0];
+        assert_eq!(step.kind, stepyard_harness::StepKind::Template);
+        assert!(step.prompt.is_none());
+        // `prompts_dir` absent in YAML → harness falls back to its
+        // `DEFAULT_PROMPTS_DIR` ("prompts"); adapter leaves it `None`.
+        assert!(wf.prompts_dir.is_none());
     }
 
     #[test]

@@ -33,6 +33,7 @@ mod gate;
 mod render;
 mod scope;
 pub mod startup;
+mod template_exec;
 mod workflow;
 
 pub use defaults::Defaults;
