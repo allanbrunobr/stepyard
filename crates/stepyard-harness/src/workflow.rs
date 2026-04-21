@@ -6,10 +6,11 @@
 //! gate-specific fields (`condition` / `on_pass` / `on_fail` / `message`);
 //! PR 3 adds the container fields (`scope` / `max_iterations` / `items` /
 //! `parallel` / `initial_value` / `outputs`) that `call` / `repeat` / `map`
-//! need. **Executable kinds today:** `cmd`, `gate`; `call` / `repeat` / `map`
-//! are parsed and adapted — their executor lands in the scope-runner commit.
-//! Other kinds still round-trip through serde but are rejected by the CLI
-//! adapter (`src/cli/harness_adapter.rs`).
+//! need, plus the scope runner that executes them. **Executable kinds
+//! today:** `cmd`, `gate`, `call`, `repeat`, `map`. Other kinds
+//! (`agent` / `chat` / `parallel` / `template` / `script`) still round-trip
+//! through serde but are rejected by the CLI adapter
+//! (`src/cli/harness_adapter.rs`).
 
 use std::collections::HashMap;
 
@@ -17,10 +18,11 @@ use serde::{Deserialize, Serialize};
 
 /// Every step kind the harness can represent.
 ///
-/// Only [`StepKind::Cmd`] is executable today. The remaining variants exist
-/// so workflow YAML carrying them survives deserialization and round-trips
-/// intact; the adapter rejects them at the CLI boundary until follow-up
-/// PRs wire each executor.
+/// Executable today: [`StepKind::Cmd`], [`StepKind::Gate`], [`StepKind::Call`],
+/// [`StepKind::Repeat`], [`StepKind::Map`]. The remaining variants
+/// (`Agent` / `Chat` / `Parallel` / `Template` / `Script`) round-trip through
+/// serde but are rejected at the CLI adapter boundary until follow-up PRs
+/// wire each executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepKind {

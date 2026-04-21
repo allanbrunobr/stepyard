@@ -31,6 +31,7 @@ mod engine;
 mod executor;
 mod gate;
 mod render;
+mod scope;
 pub mod startup;
 mod workflow;
 

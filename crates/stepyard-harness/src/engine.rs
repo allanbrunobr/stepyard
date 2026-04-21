@@ -417,14 +417,21 @@ impl Engine {
                 .await;
         }
 
-        // Kinds other than Cmd/Gate are rejected by the adapter at the CLI
-        // boundary today. If an in-process caller (e.g. a future test)
-        // constructs one anyway, emit a structured StepFailed instead of
-        // silently dispatching the cmd path — a typed "not yet supported"
-        // outcome is easier to debug than a command with an empty string.
+        // Container dispatch (call/repeat/map): the scope runner owns the
+        // whole lifecycle — iteration bodies, scoped event emission, and
+        // the terminal container StepCompleted/StepFailed. PR 3 of #31.
+        if matches!(step.kind, StepKind::Call | StepKind::Repeat | StepKind::Map) {
+            return self.run_container_step(step, start).await;
+        }
+
+        // Kinds other than Cmd/Gate/Call/Repeat/Map are still rejected at
+        // the adapter boundary. If an in-process caller constructs one
+        // anyway, emit a structured StepFailed instead of silently
+        // dispatching the cmd path — a typed "not yet supported" outcome
+        // is easier to debug than a command with an empty string.
         if !matches!(step.kind, StepKind::Cmd) {
             let error = format!(
-                "step type `{step_type}` not yet supported in v2 engine — PR 2 of #31 ships cmd + gate only"
+                "step type `{step_type}` not yet supported in v2 engine — PR 3 of #31 ships cmd + gate + call/repeat/map"
             );
             self.emit(Event::StepFailed {
                 step_name: step.name.clone(),
