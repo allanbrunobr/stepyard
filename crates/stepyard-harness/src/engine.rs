@@ -381,6 +381,9 @@ impl Engine {
             step_name: step.name.clone(),
             step_type: step_type.into(),
             timestamp: Utc::now(),
+            // Scope-aware emission lands with the executor in a later
+            // commit of PR 3; top-level steps emit `None`.
+            scope_context: None,
         })
         .await?;
 
@@ -414,14 +417,21 @@ impl Engine {
                 .await;
         }
 
-        // Kinds other than Cmd/Gate are rejected by the adapter at the CLI
-        // boundary today. If an in-process caller (e.g. a future test)
-        // constructs one anyway, emit a structured StepFailed instead of
-        // silently dispatching the cmd path — a typed "not yet supported"
-        // outcome is easier to debug than a command with an empty string.
+        // Container dispatch (call/repeat/map): the scope runner owns the
+        // whole lifecycle — iteration bodies, scoped event emission, and
+        // the terminal container StepCompleted/StepFailed. PR 3 of #31.
+        if matches!(step.kind, StepKind::Call | StepKind::Repeat | StepKind::Map) {
+            return self.run_container_step(step, start).await;
+        }
+
+        // Kinds other than Cmd/Gate/Call/Repeat/Map are still rejected at
+        // the adapter boundary. If an in-process caller constructs one
+        // anyway, emit a structured StepFailed instead of silently
+        // dispatching the cmd path — a typed "not yet supported" outcome
+        // is easier to debug than a command with an empty string.
         if !matches!(step.kind, StepKind::Cmd) {
             let error = format!(
-                "step type `{step_type}` not yet supported in v2 engine — PR 2 of #31 ships cmd + gate only"
+                "step type `{step_type}` not yet supported in v2 engine — PR 3 of #31 ships cmd + gate + call/repeat/map"
             );
             self.emit(Event::StepFailed {
                 step_name: step.name.clone(),
@@ -464,6 +474,68 @@ impl Engine {
             }
         };
 
+        let step_index = progress.completed_steps as u32;
+        // PR 3 of Task #31: top-level cmd and scope-body cmd share this
+        // helper. `scope_context: None` tags the event as top-level so
+        // `progress_from_log` counts it against the workflow's main step
+        // axis; scoped callers pass `Some(ScopeContext { … })`.
+        match self
+            .execute_cmd_with_select(step, &resolved_env, step_index, None, start)
+            .await?
+        {
+            CmdOutcome::Success(_) => Ok(StepOutcome::StepCompleted {
+                step_name: step.name.clone(),
+            }),
+            CmdOutcome::Failed(error) => Ok(StepOutcome::StepFailed {
+                step_name: step.name.clone(),
+                error,
+            }),
+            CmdOutcome::Cancelled => Ok(StepOutcome::Cancelled),
+            CmdOutcome::Signal(signal) => Err(EngineError::StepFailed {
+                step_index,
+                reason: stepyard_core::TerminationReason::SignalReceived(signal),
+            }),
+            CmdOutcome::TimedOut { configured_ms } => Err(EngineError::StepFailed {
+                step_index,
+                reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
+            }),
+        }
+    }
+
+    /// Race a cmd step against the cancel token, the configured timeout,
+    /// and the process-wide shutdown broadcast (SIGINT/SIGTERM) — the
+    /// shared execution path for every cmd kind the harness runs, whether
+    /// it sits at the top of the workflow or inside a `call`/`repeat`/`map`
+    /// scope body (PR 3 of Task #31).
+    ///
+    /// The helper emits the terminal event(s) and calls the correct
+    /// `finalise_*` before returning so callers can map the
+    /// [`CmdOutcome`] to a [`StepOutcome`] or [`EngineError`] without
+    /// additional IO:
+    ///
+    /// | Branch  | Events emitted                                | Session state        |
+    /// | ------- | --------------------------------------------- | -------------------- |
+    /// | Success | `StepCompleted { scope_context, output }`     | Running (unchanged)  |
+    /// | Failed  | `StepFailed`                                  | Failed               |
+    /// | Cancel  | `StepFailed` (Cancelled)                      | Cancelled            |
+    /// | Signal  | `SignalReceived` + `StepFailed`               | Cancelled            |
+    /// | Timeout | `StepTimeoutFired` + `StepFailed` + sandbox destroy | Failed         |
+    ///
+    /// `step_index` is the top-level step index when called from
+    /// `Engine::step`, or the container step's top-level index when
+    /// called from a scope body — the scope runner is expected to
+    /// carry `scope_context` for exact-position attribution since the
+    /// engine does not expose a scoped step counter. Documented here
+    /// because `StepTimeoutFired.step_index` reads `step_index`
+    /// verbatim.
+    pub(crate) async fn execute_cmd_with_select(
+        &mut self,
+        step: &Step,
+        resolved_env: &HashMap<String, String>,
+        step_index: u32,
+        scope_context: Option<stepyard_core::ScopeContext>,
+        start: Instant,
+    ) -> Result<CmdOutcome, EngineError> {
         // Race the step against the cancel token and the optional step
         // timeout. Cancel gives SIGTERM-during-long-command a ~100 ms abort
         // window (Story 2.4 AC). Timeout is Story 1.4 AC: a step configured
@@ -476,14 +548,13 @@ impl Engine {
         let session_uuid = *self.session.id().as_uuid();
         let step_clone = step.clone();
         let cancel_token = self.cancel.clone();
-        let step_index = progress.completed_steps as u32;
         // Snapshot the signal-name slot before the `tokio::select!` borrows
         // `self.shutdown_rx`. Cloning an `Arc` doesn't touch the OnceLock —
         // we just need a reader handle the select arm can read without
         // holding another reference to `self`.
         let signal_slot = self.config.shutdown_signal.clone();
         let selection = {
-            let exec_fut = executor.execute_with_env(session_uuid, &step_clone, &resolved_env);
+            let exec_fut = executor.execute_with_env(session_uuid, &step_clone, resolved_env);
             let cancel_fut = async {
                 while !cancel_token.is_cancelled() {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -523,18 +594,9 @@ impl Engine {
 
         // Signal landed first. D5 emit-before-IO ordering: persist both
         // facts to the session log BEFORE tearing the sandbox down.
-        //   1. SignalReceived — the structural fact that a shutdown
-        //      broadcast resolved this select arm, with signal name.
-        //   2. StepFailed — the terminal fact that this step is done and
-        //      the session is now terminal. progress_from_log() treats
-        //      step_failed as the terminal marker; without it a reloaded
-        //      engine after SIGINT/SIGTERM could advance past a signalled
-        //      session. Symmetric with the step-timeout and fast-path
-        //      cancel terminality fixes (architecture.md §D9 + NFR13).
-        // Only after both events are appended do we call finalise_cancel
-        // (destroys the sandbox via destroy_by_session and flips the
-        // session status to Cancelled). Return a typed StepFailed error
-        // carrying the TerminationReason::SignalReceived taxonomy (D9).
+        // StepFailed here does NOT carry scope_context — the event
+        // schema only tags completions/starts with scope position (PR 3
+        // of #31); a scoped cancel/signal still halts the whole session.
         if let StepSelection::Signal(ref signal) = selection {
             let signal = signal.clone();
             self.emit(Event::SignalReceived {
@@ -551,25 +613,13 @@ impl Engine {
             })
             .await?;
             self.finalise_cancel().await?;
-            return Err(EngineError::StepFailed {
-                step_index,
-                reason: stepyard_core::TerminationReason::SignalReceived(signal),
-            });
+            return Ok(CmdOutcome::Signal(signal));
         }
 
-        // Timeout landed first. D5 emit-before-IO ordering: persist both
-        // facts to the session log BEFORE tearing the sandbox down.
-        //   1. StepTimeoutFired — the structural fact that the timer fired
-        //      (step_index + configured_ms). Consumers can correlate against
-        //      the configured timeout without replaying the whole log.
-        //   2. StepFailed — the terminal fact that this step is done and the
-        //      session is now in failure state. progress_from_log() treats
-        //      step_failed as the terminal marker; without it a reloaded
-        //      session can be advanced past a timed-out step. This matches
-        //      architecture.md §D9 + NFR13.
-        // Only after both events are appended do we destroy the sandbox
-        // (IO) and flip the session row. Return a typed StepFailed error
-        // carrying the TerminationReason::StepTimeout taxonomy (D9).
+        // Timeout landed first. D5 emit-before-IO ordering: events
+        // persist before sandbox teardown. `step_index` is the top-level
+        // / container index — scope position lives on `scope_context`
+        // (attached to the surrounding StepStarted) rather than here.
         if let StepSelection::TimedOut = selection {
             let configured_ms = step.timeout.expect("TimedOut requires step.timeout.is_some()");
             self.emit(Event::StepTimeoutFired {
@@ -588,10 +638,7 @@ impl Engine {
             .await?;
             let _ = self.lifecycle.destroy_by_session(session_uuid).await;
             self.finalise_fail().await?;
-            return Err(EngineError::StepFailed {
-                step_index,
-                reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
-            });
+            return Ok(CmdOutcome::TimedOut { configured_ms });
         }
 
         // Cancel landed mid-step: drop the exec future, emit StepFailed and
@@ -609,7 +656,7 @@ impl Engine {
                 })
                 .await?;
                 self.finalise_cancel().await?;
-                return Ok(StepOutcome::Cancelled);
+                return Ok(CmdOutcome::Cancelled);
             }
             StepSelection::TimedOut => unreachable!("handled above"),
             StepSelection::Signal(_) => unreachable!("handled above"),
@@ -636,12 +683,12 @@ impl Engine {
                     output_tokens: None,
                     cost_usd: None,
                     sandboxed: true,
-                    output: Some(snapshot),
+                    output: Some(snapshot.clone()),
+                    scope_context,
+                    gate_outcome: None,
                 })
                 .await?;
-                Ok(StepOutcome::StepCompleted {
-                    step_name: step.name.clone(),
-                })
+                Ok(CmdOutcome::Success(snapshot))
             }
             Ok(output) => {
                 let error = format!(
@@ -659,10 +706,7 @@ impl Engine {
                 })
                 .await?;
                 self.finalise_fail().await?;
-                Ok(StepOutcome::StepFailed {
-                    step_name: step.name.clone(),
-                    error,
-                })
+                Ok(CmdOutcome::Failed(error))
             }
             Err(e) => {
                 let error = e.to_string();
@@ -676,10 +720,7 @@ impl Engine {
                 })
                 .await?;
                 self.finalise_fail().await?;
-                Ok(StepOutcome::StepFailed {
-                    step_name: step.name.clone(),
-                    error,
-                })
+                Ok(CmdOutcome::Failed(error))
             }
         }
     }
@@ -757,6 +798,7 @@ impl Engine {
             steps: outputs,
             target: &self.run_context.target,
             vars: &self.run_context.vars,
+            scope: None,
         };
         let rendered = match render(condition, &ctx) {
             Ok(s) => s,
@@ -782,6 +824,10 @@ impl Engine {
                 // snapshot slot exists for cmd steps only. Tokens and cost
                 // are also absent, matching the v1 gate executor's
                 // no-billable-IO semantics.
+                // Gate-continue: record the branch the gate took so
+                // replay never has to re-evaluate the condition (PR 3
+                // of Task #31). `scope_context` is still `None` here —
+                // the scope executor lands in a later commit.
                 self.emit(Event::StepCompleted {
                     step_name: step.name.clone(),
                     step_type: step_type.into(),
@@ -792,6 +838,8 @@ impl Engine {
                     cost_usd: None,
                     sandboxed: false,
                     output: None,
+                    scope_context: None,
+                    gate_outcome: Some(stepyard_core::GateOutcome::Continue),
                 })
                 .await?;
                 Ok(StepOutcome::StepCompleted {
@@ -820,6 +868,14 @@ impl Engine {
                     error,
                 })
             }
+            // Top-level gates route through GateAction::parse, which
+            // rejects `skip`/`break` — those actions require a containing
+            // scope. The scope runner lands in a later commit and calls
+            // run_gate_step_scoped, which routes the scope-only outcomes
+            // through its own match arm.
+            GateOutcome::Skip | GateOutcome::Break => unreachable!(
+                "top-level gate cannot produce Skip/Break — GateAction::parse rejects these outside a scope"
+            ),
         }
     }
 
@@ -851,7 +907,7 @@ impl Engine {
 
     // ── Internals ───────────────────────────────────────────────────────
 
-    async fn emit(&self, event: Event) -> Result<(), EngineError> {
+    pub(crate) async fn emit(&self, event: Event) -> Result<(), EngineError> {
         let payload = serde_json::to_value(&event)
             .map_err(|e| EngineError::InvalidState(format!("serialize: {e}")))?;
         self.session.append(payload).await?;
@@ -863,10 +919,14 @@ impl Engine {
         let mut completed = 0usize;
         let mut has_failure = false;
         let mut last_failed: Option<String> = None;
-        // Rebuild the cross-step outputs map (PR 2 of Task #31) in the
-        // same scan as the progress counters — one pass of the log per
-        // `step()` call. Only cmd steps carry an output snapshot; gate
-        // steps emit `output: None` and contribute nothing here.
+        // Rebuild the top-level cross-step outputs map (PR 2 of Task #31)
+        // in the same scan as the progress counters — one pass of the log
+        // per `step()` call. PR 3 of Task #31 widens this to ignore
+        // `step_completed` events that carry a `scope_context`: those are
+        // scope-body steps and must NOT advance the top-level step index
+        // nor pollute the cross-step refs a later top-level template
+        // resolves. Scope bodies rebuild their own local snapshot map by
+        // re-scanning the log from within `scope.rs`.
         let mut outputs: HashMap<String, StepOutputSnapshot> = HashMap::new();
 
         for evt in events.iter() {
@@ -875,6 +935,18 @@ impl Engine {
             };
             match tag {
                 "step_completed" => {
+                    // Scope-body completions carry a `scope_context` object;
+                    // top-level completions either omit the field (legacy
+                    // logs + PR 2 shape) or carry `null`. Short-circuit both
+                    // so the top-level counter only sees its own axis.
+                    let is_scoped = evt
+                        .payload
+                        .get("scope_context")
+                        .map(|v| !v.is_null())
+                        .unwrap_or(false);
+                    if is_scoped {
+                        continue;
+                    }
                     completed += 1;
                     let step_name = evt
                         .payload
@@ -940,7 +1012,7 @@ impl Engine {
         Ok(())
     }
 
-    async fn finalise_cancel(&mut self) -> Result<(), EngineError> {
+    pub(crate) async fn finalise_cancel(&mut self) -> Result<(), EngineError> {
         if self.session.status() == SessionStatus::Running {
             // Tear down the sandbox by session UUID — cattle, no regrets.
             // Backends like Docker cannot map a bare SandboxId to the
@@ -953,11 +1025,39 @@ impl Engine {
         Ok(())
     }
 
-    async fn finalise_fail(&mut self) -> Result<(), EngineError> {
+    pub(crate) async fn finalise_fail(&mut self) -> Result<(), EngineError> {
         if self.session.status() == SessionStatus::Running {
             self.session.fail().await?;
         }
         Ok(())
+    }
+
+    /// Whether [`CancelToken::cancel`] has fired. Exposed for the scope
+    /// runner's loop guards (PR 3 of Task #31) — it checks the same flag
+    /// as the top-level `step()` fast-path so a cancel between two scope
+    /// iterations short-circuits cleanly.
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
+    /// Workflow attached to this engine. Scope bodies live in
+    /// [`Step::body`] on the container step, which the runner resolves
+    /// through this accessor.
+    pub(crate) fn workflow(&self) -> &Workflow {
+        &self.workflow
+    }
+
+    /// Per-run renderer inputs (CLI `--target` + `--var k=v`). Scope body
+    /// rendering joins these with the per-iteration `scope` binding.
+    pub(crate) fn run_context(&self) -> &RunContext {
+        &self.run_context
+    }
+
+    /// Session handle — scope replay rescans the log to reconstruct the
+    /// per-container iteration counter / last-iteration-completed state
+    /// without holding per-container memory on the engine.
+    pub(crate) fn session_handle(&self) -> &Session {
+        &self.session
     }
 }
 
@@ -985,6 +1085,38 @@ enum StepSelection {
     /// lowercase signal name read from `HarnessConfig::shutdown_signal` at
     /// the moment the select arm resolved.
     Signal(String),
+}
+
+/// Result of [`Engine::execute_cmd_with_select`]. All variants except
+/// [`CmdOutcome::Success`] have already emitted their terminal event(s)
+/// and flipped the session into its terminal status, so callers just
+/// map the variant onto a [`StepOutcome`] (top-level) or a scope
+/// directive (scope runner) without any additional IO.
+#[non_exhaustive]
+#[derive(Debug)]
+pub(crate) enum CmdOutcome {
+    /// cmd completed with exit code 0. The snapshot has already been
+    /// persisted on a `StepCompleted` event (with or without
+    /// `scope_context` depending on the caller); it is handed back so
+    /// the scope runner can feed subsequent scope-body steps and so
+    /// container wrappers can attach it as the synthetic output.
+    Success(stepyard_core::StepOutputSnapshot),
+    /// cmd exited non-zero or the sandbox layer errored. `StepFailed` +
+    /// `finalise_fail` already emitted; the string is the same error
+    /// shown on the wire.
+    Failed(String),
+    /// Cancel token flipped mid-exec. `StepFailed("Cancelled")` +
+    /// `finalise_cancel` already emitted.
+    Cancelled,
+    /// Process-wide shutdown broadcast fired (SIGINT/SIGTERM).
+    /// `SignalReceived` + `StepFailed` + `finalise_cancel` already
+    /// emitted. String is the lowercase signal name.
+    Signal(String),
+    /// Per-step wall-clock timeout fired. `StepTimeoutFired` +
+    /// `StepFailed` + sandbox destroy + `finalise_fail` already
+    /// emitted — the caller only needs to surface the configured
+    /// duration via `EngineError::StepFailed { TerminationReason::StepTimeout }`.
+    TimedOut { configured_ms: u64 },
 }
 
 /// Overlay `defaults` < `workflow_env` < `step_env` (later layers win) and

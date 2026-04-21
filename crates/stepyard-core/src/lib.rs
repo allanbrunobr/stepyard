@@ -14,6 +14,6 @@ mod subscriber;
 mod workflow;
 
 pub use error::{EngineError, TerminationReason};
-pub use event::{Event, StepOutputSnapshot};
+pub use event::{Event, GateOutcome, ScopeContext, StepOutputSnapshot};
 pub use subscriber::EventSubscriber;
 pub use workflow::WorkflowVersion;

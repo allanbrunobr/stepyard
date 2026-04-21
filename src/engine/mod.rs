@@ -903,6 +903,7 @@ impl Engine {
             step_name: step_def.name.clone(),
             step_type: step_def.step_type.to_string(),
             timestamp: chrono::Utc::now(),
+            scope_context: None,
         })
         .await?;
 
@@ -1079,8 +1080,13 @@ impl Engine {
                     // v1 stores cross-step state in its own Context, not the
                     // event log. The output snapshot is a v2-path affordance
                     // (PR 2 of Task #31); leaving it unset here keeps v1 events
-                    // byte-identical to pre-widening output.
+                    // byte-identical to pre-widening output. Same argument
+                    // applies to `scope_context` / `gate_outcome` (PR 3 of
+                    // Task #31) — v1 has its own scope bookkeeping and its
+                    // own gate path, so both stay `None` on the v1 event.
                     output: None,
+                    scope_context: None,
+                    gate_outcome: None,
                 })
                 .await
                 .map_err(|e| StepError::Fail(e.to_string()))?;

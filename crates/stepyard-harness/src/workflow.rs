@@ -1,11 +1,16 @@
 //! Workflow representation for the harness.
 //!
-//! Story 2.3 landed a cmd-only shape. PR 1 of Task #31 (v2 migration) widens
+//! Story 2.3 landed a cmd-only shape. PR 1 of Task #31 (v2 migration) widened
 //! the data model to represent every step kind plus named scopes so the
-//! harness can parse and round-trip the full legacy shape. **Execution
-//! remains cmd-only** — the CLI adapter (`src/cli/harness_adapter.rs`)
-//! still rejects non-cmd step types before they reach [`crate::Engine`].
-//! Executors for the non-cmd kinds land in subsequent PRs.
+//! harness can parse and round-trip the full legacy shape. PR 2 added
+//! gate-specific fields (`condition` / `on_pass` / `on_fail` / `message`);
+//! PR 3 adds the container fields (`scope` / `max_iterations` / `items` /
+//! `parallel` / `initial_value` / `outputs`) that `call` / `repeat` / `map`
+//! need, plus the scope runner that executes them. **Executable kinds
+//! today:** `cmd`, `gate`, `call`, `repeat`, `map`. Other kinds
+//! (`agent` / `chat` / `parallel` / `template` / `script`) still round-trip
+//! through serde but are rejected by the CLI adapter
+//! (`src/cli/harness_adapter.rs`).
 
 use std::collections::HashMap;
 
@@ -13,10 +18,11 @@ use serde::{Deserialize, Serialize};
 
 /// Every step kind the harness can represent.
 ///
-/// Only [`StepKind::Cmd`] is executable today. The remaining variants exist
-/// so workflow YAML carrying them survives deserialization and round-trips
-/// intact; the adapter rejects them at the CLI boundary until follow-up
-/// PRs wire each executor.
+/// Executable today: [`StepKind::Cmd`], [`StepKind::Gate`], [`StepKind::Call`],
+/// [`StepKind::Repeat`], [`StepKind::Map`]. The remaining variants
+/// (`Agent` / `Chat` / `Parallel` / `Template` / `Script`) round-trip through
+/// serde but are rejected at the CLI adapter boundary until follow-up PRs
+/// wire each executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepKind {
@@ -94,6 +100,11 @@ impl Workflow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scope {
     pub steps: Vec<Step>,
+    /// Tera expression evaluated at scope completion to produce the
+    /// container step's output snapshot (PR 3 of Task #31). Absent = the
+    /// container falls back to the last step's output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<String>,
 }
 
 /// One step in a workflow. Only [`StepKind::Cmd`] is executed today; other
@@ -143,35 +154,103 @@ pub struct Step {
     /// PR 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+
+    /// Named scope referenced by `call` / `repeat` / `map` (PR 3 of Task
+    /// #31). Required at the adapter boundary for those kinds; `None` for
+    /// every other kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// Safety cap for `repeat`: once the counter reaches this value the
+    /// container completes cleanly with a warning (v1 parity, see
+    /// v1 `repeat.rs:143`). `None` = no explicit cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iterations: Option<usize>,
+    /// Seed value exposed as `scope.value` for the first iteration/pass
+    /// of `call` / `repeat` / `map` (v1 parity). Persisted as JSON so
+    /// the harness stays YAML-agnostic — the adapter converts the YAML
+    /// value once at parse time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_value: Option<serde_json::Value>,
+    /// Tera expression rendered by `map` to produce the iteration
+    /// collection. Required at the adapter boundary for `map`; `None`
+    /// for every other kind. Shape of the rendered result is *not*
+    /// enforced at adapt time — the scope runner preserves v1's
+    /// "JSON array or line-split" heuristic (v1 `map.rs:237`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items: Option<String>,
+    /// Parallelism budget for `map`. Carried through for legacy-YAML
+    /// round-trip fidelity; the scope runner in PR 3 executes
+    /// sequentially even when this is `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel: Option<usize>,
+    /// Override for the containing [`Scope::outputs`] template. `None`
+    /// falls back to the scope-level value (if any) or to the last
+    /// scope-body step's output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<String>,
 }
 
 impl Step {
     pub fn cmd(name: impl Into<String>, command: impl Into<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Cmd);
+        step.command = command.into();
+        step
+    }
+
+    /// Constructor for a [`StepKind::Gate`] step. PR 2 of Task #31.
+    pub fn gate(name: impl Into<String>, condition: impl Into<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Gate);
+        step.condition = Some(condition.into());
+        step
+    }
+
+    /// Constructor for a [`StepKind::Call`] step — runs `scope` once.
+    /// PR 3 of Task #31.
+    pub fn call(name: impl Into<String>, scope: impl Into<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Call);
+        step.scope = Some(scope.into());
+        step
+    }
+
+    /// Constructor for a [`StepKind::Repeat`] step — runs `scope` until a
+    /// scope-body gate emits `break`, or `max_iterations` fires (v1
+    /// parity with a completion warning).
+    pub fn repeat(name: impl Into<String>, scope: impl Into<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Repeat);
+        step.scope = Some(scope.into());
+        step
+    }
+
+    /// Constructor for a [`StepKind::Map`] step — runs `scope` once per
+    /// item rendered from the `items` Tera expression.
+    pub fn map(
+        name: impl Into<String>,
+        scope: impl Into<String>,
+        items: impl Into<String>,
+    ) -> Self {
+        let mut step = Step::empty(name, StepKind::Map);
+        step.scope = Some(scope.into());
+        step.items = Some(items.into());
+        step
+    }
+
+    fn empty(name: impl Into<String>, kind: StepKind) -> Self {
         Self {
             name: name.into(),
-            kind: StepKind::Cmd,
-            command: command.into(),
+            kind,
+            command: String::new(),
             timeout: None,
             env: HashMap::new(),
             condition: None,
             on_pass: None,
             on_fail: None,
             message: None,
-        }
-    }
-
-    /// Constructor for a [`StepKind::Gate`] step. PR 2 of Task #31.
-    pub fn gate(name: impl Into<String>, condition: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            kind: StepKind::Gate,
-            command: String::new(),
-            timeout: None,
-            env: HashMap::new(),
-            condition: Some(condition.into()),
-            on_pass: None,
-            on_fail: None,
-            message: None,
+            scope: None,
+            max_iterations: None,
+            initial_value: None,
+            items: None,
+            parallel: None,
+            outputs: None,
         }
     }
 
@@ -292,5 +371,109 @@ steps:
         assert_eq!(step.on_pass.as_deref(), Some("continue"));
         assert_eq!(step.on_fail.as_deref(), Some("fail"));
         assert_eq!(step.message.as_deref(), Some("build must pass"));
+    }
+
+    #[test]
+    fn container_fields_roundtrip_through_yaml() {
+        let yaml = r#"
+name: containers
+steps:
+  - name: once
+    type: call
+    scope: setup
+  - name: loop
+    type: repeat
+    scope: work
+    max_iterations: 5
+    initial_value: 0
+  - name: fan
+    type: map
+    scope: per_file
+    items: "{{ steps.list.stdout }}"
+    parallel: 4
+    initial_value:
+      seed: ok
+      tries: 3
+scopes:
+  setup:
+    steps:
+      - name: seed
+        command: "echo seed"
+    outputs: "{{ steps.seed.stdout }}"
+  work:
+    steps:
+      - name: tick
+        command: "echo tick"
+  per_file:
+    steps:
+      - name: touch
+        command: "echo {{ item }}"
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+
+        let call = &wf.steps[0];
+        assert_eq!(call.kind, StepKind::Call);
+        assert_eq!(call.scope.as_deref(), Some("setup"));
+
+        let rep = &wf.steps[1];
+        assert_eq!(rep.kind, StepKind::Repeat);
+        assert_eq!(rep.max_iterations, Some(5));
+        assert_eq!(rep.initial_value, Some(serde_json::json!(0)));
+
+        let map = &wf.steps[2];
+        assert_eq!(map.kind, StepKind::Map);
+        assert_eq!(map.items.as_deref(), Some("{{ steps.list.stdout }}"));
+        assert_eq!(map.parallel, Some(4));
+        assert_eq!(
+            map.initial_value,
+            Some(serde_json::json!({ "seed": "ok", "tries": 3 }))
+        );
+
+        let setup = wf.scopes.get("setup").unwrap();
+        assert_eq!(setup.outputs.as_deref(), Some("{{ steps.seed.stdout }}"));
+        assert!(wf.scopes.get("work").unwrap().outputs.is_none());
+    }
+
+    #[test]
+    fn cmd_step_omits_container_fields_from_serialized_output() {
+        // Backward-compat: the six container fields added in PR 3 of #31
+        // must stay absent on the wire for cmd and gate steps, otherwise
+        // existing workflow round-trips would gain noise.
+        let step = Step::cmd("s", "true");
+        let yaml = serde_yaml::to_string(&step).unwrap();
+        for field in [
+            "scope:",
+            "max_iterations:",
+            "initial_value:",
+            "items:",
+            "parallel:",
+            "outputs:",
+        ] {
+            assert!(
+                !yaml.contains(field),
+                "cmd step leaked `{field}` onto the wire: {yaml}"
+            );
+        }
+    }
+
+    #[test]
+    fn container_constructors_roundtrip_through_serde() {
+        let call = Step::call("once", "setup");
+        let rep = Step::repeat("loop", "work");
+        let map = Step::map("fan", "per_file", "{{ steps.list.stdout }}");
+
+        let wf = Workflow::new("ctor", vec![call, rep, map]);
+        let yaml = serde_yaml::to_string(&wf).unwrap();
+        let back: Workflow = serde_yaml::from_str(&yaml).unwrap();
+
+        assert_eq!(back.steps[0].kind, StepKind::Call);
+        assert_eq!(back.steps[0].scope.as_deref(), Some("setup"));
+        assert_eq!(back.steps[1].kind, StepKind::Repeat);
+        assert_eq!(back.steps[1].scope.as_deref(), Some("work"));
+        assert_eq!(back.steps[2].kind, StepKind::Map);
+        assert_eq!(
+            back.steps[2].items.as_deref(),
+            Some("{{ steps.list.stdout }}")
+        );
     }
 }
