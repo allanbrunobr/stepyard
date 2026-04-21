@@ -435,15 +435,26 @@ impl Engine {
                 .await;
         }
 
-        // Kinds other than Cmd/Gate/Call/Repeat/Map/Template are still
-        // rejected at the adapter boundary. If an in-process caller
+        // Script dispatch: in-process Rhai evaluation against a flat
+        // snapshot of cross-step outputs + target. Same unified output
+        // shape as template so `{{ steps.sc.stdout }}` resolves without
+        // a new event variant. PR 4 of Task #31.
+        if matches!(step.kind, StepKind::Script) {
+            let step_index = progress.completed_steps as u32;
+            return self
+                .run_script_step(step, &progress.outputs, start, step_index)
+                .await;
+        }
+
+        // Kinds other than Cmd/Gate/Call/Repeat/Map/Template/Script are
+        // still rejected at the adapter boundary. If an in-process caller
         // constructs one anyway, emit a structured StepFailed instead
         // of silently dispatching the cmd path — a typed "not yet
         // supported" outcome is easier to debug than a command with an
         // empty string.
         if !matches!(step.kind, StepKind::Cmd) {
             let error = format!(
-                "step type `{step_type}` not yet supported in v2 engine — PR 4 of #31 ships cmd + gate + call/repeat/map + template"
+                "step type `{step_type}` not yet supported in v2 engine — PR 4 of #31 ships cmd + gate + call/repeat/map + template + script"
             );
             self.emit(Event::StepFailed {
                 step_name: step.name.clone(),
@@ -956,6 +967,74 @@ impl Engine {
         )
         .await
         {
+            Ok(s) => s,
+            Err(e) => {
+                let error = e.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        let snapshot = stepyard_core::StepOutputSnapshot {
+            stdout: rendered,
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        self.emit(Event::StepCompleted {
+            step_name: step.name.clone(),
+            step_type: step_type.into(),
+            duration_ms: start.elapsed().as_millis() as u64,
+            timestamp: Utc::now(),
+            input_tokens: None,
+            output_tokens: None,
+            cost_usd: None,
+            sandboxed: false,
+            output: Some(snapshot),
+            scope_context: None,
+            gate_outcome: None,
+        })
+        .await?;
+        Ok(StepOutcome::StepCompleted {
+            step_name: step.name.clone(),
+        })
+    }
+
+    /// Execute a [`StepKind::Script`] step — evaluate the Rhai source
+    /// stored in `step.command` against a snapshot built from the
+    /// cross-step outputs + target, and persist the rendered value as
+    /// `stdout` in a `StepCompleted` event. PR 4 of Task #31.
+    ///
+    /// No sandbox, no tokio select — the Rhai engine runs synchronously on
+    /// the current task, bounded by its `MAX_OPERATIONS` cap. Replay is
+    /// the same story as template: a completed event in the log makes
+    /// `progress_from_log` advance past this step, so we never re-evaluate.
+    async fn run_script_step(
+        &mut self,
+        step: &Step,
+        outputs: &HashMap<String, StepOutputSnapshot>,
+        start: Instant,
+        _step_index: u32,
+    ) -> Result<StepOutcome, EngineError> {
+        let step_type = step_type_label(&step.kind);
+
+        let rendered = match crate::script_exec::execute_script(
+            &step.name,
+            &step.command,
+            outputs,
+            &self.run_context.target,
+        ) {
             Ok(s) => s,
             Err(e) => {
                 let error = e.to_string();

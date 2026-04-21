@@ -32,6 +32,7 @@ mod executor;
 mod gate;
 mod render;
 mod scope;
+mod script_exec;
 pub mod startup;
 mod template_exec;
 mod workflow;

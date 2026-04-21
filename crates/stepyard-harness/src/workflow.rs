@@ -7,9 +7,9 @@
 //! PR 3 adds the container fields (`scope` / `max_iterations` / `items` /
 //! `parallel` / `initial_value` / `outputs`) that `call` / `repeat` / `map`
 //! need, plus the scope runner that executes them. **Executable kinds
-//! today:** `cmd`, `gate`, `call`, `repeat`, `map`, `template`. Other kinds
-//! (`agent` / `chat` / `parallel` / `script`) still round-trip
-//! through serde but are rejected by the CLI adapter
+//! today:** `cmd`, `gate`, `call`, `repeat`, `map`, `template`, `script`.
+//! Other kinds (`agent` / `chat` / `parallel`) still round-trip through
+//! serde but are rejected by the CLI adapter
 //! (`src/cli/harness_adapter.rs`).
 
 use std::collections::HashMap;
@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 /// Every step kind the harness can represent.
 ///
 /// Executable today: [`StepKind::Cmd`], [`StepKind::Gate`], [`StepKind::Call`],
-/// [`StepKind::Repeat`], [`StepKind::Map`], [`StepKind::Template`]. The remaining variants
-/// (`Agent` / `Chat` / `Parallel` / `Script`) round-trip through
-/// serde but are rejected at the CLI adapter boundary until follow-up PRs
-/// wire each executor.
+/// [`StepKind::Repeat`], [`StepKind::Map`], [`StepKind::Template`],
+/// [`StepKind::Script`]. The remaining variants (`Agent` / `Chat` /
+/// `Parallel`) round-trip through serde but are rejected at the CLI
+/// adapter boundary until follow-up PRs wire each executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepKind {
@@ -130,8 +130,9 @@ pub struct Step {
         skip_serializing_if = "StepKind::is_cmd"
     )]
     pub kind: StepKind,
-    /// Shell command for [`StepKind::Cmd`] steps. Empty for other kinds
-    /// until their executors land.
+    /// Shell command for [`StepKind::Cmd`] steps and Rhai source for
+    /// [`StepKind::Script`] steps — both map to the same legacy YAML field
+    /// (`run:`). Empty for other kinds.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub command: String,
     /// Wall-clock step timeout in milliseconds. Absent = no timeout.
@@ -254,6 +255,15 @@ impl Step {
     pub fn template(name: impl Into<String>, prompt: Option<String>) -> Self {
         let mut step = Step::empty(name, StepKind::Template);
         step.prompt = prompt;
+        step
+    }
+
+    /// Constructor for a [`StepKind::Script`] step — evaluates the Rhai
+    /// `source` against a flat snapshot of the harness render context and
+    /// emits the return value as `stdout`. PR 4 of Task #31.
+    pub fn script(name: impl Into<String>, source: impl Into<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Script);
+        step.command = source.into();
         step
     }
 
