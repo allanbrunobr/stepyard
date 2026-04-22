@@ -103,6 +103,75 @@ pub enum AgentSessionMode {
     Isolated,
 }
 
+/// Chat provider for [`StepKind::Chat`] steps (PR 5b of Task #31). Maps to
+/// the rig-core client the runtime instantiates. v1 carried this as a
+/// free-form `provider:` string in its `StepConfig` bag, routed through
+/// a match arm with silent fallback to `anthropic` on unknown values.
+/// v2 tightens the contract so unknown providers fail at the adapter
+/// boundary rather than silently becoming the default.
+///
+/// v1 aliases (`"google"` → [`Self::Gemini`], `"grok"` → [`Self::Xai`])
+/// are translated at the adapter boundary, not on this enum.
+/// [`Self::OpenAiCompatible`] is a unit variant because [`Step::base_url`]
+/// is already the single source of truth for the endpoint override —
+/// duplicating it as a payload would create two ways to spell the same
+/// fact and force the adapter to reconcile them.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatProvider {
+    /// Anthropic (Claude). v1 default — preserved so workflows that
+    /// omit `provider:` keep working through the adapter.
+    #[default]
+    Anthropic,
+    #[serde(rename = "openai")]
+    OpenAi,
+    Ollama,
+    Groq,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
+    Gemini,
+    Cohere,
+    Perplexity,
+    Xai,
+    Mistral,
+    /// OpenAI-compatible endpoint (self-hosted gateway, vLLM, LM Studio,
+    /// Together AI, Azure OpenAI, etc.). The adapter requires
+    /// [`Step::base_url`] to be set when this variant is selected.
+    #[serde(rename = "openai_compatible")]
+    OpenAiCompatible,
+}
+
+/// History truncation strategy for [`StepKind::Chat`] steps (PR 5b of
+/// Task #31). Mirrors v1's `truncation:` config shape. Absent at the
+/// [`Step`] level (field is `None`) means no truncation — the runtime
+/// sends the full conversation. A `"none"` strategy on the wire is
+/// normalized to `None` at the adapter boundary.
+///
+/// Serde tag is `strategy` so the YAML reads naturally:
+///
+/// ```yaml
+/// truncation:
+///   strategy: sliding_window
+///   max_tokens: 8000
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "strategy", rename_all = "snake_case")]
+pub enum ChatTruncation {
+    /// Keep the `count` most recent messages; drop everything older.
+    Last { count: u64 },
+    /// Keep the `count` oldest messages; drop everything newer. Rare
+    /// in production — carried for v1 parity.
+    First { count: u64 },
+    /// Keep `first` oldest plus `last` newest messages; drop the middle.
+    FirstLast { first: u64, last: u64 },
+    /// Drop oldest messages until the conversation fits within
+    /// `max_tokens` of input budget (heuristic, not a hard cap —
+    /// exact accounting happens provider-side).
+    SlidingWindow { max_tokens: u64 },
+}
+
 /// A complete workflow definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workflow {
@@ -234,7 +303,7 @@ pub struct Step {
     /// scope-body step's output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outputs: Option<String>,
-    /// Dual-use prompt field. [`StepKind::Template`]: Tera expression
+    /// Tri-use prompt field. [`StepKind::Template`]: Tera expression
     /// rendered once to produce the prompt-file basename (absent → fall
     /// back to `step.name`, two-pass render matches v1
     /// `src/steps/template_step.rs:32-36`, PR 4 of Task #31).
@@ -242,6 +311,10 @@ pub struct Step {
     /// stdin (v1 parity with `StepDef.prompt` at
     /// `src/workflow/schema.rs:106`, required by the adapter for agent
     /// steps, PR 5a of Task #31).
+    /// [`StepKind::Chat`]: user message appended to the chat session's
+    /// history and sent to the provider (v1 parity with `config.prompt`
+    /// in the chat bag, required by the adapter for chat steps,
+    /// PR 5b of Task #31).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     /// [`StepKind::Agent`] only: Claude CLI model override, threaded to
@@ -301,6 +374,58 @@ pub struct Step {
     /// PR 5a of Task #31.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_command: Option<String>,
+
+    /// [`StepKind::Chat`] only: provider selector routed to rig-core.
+    /// `None` = fall back to [`ChatProvider::Anthropic`] at the adapter
+    /// boundary (v1 parity — omitting `provider:` defaulted to
+    /// Anthropic). Unknown string values fail adapt-time rather than
+    /// silently defaulting. PR 5b of Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_provider: Option<ChatProvider>,
+    /// [`StepKind::Chat`] only: response-length cap threaded to the
+    /// provider as its `max_tokens` (OpenAI/Anthropic semantics). v1
+    /// parity with `config.get_int("max_tokens")`. Absent = provider
+    /// default. PR 5b of Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    /// [`StepKind::Chat`] only: sampling temperature forwarded to the
+    /// provider. v1 parity with `config.get_float("temperature")`.
+    /// Absent = provider default. PR 5b of Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    /// [`StepKind::Chat`] only: environment variable name whose value is
+    /// read at spawn time to authenticate against the provider (e.g.
+    /// `"OPENAI_API_KEY"`). v1 parity with `config.get_str("api_key_env")`.
+    /// Absent = fall back to the per-provider default env var at the
+    /// adapter boundary. Never persisted to the session log. PR 5b of
+    /// Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    /// [`StepKind::Chat`] only: provider endpoint override. Required
+    /// when [`Self::chat_provider`] is [`ChatProvider::OpenAiCompatible`]
+    /// (adapter boundary); optional for other providers that support
+    /// endpoint overrides (e.g. Ollama's host URL). v1 parity with
+    /// `config.get_str("base_url")`. PR 5b of Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// [`StepKind::Chat`] only: logical chat session name that scopes
+    /// the conversation history. Two chat steps with the same
+    /// `chat_session` share history; distinct names isolate. Absent =
+    /// stateless single-turn (v1 parity with `config.get_str("session")`
+    /// absent). The runtime replays [`Event::ChatMessageAppended`]
+    /// entries from the session log rather than keeping per-session
+    /// state in memory, so history survives a process crash. PR 5b of
+    /// Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_session: Option<String>,
+    /// [`StepKind::Chat`] only: history truncation strategy applied
+    /// before dispatching to the provider. `None` = send full history
+    /// (v1 parity with `config.get("truncation")` absent). A v1
+    /// `strategy: none` value is normalized to `None` at the adapter
+    /// boundary so this enum never needs a placeholder variant.
+    /// PR 5b of Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<ChatTruncation>,
 }
 
 impl Step {
@@ -376,6 +501,17 @@ impl Step {
         step
     }
 
+    /// Constructor for a [`StepKind::Chat`] step — sends `prompt` to the
+    /// configured rig-core provider. Additional knobs (`chat_provider`,
+    /// `max_tokens`, `temperature`, `api_key_env`, `base_url`,
+    /// `chat_session`, `truncation`) land via direct field assignment on
+    /// the returned `Step`. PR 5b of Task #31.
+    pub fn chat(name: impl Into<String>, prompt: impl Into<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Chat);
+        step.prompt = Some(prompt.into());
+        step
+    }
+
     fn empty(name: impl Into<String>, kind: StepKind) -> Self {
         Self {
             name: name.into(),
@@ -401,6 +537,13 @@ impl Step {
             fork_session: None,
             agent_session: None,
             agent_command: None,
+            chat_provider: None,
+            max_tokens: None,
+            temperature: None,
+            api_key_env: None,
+            base_url: None,
+            chat_session: None,
+            truncation: None,
         }
     }
 
@@ -771,5 +914,210 @@ steps:
     #[test]
     fn agent_permissions_default_is_default_variant() {
         assert_eq!(AgentPermissions::default(), AgentPermissions::Default);
+    }
+
+    #[test]
+    fn chat_fields_roundtrip_through_yaml() {
+        let yaml = r#"
+name: with-chat
+steps:
+  - name: ask
+    type: chat
+    prompt: "Summarize {{ target }}"
+    chat_provider: openai
+    model: gpt-4o-mini
+    max_tokens: 1024
+    temperature: 0.5
+    api_key_env: MY_OPENAI_KEY
+    base_url: "https://api.openai.com/v1"
+    chat_session: assistant
+    truncation:
+      strategy: sliding_window
+      max_tokens: 8000
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(wf.steps.len(), 1);
+
+        let ask = &wf.steps[0];
+        assert_eq!(ask.kind, StepKind::Chat);
+        assert_eq!(ask.prompt.as_deref(), Some("Summarize {{ target }}"));
+        assert_eq!(ask.chat_provider, Some(ChatProvider::OpenAi));
+        assert_eq!(ask.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(ask.max_tokens, Some(1024));
+        assert_eq!(ask.temperature, Some(0.5));
+        assert_eq!(ask.api_key_env.as_deref(), Some("MY_OPENAI_KEY"));
+        assert_eq!(ask.base_url.as_deref(), Some("https://api.openai.com/v1"));
+        assert_eq!(ask.chat_session.as_deref(), Some("assistant"));
+        assert_eq!(
+            ask.truncation,
+            Some(ChatTruncation::SlidingWindow { max_tokens: 8000 })
+        );
+    }
+
+    #[test]
+    fn chat_provider_default_variant_roundtrips() {
+        // v1 parity: omitting `provider:` defaulted to anthropic. The
+        // enum default matches, and the tagged form serializes back as
+        // its snake_case label without a rename override.
+        assert_eq!(ChatProvider::default(), ChatProvider::Anthropic);
+
+        let yaml = r#"
+name: default-provider
+steps:
+  - name: ask
+    type: chat
+    prompt: "Hi"
+    chat_provider: anthropic
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(wf.steps[0].chat_provider, Some(ChatProvider::Anthropic));
+    }
+
+    #[test]
+    fn chat_provider_renamed_variants_deserialize() {
+        // Guards that the three rename overrides (OpenAi → "openai",
+        // DeepSeek → "deepseek", OpenAiCompatible → "openai_compatible")
+        // match the v1 provider strings users already have in YAML. The
+        // rest of the variants fall out of snake_case automatically.
+        let yaml = r#"
+name: renamed
+steps:
+  - name: a
+    type: chat
+    prompt: "x"
+    chat_provider: openai
+  - name: b
+    type: chat
+    prompt: "x"
+    chat_provider: deepseek
+  - name: c
+    type: chat
+    prompt: "x"
+    chat_provider: openai_compatible
+    base_url: "http://localhost:8080/v1"
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(wf.steps[0].chat_provider, Some(ChatProvider::OpenAi));
+        assert_eq!(wf.steps[1].chat_provider, Some(ChatProvider::DeepSeek));
+        assert_eq!(
+            wf.steps[2].chat_provider,
+            Some(ChatProvider::OpenAiCompatible)
+        );
+
+        // Round-trip: serialized form uses the overridden labels.
+        let back = serde_yaml::to_string(&wf).unwrap();
+        assert!(
+            back.contains("chat_provider: openai\n"),
+            "OpenAi must serialize as `openai`: {back}"
+        );
+        assert!(
+            back.contains("chat_provider: deepseek\n"),
+            "DeepSeek must serialize as `deepseek`: {back}"
+        );
+        assert!(
+            back.contains("chat_provider: openai_compatible\n"),
+            "OpenAiCompatible must serialize as `openai_compatible`: {back}"
+        );
+    }
+
+    #[test]
+    fn chat_truncation_variants_roundtrip_through_yaml() {
+        // Each ChatTruncation variant round-trips with the `strategy:`
+        // tag + snake_case name. No "none" variant — absent truncation
+        // is expressed by omitting the field (normalized by the adapter
+        // from a v1 `strategy: none`).
+        let yaml = r#"
+name: truncs
+steps:
+  - name: keep_tail
+    type: chat
+    prompt: "x"
+    truncation:
+      strategy: last
+      count: 10
+  - name: keep_head
+    type: chat
+    prompt: "x"
+    truncation:
+      strategy: first
+      count: 4
+  - name: bookend
+    type: chat
+    prompt: "x"
+    truncation:
+      strategy: first_last
+      first: 2
+      last: 8
+  - name: window
+    type: chat
+    prompt: "x"
+    truncation:
+      strategy: sliding_window
+      max_tokens: 4096
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            wf.steps[0].truncation,
+            Some(ChatTruncation::Last { count: 10 })
+        );
+        assert_eq!(
+            wf.steps[1].truncation,
+            Some(ChatTruncation::First { count: 4 })
+        );
+        assert_eq!(
+            wf.steps[2].truncation,
+            Some(ChatTruncation::FirstLast { first: 2, last: 8 })
+        );
+        assert_eq!(
+            wf.steps[3].truncation,
+            Some(ChatTruncation::SlidingWindow { max_tokens: 4096 })
+        );
+    }
+
+    #[test]
+    fn cmd_step_omits_chat_fields_from_serialized_output() {
+        // Backward-compat mirror of the earlier gate/container/agent
+        // guards: cmd steps must not leak any of the seven chat fields
+        // added in PR 5b of #31 onto the wire, otherwise existing
+        // workflow round-trips would gain noise.
+        let step = Step::cmd("s", "true");
+        let yaml = serde_yaml::to_string(&step).unwrap();
+        for field in [
+            "chat_provider:",
+            "max_tokens:",
+            "temperature:",
+            "api_key_env:",
+            "base_url:",
+            "chat_session:",
+            "truncation:",
+        ] {
+            assert!(
+                !yaml.contains(field),
+                "cmd step leaked `{field}` onto the wire: {yaml}"
+            );
+        }
+    }
+
+    #[test]
+    fn chat_constructor_roundtrips_through_serde() {
+        let mut step = Step::chat("ask", "Summarize {{ target }}");
+        step.chat_provider = Some(ChatProvider::OpenAi);
+        step.model = Some("gpt-4o-mini".into());
+        step.max_tokens = Some(256);
+        step.chat_session = Some("assistant".into());
+        step.truncation = Some(ChatTruncation::Last { count: 20 });
+
+        let wf = Workflow::new("chat-ctor", vec![step]);
+        let yaml = serde_yaml::to_string(&wf).unwrap();
+        let back: Workflow = serde_yaml::from_str(&yaml).unwrap();
+
+        let s = &back.steps[0];
+        assert_eq!(s.kind, StepKind::Chat);
+        assert_eq!(s.prompt.as_deref(), Some("Summarize {{ target }}"));
+        assert_eq!(s.chat_provider, Some(ChatProvider::OpenAi));
+        assert_eq!(s.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(s.max_tokens, Some(256));
+        assert_eq!(s.chat_session.as_deref(), Some("assistant"));
+        assert_eq!(s.truncation, Some(ChatTruncation::Last { count: 20 }));
     }
 }

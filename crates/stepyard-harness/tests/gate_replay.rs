@@ -365,6 +365,13 @@ async fn gate_missing_condition_is_structured_step_failure() {
             fork_session: None,
             agent_session: None,
             agent_command: None,
+            chat_provider: None,
+            max_tokens: None,
+            temperature: None,
+            api_key_env: None,
+            base_url: None,
+            chat_session: None,
+            truncation: None,
         };
         let wf = Workflow::new("naked-gate", vec![gate]);
 
