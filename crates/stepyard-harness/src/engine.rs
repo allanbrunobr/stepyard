@@ -1535,10 +1535,11 @@ mod progress_tests {
     }
 
     #[test]
-    fn non_agent_completions_do_not_pollute_session_maps() {
-        // cmd / template / script / gate steps never emit
-        // `agent_session_id` — their completions must flow through the
-        // scan without touching either session field.
+    fn completion_without_agent_session_id_does_not_pollute_session_maps() {
+        // Any completion lacking `agent_session_id` must flow through
+        // the scan without touching either session field. Covers both
+        // non-agent step kinds and agent completions that never produced
+        // a session id (e.g. early CLI failure before the `result` line).
         let events = vec![evt(1, step_completed("build", None))];
         let progress = compute_progress(&events).unwrap();
         assert_eq!(progress.completed_steps, 1);
