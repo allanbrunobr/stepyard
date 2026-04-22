@@ -195,12 +195,6 @@ pub(crate) enum AgentExecError {
     #[error("failed to write prompt to agent stdin: {error}")]
     StdinWrite { error: String },
 
-    /// Parse loop did not complete within `step.timeout`. The child is
-    /// killed synchronously before this is returned so the event log
-    /// doesn't race against a stray process.
-    #[error("agent step timed out after {millis}ms")]
-    Timeout { millis: u64 },
-
     /// `child.wait()` failed after the parse loop resolved. Distinct
     /// from [`Self::Spawn`] so operators can tell "never started" from
     /// "started but lost the handle".
@@ -294,13 +288,20 @@ fn parse_stream_json_line(line: &str, out: &mut AgentExecOutput) {
 /// `src/steps/agent.rs:24`. `Command::new` inherits `PATH` from the
 /// parent so bare `"claude"` resolves through PATH.
 ///
-/// # Timeout semantics
+/// # Cancellation contract
 ///
-/// Matches the cmd step idiom in `engine.rs:586-591`:
-/// `step.timeout.map(Duration::from_millis)` bounds the parse loop only;
-/// `None` = unbounded (via `std::future::pending`). v1 always applied a
-/// hardcoded 600s fallback here; v2 follows the uniform cmd convention
-/// instead.
+/// This function does **not** observe `step.timeout`, the cancel token,
+/// or the shutdown broadcast. Those belong to the engine's step-level
+/// `tokio::select!` (see [`crate::engine::Engine::run_agent_step`]), so
+/// agent lines up with cmd's cancel/signal/timeout model (PR 3 of #31)
+/// without duplicating the race here.
+///
+/// The child is spawned with `.kill_on_drop(true)` so that when the
+/// outer `select!` drops this future mid-wait (cancel/signal/timeout
+/// branch fired first), Tokio sends `SIGKILL` to the Claude CLI on
+/// `Child::drop`. Without this flag Tokio defaults to leak-on-drop and
+/// a SIGTERM during a long CLI turn would leave the child running past
+/// the session's terminal event.
 ///
 /// # Exit-code rule (v1 parity)
 ///
@@ -334,6 +335,11 @@ pub(crate) async fn run_agent_step(
         // deadlocks the child once the pipe buffer fills (~64KB on Linux).
         // v1 left this as piped and accepted the latent hang; v2 drops it.
         .stderr(std::process::Stdio::null())
+        // SIGKILL the child if this future is dropped mid-wait. The
+        // engine's outer `select!` drops us on cancel/signal/timeout;
+        // without this the child would leak past the session's terminal
+        // event (Tokio's default is leak-on-drop for spawned processes).
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| AgentExecError::Spawn {
             command: command.to_string(),
@@ -342,8 +348,7 @@ pub(crate) async fn run_agent_step(
 
     // Feed the rendered prompt to the child and close the write half so
     // the child sees EOF. Dropping `stdin` is required — without it the
-    // child blocks on its own `read` forever and the parse loop hangs
-    // until `step.timeout` fires.
+    // child blocks on its own `read` forever and the parse loop hangs.
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(rendered_prompt.as_bytes())
@@ -365,28 +370,8 @@ pub(crate) async fn run_agent_step(
     let mut lines = reader.lines();
 
     let mut output = AgentExecOutput::default();
-    let parse_loop = async {
-        while let Ok(Some(line)) = lines.next_line().await {
-            parse_stream_json_line(&line, &mut output);
-        }
-    };
-
-    match step.timeout {
-        Some(millis) => {
-            let dur = std::time::Duration::from_millis(millis);
-            if tokio::time::timeout(dur, parse_loop).await.is_err() {
-                // Kill synchronously before returning so the terminal
-                // event doesn't race against a stray process still
-                // writing to our stdout pipe. Errors are swallowed: by
-                // the time we noticed the timeout the child may have
-                // already exited.
-                let _ = child.kill().await;
-                return Err(AgentExecError::Timeout { millis });
-            }
-        }
-        None => {
-            parse_loop.await;
-        }
+    while let Ok(Some(line)) = lines.next_line().await {
+        parse_stream_json_line(&line, &mut output);
     }
 
     let status = child

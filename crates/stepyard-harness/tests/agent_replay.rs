@@ -17,13 +17,18 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
-use stepyard_harness::{Engine, HarnessConfig, Step, StepExecutor, StepOutcome, Workflow};
+use stepyard_harness::{
+    Engine, EngineError, HarnessConfig, Step, StepExecutor, StepOutcome, TerminationReason,
+    Workflow,
+};
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionEvent, SessionStatus};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -125,6 +130,25 @@ fn agent_step_with_argv_capture(name: &str, prompt: &str, argv_file: &Path) -> S
 fn agent_step(name: &str, prompt: &str) -> Step {
     let mut step = Step::agent(name, prompt);
     step.agent_command = Some(fixture_path().to_string_lossy().into_owned());
+    step
+}
+
+/// Repo-root path of the **hanging** mock fixture. Used by the
+/// cancel/signal/timeout tests — the mock drains stdin and then
+/// `sleep infinity`, so the exec future never completes and the outer
+/// `tokio::select!` in `run_agent_step` is forced through one of the
+/// control-plane arms.
+fn hang_fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_claude_hang.sh")
+}
+
+/// Agent step pointed at the hanging fixture. Optionally carries a
+/// per-step `timeout: Some(ms)` so the timeout test can pin the
+/// wall-clock budget without building a bespoke workflow.
+fn agent_step_hang(name: &str, prompt: &str, timeout_ms: Option<u64>) -> Step {
+    let mut step = Step::agent(name, prompt);
+    step.agent_command = Some(hang_fixture_path().to_string_lossy().into_owned());
+    step.timeout = timeout_ms;
     step
 }
 
@@ -504,5 +528,269 @@ async fn agent_replay_skips_completed_step() {
 
         let reloaded = Session::load(&pool, session_id).await.unwrap();
         assert_eq!(reloaded.status(), SessionStatus::Completed);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Timeout: the agent executor must race exec against `step.timeout` and emit
+// the same `StepTimeoutFired + StepFailed` pair cmd emits, funnelling through
+// `EngineError::StepFailed { TerminationReason::StepTimeout { configured_ms } }`.
+// Before this test landed, the executor applied a local `tokio::time::timeout`
+// inside `agent_exec` and surfaced it as a generic `StepFailed`, so replay /
+// auditing couldn't tell timeout from a non-zero CLI exit. Mirrors
+// `step_timeout.rs` for the cmd path — asserting all three layers (event
+// ordering, session status, typed error).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn agent_timeout_emits_step_timeout_fired_then_step_failed() {
+    db_test!(pool, {
+        let configured_ms: u64 = 200;
+
+        let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("session");
+        let session_id = session.id();
+
+        let wf = Workflow::new(
+            "agent-timeout",
+            vec![agent_step_hang(
+                "slow-agent",
+                "hang please",
+                Some(configured_ms),
+            )],
+        );
+
+        let mut engine = Engine::with_executor(
+            HarnessConfig::default(),
+            session,
+            wf,
+            lifecycle(),
+            unreachable_executor(),
+        );
+
+        // Typed error with the termination taxonomy.
+        match engine.step().await {
+            Err(EngineError::StepFailed { step_index, reason }) => {
+                assert_eq!(step_index, 0);
+                match reason {
+                    TerminationReason::StepTimeout { configured_ms: got } => {
+                        assert_eq!(got, configured_ms);
+                    }
+                    other => panic!("expected StepTimeout, got {other:?}"),
+                }
+            }
+            other => panic!("expected Err(StepFailed), got {other:?}"),
+        }
+
+        // Event ordering (D5 emit-before-IO). Agent has no sandbox, so the
+        // shape is shorter than cmd's — no destroy call to order against —
+        // but StepTimeoutFired must still land before StepFailed so replay
+        // can distinguish timeout from other failures.
+        let evs = events(&engine).await;
+        let tags: Vec<&str> = evs.iter().filter_map(event_kind).collect();
+        assert_eq!(
+            tags,
+            vec![
+                "workflow_started",
+                "step_started",
+                "step_timeout_fired",
+                "step_failed",
+            ],
+            "expected workflow_started → step_started → step_timeout_fired → step_failed, got {tags:?}"
+        );
+
+        let fired = evs
+            .iter()
+            .find(|e| event_kind(e) == Some("step_timeout_fired"))
+            .expect("step_timeout_fired present");
+        assert_eq!(fired.payload["step_index"], 0);
+        assert_eq!(fired.payload["configured_ms"], configured_ms);
+
+        let failed = evs
+            .iter()
+            .find(|e| event_kind(e) == Some("step_failed"))
+            .expect("step_failed present");
+        assert_eq!(failed.payload["step_name"], "slow-agent");
+        assert!(
+            failed.payload["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("timed out"),
+            "step_failed.error should mention the timeout, got {:?}",
+            failed.payload["error"]
+        );
+
+        let reloaded = Session::load(&pool, session_id).await.expect("reload");
+        assert_eq!(reloaded.status(), SessionStatus::Failed);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Cancel mid-step: cancel flipped while the child is hanging must return
+// `Ok(StepOutcome::Cancelled)` and emit the same `StepFailed("Cancelled")` cmd
+// emits. The fast-path cancel check (engine.rs:334) fires before the step
+// runs, so we flip the token AFTER calling step() via a spawned timer —
+// mirrors `signal_cancel.rs`. Without this test, a cancel during a long
+// Claude turn could silently hang the harness until the session timeout.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn agent_cancel_mid_step_returns_cancelled_outcome() {
+    db_test!(pool, {
+        let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("session");
+        let session_id = session.id();
+
+        let wf = Workflow::new(
+            "agent-cancel",
+            vec![agent_step_hang("hung-agent", "hang please", None)],
+        );
+
+        let mut engine = Engine::with_executor(
+            HarnessConfig::default(),
+            session,
+            wf,
+            lifecycle(),
+            unreachable_executor(),
+        );
+
+        // Mid-step cancel. Flip AFTER step() starts so the select's
+        // cancel_fut arm fires (not the pre-step fast-path). The 100ms
+        // sleep in `cancel_fut` polls every 100ms; 250ms delay guarantees
+        // we're inside the select when the token flips.
+        let token = engine.cancel_token();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            token.cancel();
+        });
+
+        let outcome = engine.step().await.expect("step returns");
+        assert_eq!(outcome, StepOutcome::Cancelled);
+
+        let evs = events(&engine).await;
+        let tags: Vec<&str> = evs.iter().filter_map(event_kind).collect();
+        assert_eq!(
+            tags,
+            vec!["workflow_started", "step_started", "step_failed"],
+            "expected workflow_started → step_started → step_failed, got {tags:?}"
+        );
+
+        let failed = evs
+            .iter()
+            .find(|e| event_kind(e) == Some("step_failed"))
+            .expect("step_failed present");
+        assert_eq!(failed.payload["step_name"], "hung-agent");
+        assert_eq!(failed.payload["error"], "Cancelled");
+
+        let reloaded = Session::load(&pool, session_id).await.expect("reload");
+        assert_eq!(reloaded.status(), SessionStatus::Cancelled);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Shutdown broadcast mid-step: SIGINT/SIGTERM received while the child is
+// hanging must emit `SignalReceived → StepFailed` and funnel through
+// `EngineError::StepFailed { TerminationReason::SignalReceived(signal) }` —
+// same contract cmd honors. Builds a custom `HarnessConfig` with a live
+// shared `shutdown_tx` / `shutdown_signal` so the test can fire the signal
+// after the select arm arms; mirrors `signal_cancel.rs`. Agent has no
+// sandbox, so there's no destroy call to assert on — the event-order pair
+// plus the typed error is the full contract.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn agent_shutdown_broadcast_emits_signal_received_then_step_failed() {
+    db_test!(pool, {
+        let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("session");
+        let session_id = session.id();
+
+        let wf = Workflow::new(
+            "agent-signal",
+            vec![agent_step_hang("hung-agent", "hang please", None)],
+        );
+
+        let (tx, _rx_keepalive) = broadcast::channel::<()>(16);
+        let shutdown_tx = Arc::new(tx);
+        let shutdown_signal: Arc<OnceLock<String>> = Arc::new(OnceLock::new());
+        let config = HarnessConfig {
+            tenant_id: "signal-agent-test".into(),
+            shutdown_tx: shutdown_tx.clone(),
+            shutdown_signal: shutdown_signal.clone(),
+            ..HarnessConfig::default()
+        };
+
+        let mut engine = Engine::with_executor(
+            config,
+            session,
+            wf,
+            lifecycle(),
+            unreachable_executor(),
+        );
+
+        // Write-before-send, mirrors `install_handlers` ordering: populate
+        // the signal slot THEN fire the broadcast. If the send landed
+        // first the select arm could read an empty `OnceLock` and fall back
+        // to `"unknown"` — that fallback is a safety net, not something
+        // this test should tolerate.
+        let tx_for_fire = shutdown_tx.clone();
+        let slot_for_fire = shutdown_signal.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let _ = slot_for_fire.set("sigterm".into());
+            let _ = tx_for_fire.send(());
+        });
+
+        match engine.step().await {
+            Err(EngineError::StepFailed { step_index, reason }) => {
+                assert_eq!(step_index, 0);
+                match reason {
+                    TerminationReason::SignalReceived(signal) => {
+                        assert_eq!(signal, "sigterm");
+                    }
+                    other => panic!("expected SignalReceived, got {other:?}"),
+                }
+            }
+            other => panic!("expected Err(StepFailed), got {other:?}"),
+        }
+
+        let evs = events(&engine).await;
+        let tags: Vec<&str> = evs.iter().filter_map(event_kind).collect();
+        assert_eq!(
+            tags,
+            vec![
+                "workflow_started",
+                "step_started",
+                "signal_received",
+                "step_failed",
+            ],
+            "expected workflow_started → step_started → signal_received → step_failed, got {tags:?}"
+        );
+
+        let received = evs
+            .iter()
+            .find(|e| event_kind(e) == Some("signal_received"))
+            .expect("signal_received present");
+        assert_eq!(received.payload["signal"], "sigterm");
+
+        let failed = evs
+            .iter()
+            .find(|e| event_kind(e) == Some("step_failed"))
+            .expect("step_failed present");
+        assert_eq!(failed.payload["step_name"], "hung-agent");
+        assert!(
+            failed.payload["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Signal"),
+            "step_failed.error should mention the signal, got {:?}",
+            failed.payload["error"]
+        );
+
+        let reloaded = Session::load(&pool, session_id).await.expect("reload");
+        assert_eq!(reloaded.status(), SessionStatus::Cancelled);
     });
 }

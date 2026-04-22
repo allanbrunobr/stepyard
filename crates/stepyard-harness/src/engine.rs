@@ -1098,10 +1098,31 @@ impl Engine {
 
     /// Execute a [`StepKind::Agent`] step — resolve env, render the
     /// prompt against the current [`RenderContext`], spawn the Claude CLI
-    /// via [`crate::agent_exec::run_agent_step`], and emit a unified
-    /// `StepCompleted` carrying `{ stdout: response, stderr: "", exit_code: 0 }`
-    /// plus `{ input_tokens, output_tokens, cost_usd, agent_session_id }`
-    /// at the event level. PR 5a of Task #31.
+    /// via [`crate::agent_exec::run_agent_step`] inside a four-arm
+    /// `tokio::select!`, and emit a unified `StepCompleted` carrying
+    /// `{ stdout: response, stderr: "", exit_code: 0 }` plus
+    /// `{ input_tokens, output_tokens, cost_usd, agent_session_id }` at
+    /// the event level. PR 5a of Task #31.
+    ///
+    /// The select mirrors [`Self::execute_cmd_with_select`] verbatim:
+    /// cancel / step-timeout / shutdown-broadcast / exec-done. The
+    /// control-plane branches emit the same terminal events and map to
+    /// the same outcomes as cmd, so replay, auditing, and external
+    /// consumers can't tell cmd from agent for a cancelled/signalled/
+    /// timed-out run:
+    ///
+    /// | Branch  | Events emitted                        | Return                                                       |
+    /// | ------- | ------------------------------------- | ------------------------------------------------------------ |
+    /// | Done(OK)| `StepCompleted`                       | `Ok(StepOutcome::StepCompleted)`                             |
+    /// | Done(Err)| `StepFailed`                         | `Ok(StepOutcome::StepFailed)`                                |
+    /// | Cancel  | `StepFailed` (Cancelled)              | `Ok(StepOutcome::Cancelled)`                                 |
+    /// | Signal  | `SignalReceived` + `StepFailed`       | `Err(EngineError::StepFailed { SignalReceived })`            |
+    /// | Timeout | `StepTimeoutFired` + `StepFailed`     | `Err(EngineError::StepFailed { StepTimeout { configured_ms } })` |
+    ///
+    /// `step_index` is read verbatim by `StepTimeoutFired.step_index`
+    /// and by the `EngineError::StepFailed` returned on timeout/signal;
+    /// the caller is expected to pass the top-level index
+    /// (`progress.completed_steps as u32`).
     ///
     /// Replay is the same story as every other step: once the session log
     /// holds a terminal event for this step, [`Self::progress_from_log`]
@@ -1114,7 +1135,7 @@ impl Engine {
         step: &Step,
         progress: &Progress,
         start: Instant,
-        _step_index: u32,
+        step_index: u32,
     ) -> Result<StepOutcome, EngineError> {
         let step_type = step_type_label(&step.kind);
 
@@ -1200,14 +1221,128 @@ impl Engine {
             agent_session_ids: &progress.agent_session_ids,
             first_agent_session_id: progress.first_agent_session_id.as_deref(),
         };
-        let output = match crate::agent_exec::run_agent_step(
-            step,
-            &rendered_prompt,
-            &state,
-            &resolved_env,
-        )
-        .await
-        {
+
+        // Race the exec future against cancel / timeout / shutdown. Same
+        // shape as `execute_cmd_with_select` — keeping the two inline
+        // instead of factoring out a generic helper avoids dragging the
+        // battle-tested cmd path through the agent refactor's blast
+        // radius. `.kill_on_drop(true)` on the child inside `agent_exec`
+        // guarantees SIGKILL when any non-Done branch drops this future.
+        let cancel_token = self.cancel.clone();
+        let signal_slot = self.config.shutdown_signal.clone();
+        let step_timeout = step.timeout;
+        let selection = {
+            let exec_fut = crate::agent_exec::run_agent_step(
+                step,
+                &rendered_prompt,
+                &state,
+                &resolved_env,
+            );
+            let cancel_fut = async {
+                while !cancel_token.is_cancelled() {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            };
+            let timeout_fut = async {
+                match step_timeout {
+                    Some(ms) => tokio::time::sleep(std::time::Duration::from_millis(ms)).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let shutdown_rx = &mut self.shutdown_rx;
+            let shutdown_fut = shutdown_rx.recv();
+            tokio::pin!(exec_fut);
+            tokio::pin!(cancel_fut);
+            tokio::pin!(timeout_fut);
+            tokio::pin!(shutdown_fut);
+            tokio::select! {
+                r = &mut exec_fut => StepSelection::Done(r),
+                _ = &mut cancel_fut => StepSelection::Cancelled,
+                _ = &mut timeout_fut => StepSelection::TimedOut,
+                _ = &mut shutdown_fut => StepSelection::Signal(
+                    signal_slot
+                        .get()
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".into()),
+                ),
+            }
+        };
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Signal landed first. D5 emit-before-IO ordering: persist both
+        // facts to the session log before returning. Agent has no
+        // sandbox to destroy, so `sandboxed: false` and no lifecycle
+        // call — otherwise identical to cmd's signal arm.
+        if let StepSelection::Signal(ref signal) = selection {
+            let signal = signal.clone();
+            self.emit(Event::SignalReceived {
+                signal: signal.clone(),
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error: format!("Signal: {signal}"),
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_cancel().await?;
+            return Err(EngineError::StepFailed {
+                step_index,
+                reason: stepyard_core::TerminationReason::SignalReceived(signal),
+            });
+        }
+
+        // Timeout landed first. `step.timeout` is guaranteed Some here
+        // because the timeout arm used `std::future::pending` when it
+        // was None. Agent has no sandbox to destroy, so we skip the
+        // `lifecycle.destroy_by_session` call cmd makes.
+        if let StepSelection::TimedOut = selection {
+            let configured_ms = step.timeout.expect("TimedOut requires step.timeout.is_some()");
+            self.emit(Event::StepTimeoutFired {
+                step_index,
+                configured_ms,
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error: format!("step timed out after {configured_ms}ms"),
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            return Err(EngineError::StepFailed {
+                step_index,
+                reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
+            });
+        }
+
+        // Cancel landed mid-step.
+        let exec_result = match selection {
+            StepSelection::Done(r) => r,
+            StepSelection::Cancelled => {
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: "Cancelled".into(),
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_cancel().await?;
+                return Ok(StepOutcome::Cancelled);
+            }
+            StepSelection::TimedOut => unreachable!("handled above"),
+            StepSelection::Signal(_) => unreachable!("handled above"),
+        };
+
+        let output = match exec_result {
             Ok(o) => o,
             Err(e) => {
                 let error = e.to_string();
@@ -1215,7 +1350,7 @@ impl Engine {
                     step_name: step.name.clone(),
                     step_type: step_type.into(),
                     error: error.clone(),
-                    duration_ms: start.elapsed().as_millis() as u64,
+                    duration_ms,
                     timestamp: Utc::now(),
                     sandboxed: false,
                 })
@@ -1243,7 +1378,7 @@ impl Engine {
         self.emit(Event::StepCompleted {
             step_name: step.name.clone(),
             step_type: step_type.into(),
-            duration_ms: start.elapsed().as_millis() as u64,
+            duration_ms,
             timestamp: Utc::now(),
             input_tokens: output.input_tokens,
             output_tokens: output.output_tokens,
@@ -1502,10 +1637,18 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
     })
 }
 
-/// Which branch of the `step` loop's `tokio::select!` fired first.
-enum StepSelection {
+/// Which branch of a step-level `tokio::select!` fired first.
+///
+/// Generic over the payload `T` so both cmd and agent can share this
+/// enum: cmd instantiates it with `Result<ExecOutput, SandboxError>`
+/// (the sandbox executor's return), agent with
+/// `Result<AgentExecOutput, AgentExecError>` (the Claude CLI spawner's
+/// return). The three control-plane branches (cancel/timeout/signal)
+/// do not carry a payload and are identical across step kinds, so
+/// keeping them here removes two otherwise-identical enums.
+enum StepSelection<T> {
     /// The executor returned a result (either `Ok(output)` or `Err(e)`).
-    Done(Result<stepyard_sandbox_orchestrator::ExecOutput, stepyard_sandbox_orchestrator::SandboxError>),
+    Done(T),
     /// The cancel token was flipped mid-step.
     Cancelled,
     /// The configured wall-clock timeout elapsed before the executor returned.
