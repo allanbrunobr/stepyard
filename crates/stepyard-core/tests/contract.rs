@@ -57,6 +57,7 @@ fn step_completed_omits_optional_fields_when_none() {
         output: None,
         scope_context: None,
         gate_outcome: None,
+        agent_session_id: None,
     };
     let value: serde_json::Value = serde_json::to_value(&event).unwrap();
     let obj = value.as_object().unwrap();
@@ -71,6 +72,9 @@ fn step_completed_omits_optional_fields_when_none() {
     // gate_outcome must stay absent on the wire when None.
     assert!(!obj.contains_key("scope_context"));
     assert!(!obj.contains_key("gate_outcome"));
+    // PR 5a of Task #31 adds `agent_session_id` — same omit-when-None
+    // contract so pre-PR-5a subscribers continue to see identical JSON.
+    assert!(!obj.contains_key("agent_session_id"));
     assert_eq!(obj["sandboxed"], json!(false));
 }
 
@@ -93,6 +97,7 @@ fn step_completed_with_output_snapshot_roundtrips() {
         }),
         scope_context: None,
         gate_outcome: None,
+        agent_session_id: None,
     };
 
     let value = serde_json::to_value(&original).unwrap();
@@ -177,6 +182,7 @@ fn step_completed_with_scope_context_and_gate_outcome_roundtrips() {
             position: 2,
         }),
         gate_outcome: Some(GateOutcome::Skip),
+        agent_session_id: None,
     };
     let value = serde_json::to_value(&original).unwrap();
     assert_eq!(value["gate_outcome"], json!("skip"));
@@ -287,6 +293,79 @@ fn legacy_step_completed_without_pr3_fields_deserializes() {
             gate_outcome: None,
             ..
         } => assert_eq!(step_name, "x"),
+        other => panic!("legacy step_completed must deserialize: {other:?}"),
+    }
+}
+
+// ── PR 5a of #31 — agent_session_id wire-shape lock ─────────────────────
+
+#[test]
+fn step_completed_with_agent_session_id_roundtrips() {
+    // Emitted by an `agent` step that captured a Claude CLI `session_id`
+    // from its streaming JSON. The field must surface on the wire so
+    // `progress_from_log` can rebuild the shared/isolated resume chain
+    // from the session log alone (Invariante 11 — no per-process
+    // in-memory state between steps).
+    let ts = chrono::Utc.with_ymd_and_hms(2026, 4, 21, 12, 0, 0).unwrap();
+    let original = Event::StepCompleted {
+        step_name: "review".into(),
+        step_type: "agent".into(),
+        duration_ms: 1_234,
+        timestamp: ts,
+        input_tokens: Some(100),
+        output_tokens: Some(250),
+        cost_usd: Some(0.0042),
+        sandboxed: false,
+        output: Some(StepOutputSnapshot {
+            stdout: "response text".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        }),
+        scope_context: None,
+        gate_outcome: None,
+        agent_session_id: Some("ses_abc123".into()),
+    };
+
+    let value = serde_json::to_value(&original).unwrap();
+    assert_eq!(value["agent_session_id"], json!("ses_abc123"));
+
+    let back: Event = serde_json::from_value(value).unwrap();
+    match back {
+        Event::StepCompleted {
+            agent_session_id: Some(id),
+            step_type,
+            ..
+        } => {
+            assert_eq!(id, "ses_abc123");
+            assert_eq!(step_type, "agent");
+        }
+        other => panic!("roundtrip produced unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn legacy_step_completed_without_agent_session_id_deserializes() {
+    // A pre-PR-5a log entry — no `agent_session_id` key — must still
+    // deserialize so sessions logged before the widening (including the
+    // PR 2 / PR 3 shapes) replay cleanly. The absent field maps to
+    // `None`.
+    let legacy = json!({
+        "event": "step_completed",
+        "step_name": "review",
+        "step_type": "agent",
+        "duration_ms": 1_000,
+        "timestamp": "2026-04-15T12:00:00Z",
+        "sandboxed": false,
+        "input_tokens": 50,
+        "output_tokens": 120
+    });
+    let back: Event = serde_json::from_value(legacy).unwrap();
+    match back {
+        Event::StepCompleted {
+            step_name,
+            agent_session_id: None,
+            ..
+        } => assert_eq!(step_name, "review"),
         other => panic!("legacy step_completed must deserialize: {other:?}"),
     }
 }

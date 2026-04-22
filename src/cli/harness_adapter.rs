@@ -34,13 +34,20 @@
 //! event variant. The script step's source lives in the YAML `run:` field,
 //! reusing the same slot as cmd (v1 parity, `src/steps/script.rs`).
 //!
+//! PR 5a of Task #31 adds `agent` — translates the v1 `config` bag
+//! (`model` / `system_prompt_append` / `permissions` / `resume` /
+//! `fork_session` / `session`) into the typed fields the harness now
+//! exposes on [`stepyard_harness::Step`]. Top-level only; scoped agent
+//! bodies stay rejected by [`AdapterError::ScopedStepUnsupported`] until
+//! a later PR widens scope-body dispatch.
+//!
 //! Executors for `call` / `repeat` / `map` landed in the scope-runner commit.
-//! Kinds not yet executable (`agent` / `chat` / `parallel`)
-//! continue to fail with [`AdapterError::UnsupportedStepType`].
+//! Kinds not yet executable (`chat` / `parallel`) continue to fail with
+//! [`AdapterError::UnsupportedStepType`].
 
 use std::collections::{HashMap, HashSet};
 
-use stepyard_harness::{Scope, Step, Workflow};
+use stepyard_harness::{AgentPermissions, AgentSessionMode, Scope, Step, Workflow};
 
 use crate::workflow::schema::{ScopeDef, StepDef, StepType, WorkflowDef};
 
@@ -130,6 +137,35 @@ pub enum AdapterError {
         field: &'static str,
         error: String,
     },
+
+    #[error("agent step `{name}` is missing `prompt:`")]
+    AgentMissingPrompt { name: String },
+
+    #[error(
+        "agent step `{name}` has non-string `config.{key}` — expected a \
+         quoted string (v1 parity: agent fields are always strings in the \
+         legacy config bag)"
+    )]
+    AgentConfigNotString { name: String, key: &'static str },
+
+    #[error(
+        "agent step `{name}` declares both `resume:` and `fork_session:` — \
+         pick one (v2 adapter rejects the combination explicitly; v1 \
+         silently appended `--resume` twice)"
+    )]
+    AgentResumeAndForkConflict { name: String },
+
+    #[error(
+        "agent step `{name}` has `config.permissions=\"{value}\"` — \
+         expected `default` or `skip`"
+    )]
+    AgentInvalidPermissions { name: String, value: String },
+
+    #[error(
+        "agent step `{name}` has `config.session=\"{value}\"` — \
+         expected `shared` or `isolated`"
+    )]
+    AgentInvalidSession { name: String, value: String },
 }
 
 #[derive(Clone, Copy)]
@@ -213,6 +249,7 @@ fn adapt_step(
         StepType::Map => adapt_map(s, scope_names),
         StepType::Template => adapt_template(s),
         StepType::Script => adapt_script(s),
+        StepType::Agent => adapt_agent(s),
         other => Err(AdapterError::UnsupportedStepType {
             step_type: other.clone(),
         }),
@@ -273,6 +310,96 @@ fn adapt_template(s: &StepDef) -> Result<Step, AdapterError> {
     let mut step = Step::template(s.name.clone(), s.prompt.clone());
     step.env = s.env.clone();
     Ok(step)
+}
+
+fn adapt_agent(s: &StepDef) -> Result<Step, AdapterError> {
+    // Agent steps own the legacy `prompt:` typed field on `StepDef`; the
+    // harness's executor (PR 5a commit 3b) pipes it into the CLI's stdin.
+    let prompt = s
+        .prompt
+        .clone()
+        .filter(|p| !p.trim().is_empty())
+        .ok_or_else(|| AdapterError::AgentMissingPrompt {
+            name: s.name.clone(),
+        })?;
+
+    let mut step = Step::agent(s.name.clone(), prompt).with_env(s.env.clone());
+
+    // v1 surfaced agent knobs through the untyped `config:` bag
+    // (`src/workflow/schema.rs:128`). Translate the seven string keys the
+    // executor cares about (model, system_prompt_append, permissions,
+    // resume, fork_session, session, command) into typed fields so the
+    // v2 harness can stay YAML-unaware.
+    step.model = agent_config_str(s, "model")?.map(String::from);
+    step.system_prompt_append =
+        agent_config_str(s, "system_prompt_append")?.map(String::from);
+
+    if let Some(value) = agent_config_str(s, "permissions")? {
+        step.permissions = Some(parse_agent_permissions(&s.name, value)?);
+    }
+
+    let resume = agent_config_str(s, "resume")?.map(String::from);
+    let fork = agent_config_str(s, "fork_session")?.map(String::from);
+    if resume.is_some() && fork.is_some() {
+        return Err(AdapterError::AgentResumeAndForkConflict {
+            name: s.name.clone(),
+        });
+    }
+    step.resume = resume;
+    step.fork_session = fork;
+
+    if let Some(value) = agent_config_str(s, "session")? {
+        step.agent_session = Some(parse_agent_session(&s.name, value)?);
+    }
+
+    // v1 parity for the CLI binary path — `config.command` (default
+    // `"claude"`) at `src/steps/agent.rs:24`. Preserves workflows that
+    // point at a wrapper, mock, path-pinned claude, or corporate script.
+    // Absent = executor falls back to `"claude"` at spawn time.
+    step.agent_command = agent_config_str(s, "command")?.map(String::from);
+
+    Ok(step)
+}
+
+/// Looks up a string key in the v1 `config:` bag, erroring if the value
+/// exists but is not a string scalar. Matches v1's
+/// `StepConfig::get_str` shape — v1 silently returned `None` on
+/// non-string payloads; v2 surfaces the mismatch so operators don't ship
+/// a misspelled YAML shape that silently ignores a flag.
+fn agent_config_str<'a>(s: &'a StepDef, key: &'static str) -> Result<Option<&'a str>, AdapterError> {
+    match s.config.get(key) {
+        None | Some(serde_yaml::Value::Null) => Ok(None),
+        Some(serde_yaml::Value::String(v)) => Ok(Some(v.as_str())),
+        Some(_) => Err(AdapterError::AgentConfigNotString {
+            name: s.name.clone(),
+            key,
+        }),
+    }
+}
+
+fn parse_agent_permissions(
+    step_name: &str,
+    value: &str,
+) -> Result<AgentPermissions, AdapterError> {
+    match value {
+        "default" => Ok(AgentPermissions::Default),
+        "skip" => Ok(AgentPermissions::Skip),
+        other => Err(AdapterError::AgentInvalidPermissions {
+            name: step_name.to_string(),
+            value: other.to_string(),
+        }),
+    }
+}
+
+fn parse_agent_session(step_name: &str, value: &str) -> Result<AgentSessionMode, AdapterError> {
+    match value {
+        "shared" => Ok(AgentSessionMode::Shared),
+        "isolated" => Ok(AgentSessionMode::Isolated),
+        other => Err(AdapterError::AgentInvalidSession {
+            name: step_name.to_string(),
+            value: other.to_string(),
+        }),
+    }
 }
 
 fn adapt_script(s: &StepDef) -> Result<Step, AdapterError> {
@@ -547,13 +674,13 @@ steps:
 
     #[test]
     fn rejects_still_unsupported_step_type() {
-        // `repeat` / `map` / `call` now adapt; pick a kind that still has
-        // no executor in PR 3 of #31.
+        // `agent` joined the executable list in PR 5a of #31; `chat` and
+        // `parallel` remain. Pick `chat` so the test keeps its shape.
         let yaml = r#"
-name: adapter-reject-agent
+name: adapter-reject-chat
 steps:
-  - name: think
-    type: agent
+  - name: ask
+    type: chat
     prompt: "hello"
 "#;
         let file = write_tmp(yaml);
@@ -561,7 +688,7 @@ steps:
         let err = adapt(&def).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not yet supported"), "msg={msg}");
-        assert!(msg.contains("agent"), "msg={msg}");
+        assert!(msg.contains("chat"), "msg={msg}");
     }
 
     #[test]
@@ -935,6 +1062,300 @@ scopes:
                     ref value,
                     ..
                 } if value == "explode"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_agent_step_translating_config_bag_to_typed_fields() {
+        let yaml = r#"
+name: adapter-agent
+steps:
+  - name: plan
+    type: agent
+    prompt: "Summarize {{ target }}"
+    config:
+      model: claude-sonnet-4-6
+      system_prompt_append: "Be concise."
+      permissions: skip
+      session: isolated
+  - name: refine
+    type: agent
+    prompt: "Continue"
+    config:
+      resume: plan
+  - name: branch
+    type: agent
+    prompt: "Alt"
+    config:
+      fork_session: plan
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).unwrap();
+
+        assert_eq!(wf.steps.len(), 3);
+
+        let plan = &wf.steps[0];
+        assert_eq!(plan.kind, stepyard_harness::StepKind::Agent);
+        assert_eq!(plan.prompt.as_deref(), Some("Summarize {{ target }}"));
+        assert_eq!(plan.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(plan.system_prompt_append.as_deref(), Some("Be concise."));
+        assert_eq!(plan.permissions, Some(AgentPermissions::Skip));
+        assert_eq!(plan.agent_session, Some(AgentSessionMode::Isolated));
+        assert!(plan.resume.is_none());
+        assert!(plan.fork_session.is_none());
+
+        let refine = &wf.steps[1];
+        assert_eq!(refine.resume.as_deref(), Some("plan"));
+        assert!(refine.fork_session.is_none());
+
+        let branch = &wf.steps[2];
+        assert!(branch.resume.is_none());
+        assert_eq!(branch.fork_session.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn agent_defaults_to_no_typed_fields_when_config_bag_empty() {
+        // Smallest valid agent: just prompt. The six typed fields stay
+        // absent so the harness's executor falls back to its defaults.
+        let yaml = r#"
+name: agent-bare
+steps:
+  - name: ask
+    type: agent
+    prompt: "hi"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).unwrap();
+        let ask = &wf.steps[0];
+        assert_eq!(ask.kind, stepyard_harness::StepKind::Agent);
+        assert!(ask.model.is_none());
+        assert!(ask.system_prompt_append.is_none());
+        assert!(ask.permissions.is_none());
+        assert!(ask.resume.is_none());
+        assert!(ask.fork_session.is_none());
+        assert!(ask.agent_session.is_none());
+        assert!(ask.agent_command.is_none());
+    }
+
+    #[test]
+    fn agent_translates_config_command_to_typed_field() {
+        // v1 parity: `config.command` carries the CLI binary path
+        // (default "claude", but operators override with wrappers,
+        // path-pinned binaries, corporate scripts, or mocks). v2
+        // surfaces it as `step.agent_command`.
+        let yaml = r#"
+name: agent-with-command
+steps:
+  - name: ask
+    type: agent
+    prompt: "Hi"
+    config:
+      command: "/usr/local/bin/claude"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).unwrap();
+        assert_eq!(
+            wf.steps[0].agent_command.as_deref(),
+            Some("/usr/local/bin/claude")
+        );
+    }
+
+    #[test]
+    fn agent_rejects_non_string_config_command_value() {
+        // Mirrors `agent_rejects_non_string_config_value` for `model`:
+        // the same tightening applies to `command` so a misspelled
+        // YAML shape (`command: 42`) fails loudly instead of silently
+        // falling back to "claude" at spawn time.
+        let yaml = r#"
+name: agent-bad-command
+steps:
+  - name: weirdbin
+    type: agent
+    prompt: "hi"
+    config:
+      command: 42
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::AgentConfigNotString { ref name, key: "command" }
+                    if name == "weirdbin"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn agent_rejects_missing_prompt() {
+        let yaml = r#"
+name: agent-no-prompt
+steps:
+  - name: naked
+    type: agent
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::AgentMissingPrompt { ref name } if name == "naked"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn agent_rejects_blank_prompt() {
+        let yaml = r#"
+name: agent-blank-prompt
+steps:
+  - name: hollow
+    type: agent
+    prompt: "   "
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::AgentMissingPrompt { ref name } if name == "hollow"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn agent_rejects_resume_and_fork_simultaneously() {
+        let yaml = r#"
+name: agent-conflict
+steps:
+  - name: first
+    type: agent
+    prompt: "seed"
+  - name: two
+    type: agent
+    prompt: "both"
+    config:
+      resume: first
+      fork_session: first
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::AgentResumeAndForkConflict { ref name } if name == "two"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn agent_rejects_invalid_permissions_value() {
+        let yaml = r#"
+name: agent-bad-perms
+steps:
+  - name: weird
+    type: agent
+    prompt: "hi"
+    config:
+      permissions: superuser
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::AgentInvalidPermissions { ref name, ref value }
+                    if name == "weird" && value == "superuser"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn agent_rejects_invalid_session_value() {
+        let yaml = r#"
+name: agent-bad-session
+steps:
+  - name: weird
+    type: agent
+    prompt: "hi"
+    config:
+      session: sticky
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::AgentInvalidSession { ref name, ref value }
+                    if name == "weird" && value == "sticky"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn agent_rejects_non_string_config_value() {
+        // v2 tightens v1's silent `None` fallback on non-string config
+        // entries — misspelled YAML shapes surface as adapter errors.
+        let yaml = r#"
+name: agent-non-string-config
+steps:
+  - name: wonky
+    type: agent
+    prompt: "hi"
+    config:
+      model: 42
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::AgentConfigNotString { ref name, key: "model" }
+                    if name == "wonky"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn agent_rejected_inside_scope_body_for_now() {
+        // Scoped agent dispatch lands in a follow-up; for PR 5a we
+        // restrict to top-level so the engine's session-map replay
+        // matches the top-level-only semantics asserted by the
+        // progress scan's `scoped_completion_with_agent_session_id_is_ignored`.
+        let yaml = r#"
+name: agent-in-scope
+steps:
+  - name: run
+    type: call
+    scope: body
+scopes:
+  body:
+    steps:
+      - name: inner
+        type: agent
+        prompt: "hi"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::ScopedStepUnsupported { ref inner_name, .. }
+                    if inner_name == "inner"
             ),
             "got {err:?}"
         );

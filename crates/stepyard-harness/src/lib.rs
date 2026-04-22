@@ -26,6 +26,7 @@
 //! ported in Story 2.4+. This deliberate scope cut keeps the contract
 //! (step/resume/cancel) provable with minimal surface area.
 
+mod agent_exec;
 mod defaults;
 mod engine;
 mod executor;
@@ -44,7 +45,7 @@ pub use engine::{
 pub use executor::StepExecutor;
 pub use gate::{GateAction, GateError, GateOutcome};
 pub use render::{render, RenderContext, RenderError};
-pub use workflow::{Scope, Step, StepKind, Workflow};
+pub use workflow::{AgentPermissions, AgentSessionMode, Scope, Step, StepKind, Workflow};
 
 // Re-export so callers matching on `EngineError::StepFailed.reason` don't
 // need to import minion-core directly (Story 1.4).

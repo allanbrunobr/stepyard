@@ -9,7 +9,7 @@ use std::time::Instant;
 use chrono::Utc;
 use stepyard_core::{Event, StepOutputSnapshot};
 use stepyard_sandbox_orchestrator::SandboxLifecycle;
-use stepyard_session::{Session, SessionError, SessionId, SessionStatus};
+use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
 use tokio::sync::broadcast;
 
 use crate::defaults::Defaults;
@@ -446,15 +446,28 @@ impl Engine {
                 .await;
         }
 
-        // Kinds other than Cmd/Gate/Call/Repeat/Map/Template/Script are
-        // still rejected at the adapter boundary. If an in-process caller
-        // constructs one anyway, emit a structured StepFailed instead
-        // of silently dispatching the cmd path — a typed "not yet
-        // supported" outcome is easier to debug than a command with an
-        // empty string.
+        // Agent dispatch: spawn the Claude CLI, pipe the rendered prompt
+        // to its stdin, parse the stream-json response, and lift
+        // usage/session_id onto the StepCompleted event. The session-id
+        // map plus first-wins capture come from `progress` so the argv
+        // builder's `resume:` / `fork_session:` / default-shared paths
+        // see the same state a replay would reconstruct. PR 5a of #31.
+        if matches!(step.kind, StepKind::Agent) {
+            let step_index = progress.completed_steps as u32;
+            return self
+                .run_agent_step(step, &progress, start, step_index)
+                .await;
+        }
+
+        // Kinds other than Cmd/Gate/Call/Repeat/Map/Template/Script/Agent
+        // are still rejected at the adapter boundary. If an in-process
+        // caller constructs one anyway, emit a structured StepFailed
+        // instead of silently dispatching the cmd path — a typed "not
+        // yet supported" outcome is easier to debug than a command with
+        // an empty string.
         if !matches!(step.kind, StepKind::Cmd) {
             let error = format!(
-                "step type `{step_type}` not yet supported in v2 engine — PR 4 of #31 ships cmd + gate + call/repeat/map + template + script"
+                "step type `{step_type}` not yet supported in v2 engine — PR 5a of #31 ships cmd + gate + call/repeat/map + template + script + agent"
             );
             self.emit(Event::StepFailed {
                 step_name: step.name.clone(),
@@ -709,6 +722,7 @@ impl Engine {
                     output: Some(snapshot.clone()),
                     scope_context,
                     gate_outcome: None,
+                    agent_session_id: None,
                 })
                 .await?;
                 Ok(CmdOutcome::Success(snapshot))
@@ -863,6 +877,7 @@ impl Engine {
                     output: None,
                     scope_context: None,
                     gate_outcome: Some(stepyard_core::GateOutcome::Continue),
+                    agent_session_id: None,
                 })
                 .await?;
                 Ok(StepOutcome::StepCompleted {
@@ -1004,6 +1019,7 @@ impl Engine {
             output: Some(snapshot),
             scope_context: None,
             gate_outcome: None,
+            agent_session_id: None,
         })
         .await?;
         Ok(StepOutcome::StepCompleted {
@@ -1072,6 +1088,306 @@ impl Engine {
             output: Some(snapshot),
             scope_context: None,
             gate_outcome: None,
+            agent_session_id: None,
+        })
+        .await?;
+        Ok(StepOutcome::StepCompleted {
+            step_name: step.name.clone(),
+        })
+    }
+
+    /// Execute a [`StepKind::Agent`] step — resolve env, render the
+    /// prompt against the current [`RenderContext`], spawn the Claude CLI
+    /// via [`crate::agent_exec::run_agent_step`] inside a four-arm
+    /// `tokio::select!`, and emit a unified `StepCompleted` carrying
+    /// `{ stdout: response, stderr: "", exit_code: 0 }` plus
+    /// `{ input_tokens, output_tokens, cost_usd, agent_session_id }` at
+    /// the event level. PR 5a of Task #31.
+    ///
+    /// The select mirrors [`Self::execute_cmd_with_select`] verbatim:
+    /// cancel / step-timeout / shutdown-broadcast / exec-done. The
+    /// control-plane branches emit the same terminal events and map to
+    /// the same outcomes as cmd, so replay, auditing, and external
+    /// consumers can't tell cmd from agent for a cancelled/signalled/
+    /// timed-out run:
+    ///
+    /// | Branch  | Events emitted                        | Return                                                       |
+    /// | ------- | ------------------------------------- | ------------------------------------------------------------ |
+    /// | Done(OK)| `StepCompleted`                       | `Ok(StepOutcome::StepCompleted)`                             |
+    /// | Done(Err)| `StepFailed`                         | `Ok(StepOutcome::StepFailed)`                                |
+    /// | Cancel  | `StepFailed` (Cancelled)              | `Ok(StepOutcome::Cancelled)`                                 |
+    /// | Signal  | `SignalReceived` + `StepFailed`       | `Err(EngineError::StepFailed { SignalReceived })`            |
+    /// | Timeout | `StepTimeoutFired` + `StepFailed`     | `Err(EngineError::StepFailed { StepTimeout { configured_ms } })` |
+    ///
+    /// `step_index` is read verbatim by `StepTimeoutFired.step_index`
+    /// and by the `EngineError::StepFailed` returned on timeout/signal;
+    /// the caller is expected to pass the top-level index
+    /// (`progress.completed_steps as u32`).
+    ///
+    /// Replay is the same story as every other step: once the session log
+    /// holds a terminal event for this step, [`Self::progress_from_log`]
+    /// advances past it and the runner never re-enters this method. That
+    /// is how the log's first-wins `first_agent_session_id` capture
+    /// survives a crash — the event with the captured `agent_session_id`
+    /// is durable before we return.
+    async fn run_agent_step(
+        &mut self,
+        step: &Step,
+        progress: &Progress,
+        start: Instant,
+        step_index: u32,
+    ) -> Result<StepOutcome, EngineError> {
+        let step_type = step_type_label(&step.kind);
+
+        // Env resolution: fail-fast on unresolved `${VAR}` (Story 3.4 AC2),
+        // same contract as cmd. A missing host var is a user-config bug,
+        // not a runtime bug — stop the workflow instead of running the CLI
+        // with a half-built env.
+        let resolved_env = match self.prepare_step(step) {
+            Ok(env) => env,
+            Err(e) => {
+                let error = e.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        // Adapter enforces `prompt: Some(_)` for agent kind
+        // (`cli::harness_adapter::AdapterError::AgentMissingPrompt`), so
+        // an absent prompt here means an in-process caller bypassed the
+        // adapter. Surface it as StepFailed rather than unwrapping —
+        // replay should show the breach, not panic.
+        let Some(prompt_template) = step.prompt.as_deref() else {
+            let error = format!(
+                "agent step `{}` has no prompt — the adapter should have rejected this at load time",
+                step.name
+            );
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error: error.clone(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            return Ok(StepOutcome::StepFailed {
+                step_name: step.name.clone(),
+                error,
+            });
+        };
+
+        let ctx = RenderContext {
+            steps: &progress.outputs,
+            target: &self.run_context.target,
+            vars: &self.run_context.vars,
+            scope: None,
+        };
+        let rendered_prompt = match render(prompt_template, &ctx) {
+            Ok(s) => s,
+            Err(e) => {
+                let error = format!("agent prompt render failed: {e}");
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        let state = crate::agent_exec::AgentSessionState {
+            agent_session_ids: &progress.agent_session_ids,
+            first_agent_session_id: progress.first_agent_session_id.as_deref(),
+        };
+
+        // Race the exec future against cancel / timeout / shutdown. Same
+        // shape as `execute_cmd_with_select` — keeping the two inline
+        // instead of factoring out a generic helper avoids dragging the
+        // battle-tested cmd path through the agent refactor's blast
+        // radius. `.kill_on_drop(true)` on the child inside `agent_exec`
+        // guarantees SIGKILL when any non-Done branch drops this future.
+        let cancel_token = self.cancel.clone();
+        let signal_slot = self.config.shutdown_signal.clone();
+        let step_timeout = step.timeout;
+        let selection = {
+            let exec_fut = crate::agent_exec::run_agent_step(
+                step,
+                &rendered_prompt,
+                &state,
+                &resolved_env,
+            );
+            let cancel_fut = async {
+                while !cancel_token.is_cancelled() {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            };
+            let timeout_fut = async {
+                match step_timeout {
+                    Some(ms) => tokio::time::sleep(std::time::Duration::from_millis(ms)).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let shutdown_rx = &mut self.shutdown_rx;
+            let shutdown_fut = shutdown_rx.recv();
+            tokio::pin!(exec_fut);
+            tokio::pin!(cancel_fut);
+            tokio::pin!(timeout_fut);
+            tokio::pin!(shutdown_fut);
+            tokio::select! {
+                r = &mut exec_fut => StepSelection::Done(r),
+                _ = &mut cancel_fut => StepSelection::Cancelled,
+                _ = &mut timeout_fut => StepSelection::TimedOut,
+                _ = &mut shutdown_fut => StepSelection::Signal(
+                    signal_slot
+                        .get()
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".into()),
+                ),
+            }
+        };
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Signal landed first. D5 emit-before-IO ordering: persist both
+        // facts to the session log before returning. Agent has no
+        // sandbox to destroy, so `sandboxed: false` and no lifecycle
+        // call — otherwise identical to cmd's signal arm.
+        if let StepSelection::Signal(ref signal) = selection {
+            let signal = signal.clone();
+            self.emit(Event::SignalReceived {
+                signal: signal.clone(),
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error: format!("Signal: {signal}"),
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_cancel().await?;
+            return Err(EngineError::StepFailed {
+                step_index,
+                reason: stepyard_core::TerminationReason::SignalReceived(signal),
+            });
+        }
+
+        // Timeout landed first. `step.timeout` is guaranteed Some here
+        // because the timeout arm used `std::future::pending` when it
+        // was None. Agent has no sandbox to destroy, so we skip the
+        // `lifecycle.destroy_by_session` call cmd makes.
+        if let StepSelection::TimedOut = selection {
+            let configured_ms = step.timeout.expect("TimedOut requires step.timeout.is_some()");
+            self.emit(Event::StepTimeoutFired {
+                step_index,
+                configured_ms,
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error: format!("step timed out after {configured_ms}ms"),
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            return Err(EngineError::StepFailed {
+                step_index,
+                reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
+            });
+        }
+
+        // Cancel landed mid-step.
+        let exec_result = match selection {
+            StepSelection::Done(r) => r,
+            StepSelection::Cancelled => {
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: "Cancelled".into(),
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_cancel().await?;
+                return Ok(StepOutcome::Cancelled);
+            }
+            StepSelection::TimedOut => unreachable!("handled above"),
+            StepSelection::Signal(_) => unreachable!("handled above"),
+        };
+
+        let output = match exec_result {
+            Ok(o) => o,
+            Err(e) => {
+                let error = e.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        // Snapshot follows the template/script convention: the unified
+        // `{ stdout, stderr, exit_code }` shape so `{{ steps.ask.stdout }}`
+        // resolves without a schema change. The child's actual process
+        // exit code intentionally does *not* leak here — v1 treats a
+        // non-zero exit with a captured response as SUCCESS (tool_use
+        // failure with a fallback response), and `agent_exec` has already
+        // honored that rule before returning an `Ok(_)`.
+        let snapshot = StepOutputSnapshot {
+            stdout: output.response,
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        self.emit(Event::StepCompleted {
+            step_name: step.name.clone(),
+            step_type: step_type.into(),
+            duration_ms,
+            timestamp: Utc::now(),
+            input_tokens: output.input_tokens,
+            output_tokens: output.output_tokens,
+            cost_usd: output.cost_usd,
+            sandboxed: false,
+            output: Some(snapshot),
+            scope_context: None,
+            gate_outcome: None,
+            agent_session_id: output.session_id,
         })
         .await?;
         Ok(StepOutcome::StepCompleted {
@@ -1090,84 +1406,7 @@ impl Engine {
 
     async fn progress_from_log(&self) -> Result<Progress, EngineError> {
         let events = self.session.replay().await?;
-        let mut completed = 0usize;
-        let mut has_failure = false;
-        let mut last_failed: Option<String> = None;
-        // Rebuild the top-level cross-step outputs map (PR 2 of Task #31)
-        // in the same scan as the progress counters — one pass of the log
-        // per `step()` call. PR 3 of Task #31 widens this to ignore
-        // `step_completed` events that carry a `scope_context`: those are
-        // scope-body steps and must NOT advance the top-level step index
-        // nor pollute the cross-step refs a later top-level template
-        // resolves. Scope bodies rebuild their own local snapshot map by
-        // re-scanning the log from within `scope.rs`.
-        let mut outputs: HashMap<String, StepOutputSnapshot> = HashMap::new();
-
-        for evt in events.iter() {
-            let Some(tag) = evt.payload.get("event").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            match tag {
-                "step_completed" => {
-                    // Scope-body completions carry a `scope_context` object;
-                    // top-level completions either omit the field (legacy
-                    // logs + PR 2 shape) or carry `null`. Short-circuit both
-                    // so the top-level counter only sees its own axis.
-                    let is_scoped = evt
-                        .payload
-                        .get("scope_context")
-                        .map(|v| !v.is_null())
-                        .unwrap_or(false);
-                    if is_scoped {
-                        continue;
-                    }
-                    completed += 1;
-                    let step_name = evt
-                        .payload
-                        .get("step_name")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string);
-                    // Absent `output` stays OK — that's how log entries
-                    // written before the PR 2 widening look, and how gate
-                    // steps (`output: None`) look today. Present but
-                    // malformed must fail loudly: this payload now
-                    // participates in replay correctness, so silently
-                    // dropping it would make a gate in the rerun see a
-                    // different context than the gate in the original
-                    // run — the exact invariant this PR establishes.
-                    let snapshot = match evt.payload.get("output") {
-                        None | Some(serde_json::Value::Null) => None,
-                        Some(raw) => Some(
-                            serde_json::from_value::<StepOutputSnapshot>(raw.clone())
-                                .map_err(|e| {
-                                    EngineError::InvalidState(format!(
-                                        "step_completed log entry has malformed `output` payload: {e}"
-                                    ))
-                                })?,
-                        ),
-                    };
-                    if let (Some(name), Some(snap)) = (step_name, snapshot) {
-                        outputs.insert(name, snap);
-                    }
-                }
-                "step_failed" => {
-                    has_failure = true;
-                    last_failed = evt
-                        .payload
-                        .get("step_name")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string);
-                }
-                _ => {}
-            }
-        }
-
-        Ok(Progress {
-            completed_steps: completed,
-            has_failure,
-            last_failed_step: last_failed,
-            outputs,
-        })
+        compute_progress(&events)
     }
 
     async fn finalise_success(&mut self) -> Result<(), EngineError> {
@@ -1235,6 +1474,7 @@ impl Engine {
     }
 }
 
+#[derive(Debug)]
 struct Progress {
     completed_steps: usize,
     has_failure: bool,
@@ -1245,12 +1485,170 @@ struct Progress {
     /// template pass over `command` is deferred to a later PR of #31).
     /// PR 2 of Task #31.
     outputs: HashMap<String, StepOutputSnapshot>,
+    /// Captured Claude CLI `session_id` keyed by top-level agent step
+    /// name, rebuilt on every scan. The v2 agent executor consumes this
+    /// to resolve explicit `resume: <step_name>` / `fork_session:
+    /// <step_name>` argv from the log alone — Invariante 11 means the
+    /// live-run `SessionManager` is gone after a crash, so the session
+    /// log is the only source of truth. PR 5a of Task #31.
+    ///
+    /// Only top-level completions contribute. Scope-nested agent steps
+    /// (`call` / `repeat` / `map` bodies) are intentionally skipped —
+    /// scope-aware session capture is a follow-up design question and
+    /// v1 never had scopes, so v1 parity is trivially preserved.
+    ///
+    /// Last-write-wins on duplicate step names. Workflow validation
+    /// rejects duplicates at the adapter boundary, so this branch is
+    /// unreachable in practice; the semantics here is just "don't
+    /// special-case it".
+    agent_session_ids: HashMap<String, String>,
+    /// First-wins top-level agent session_id, mirroring v1's
+    /// `SessionManager::capture` semantics. Consumed by the v2 agent
+    /// executor for the workflow-level `session: shared` default path:
+    /// the first successfully-completed agent step's session_id becomes
+    /// the workflow's shared session for every later agent that did not
+    /// name an explicit `resume:` / `fork_session:` target. PR 5a of
+    /// Task #31.
+    ///
+    /// `None` on a fresh log and on logs containing only non-agent
+    /// completions. Scope-nested completions do not contribute (see
+    /// [`Self::agent_session_ids`]).
+    first_agent_session_id: Option<String>,
 }
 
-/// Which branch of the `step` loop's `tokio::select!` fired first.
-enum StepSelection {
+/// Pure scan from a session's persisted events to replay state.
+///
+/// `progress_from_log` is a one-line delegate over this — factoring the
+/// parsing out lets the scan be unit-tested with hand-constructed
+/// [`SessionEvent`] values, without a Postgres-backed [`Session`].
+///
+/// Must stay pure: no IO, no time, no env. Every replay-relevant fact
+/// comes from `events`.
+fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
+    let mut completed = 0usize;
+    let mut has_failure = false;
+    let mut last_failed: Option<String> = None;
+    // Rebuild the top-level cross-step outputs map (PR 2 of Task #31)
+    // in the same scan as the progress counters — one pass of the log
+    // per `step()` call. PR 3 of Task #31 widens this to ignore
+    // `step_completed` events that carry a `scope_context`: those are
+    // scope-body steps and must NOT advance the top-level step index
+    // nor pollute the cross-step refs a later top-level template
+    // resolves. Scope bodies rebuild their own local snapshot map by
+    // re-scanning the log from within `scope.rs`.
+    let mut outputs: HashMap<String, StepOutputSnapshot> = HashMap::new();
+    // PR 5a of Task #31: per-step-name session_id map + first-wins
+    // workflow-level captured id. Populated from the same non-scoped
+    // `step_completed` arm as `outputs` — see the field docs on
+    // `Progress` for the v1-parity reasoning behind skipping scoped
+    // completions.
+    let mut agent_session_ids: HashMap<String, String> = HashMap::new();
+    let mut first_agent_session_id: Option<String> = None;
+
+    for evt in events.iter() {
+        let Some(tag) = evt.payload.get("event").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        match tag {
+            "step_completed" => {
+                // Scope-body completions carry a `scope_context` object;
+                // top-level completions either omit the field (legacy
+                // logs + PR 2 shape) or carry `null`. Short-circuit both
+                // so the top-level counter only sees its own axis.
+                let is_scoped = evt
+                    .payload
+                    .get("scope_context")
+                    .map(|v| !v.is_null())
+                    .unwrap_or(false);
+                if is_scoped {
+                    continue;
+                }
+                completed += 1;
+                let step_name = evt
+                    .payload
+                    .get("step_name")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                // Absent `output` stays OK — that's how log entries
+                // written before the PR 2 widening look, and how gate
+                // steps (`output: None`) look today. Present but
+                // malformed must fail loudly: this payload now
+                // participates in replay correctness, so silently
+                // dropping it would make a gate in the rerun see a
+                // different context than the gate in the original
+                // run — the exact invariant this PR establishes.
+                let snapshot = match evt.payload.get("output") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(raw) => Some(
+                        serde_json::from_value::<StepOutputSnapshot>(raw.clone())
+                            .map_err(|e| {
+                                EngineError::InvalidState(format!(
+                                    "step_completed log entry has malformed `output` payload: {e}"
+                                ))
+                            })?,
+                    ),
+                };
+                // Same strictness contract as `output`: absent is fine
+                // (legacy logs, non-agent steps), present-but-malformed
+                // fails loudly so a corrupted log can't produce a
+                // different resume argv than the live run.
+                let captured_session_id = match evt.payload.get("agent_session_id") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(raw) => Some(
+                        serde_json::from_value::<String>(raw.clone())
+                            .map_err(|e| {
+                                EngineError::InvalidState(format!(
+                                    "step_completed log entry has malformed `agent_session_id` payload: {e}"
+                                ))
+                            })?,
+                    ),
+                };
+                if let Some(name) = step_name {
+                    if let Some(snap) = snapshot {
+                        outputs.insert(name.clone(), snap);
+                    }
+                    if let Some(sid) = captured_session_id {
+                        if first_agent_session_id.is_none() {
+                            first_agent_session_id = Some(sid.clone());
+                        }
+                        agent_session_ids.insert(name, sid);
+                    }
+                }
+            }
+            "step_failed" => {
+                has_failure = true;
+                last_failed = evt
+                    .payload
+                    .get("step_name")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Progress {
+        completed_steps: completed,
+        has_failure,
+        last_failed_step: last_failed,
+        outputs,
+        agent_session_ids,
+        first_agent_session_id,
+    })
+}
+
+/// Which branch of a step-level `tokio::select!` fired first.
+///
+/// Generic over the payload `T` so both cmd and agent can share this
+/// enum: cmd instantiates it with `Result<ExecOutput, SandboxError>`
+/// (the sandbox executor's return), agent with
+/// `Result<AgentExecOutput, AgentExecError>` (the Claude CLI spawner's
+/// return). The three control-plane branches (cancel/timeout/signal)
+/// do not carry a payload and are identical across step kinds, so
+/// keeping them here removes two otherwise-identical enums.
+enum StepSelection<T> {
     /// The executor returned a result (either `Ok(output)` or `Err(e)`).
-    Done(Result<stepyard_sandbox_orchestrator::ExecOutput, stepyard_sandbox_orchestrator::SandboxError>),
+    Done(T),
     /// The cancel token was flipped mid-step.
     Cancelled,
     /// The configured wall-clock timeout elapsed before the executor returned.
@@ -1356,5 +1754,186 @@ fn parse_host_var(value: &str) -> Option<&str> {
         Some(inner)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    //! Unit tests for [`compute_progress`] — PR 5a of Task #31 adds the
+    //! per-step-name `agent_session_ids` map and first-wins
+    //! `first_agent_session_id` capture that the v2 agent executor
+    //! consumes to rebuild session resume argv after a crash.
+    //!
+    //! These hand-construct [`SessionEvent`]s so the scan can be tested
+    //! without a Postgres-backed [`Session`]. Integration coverage
+    //! through a full engine replay lands in a later commit alongside
+    //! `agent_exec.rs`.
+    use super::*;
+    use serde_json::json;
+    use stepyard_session::SessionId;
+    use uuid::Uuid;
+
+    fn evt(seq: i64, payload: serde_json::Value) -> SessionEvent {
+        SessionEvent {
+            id: Uuid::new_v4(),
+            session_id: SessionId::new(),
+            seq,
+            created_at: Utc::now(),
+            payload,
+        }
+    }
+
+    fn step_completed(step_name: &str, agent_session_id: Option<&str>) -> serde_json::Value {
+        let mut v = json!({
+            "event": "step_completed",
+            "step_name": step_name,
+            "step_type": "agent",
+            "duration_ms": 100,
+            "timestamp": "2026-04-20T00:00:00Z",
+            "sandboxed": false,
+        });
+        if let Some(sid) = agent_session_id {
+            v["agent_session_id"] = json!(sid);
+        }
+        v
+    }
+
+    #[test]
+    fn empty_log_yields_empty_session_state() {
+        let progress = compute_progress(&[]).expect("pure scan cannot fail on empty log");
+        assert_eq!(progress.completed_steps, 0);
+        assert!(progress.agent_session_ids.is_empty());
+        assert_eq!(progress.first_agent_session_id, None);
+    }
+
+    #[test]
+    fn single_agent_completion_populates_both_session_fields() {
+        let events = vec![evt(1, step_completed("review", Some("ses_abc")))];
+        let progress = compute_progress(&events).unwrap();
+        assert_eq!(progress.completed_steps, 1);
+        assert_eq!(
+            progress.agent_session_ids.get("review"),
+            Some(&"ses_abc".to_string())
+        );
+        assert_eq!(progress.first_agent_session_id, Some("ses_abc".into()));
+    }
+
+    #[test]
+    fn second_agent_step_preserves_first_wins_captured_id() {
+        // Mirrors v1's `SessionManager::capture` semantics: the first
+        // agent's session_id wins for workflow-level `session: shared`,
+        // regardless of how many agents run later.
+        let events = vec![
+            evt(1, step_completed("plan", Some("ses_one"))),
+            evt(2, step_completed("review", Some("ses_two"))),
+        ];
+        let progress = compute_progress(&events).unwrap();
+        assert_eq!(progress.first_agent_session_id, Some("ses_one".into()));
+        assert_eq!(
+            progress.agent_session_ids.get("plan"),
+            Some(&"ses_one".to_string())
+        );
+        assert_eq!(
+            progress.agent_session_ids.get("review"),
+            Some(&"ses_two".to_string())
+        );
+    }
+
+    #[test]
+    fn first_wins_survives_interleaved_non_agent_completions() {
+        let events = vec![
+            evt(1, step_completed("setup_cmd", None)),
+            evt(2, step_completed("first_agent", Some("ses_first"))),
+            evt(3, step_completed("middle_cmd", None)),
+            evt(4, step_completed("second_agent", Some("ses_second"))),
+        ];
+        let progress = compute_progress(&events).unwrap();
+        assert_eq!(progress.first_agent_session_id, Some("ses_first".into()));
+        assert_eq!(progress.agent_session_ids.len(), 2);
+    }
+
+    #[test]
+    fn completion_without_agent_session_id_does_not_pollute_session_maps() {
+        // Any completion lacking `agent_session_id` must flow through
+        // the scan without touching either session field. Covers both
+        // non-agent step kinds and agent completions that never produced
+        // a session id (e.g. early CLI failure before the `result` line).
+        let events = vec![evt(1, step_completed("build", None))];
+        let progress = compute_progress(&events).unwrap();
+        assert_eq!(progress.completed_steps, 1);
+        assert!(progress.agent_session_ids.is_empty());
+        assert_eq!(progress.first_agent_session_id, None);
+    }
+
+    #[test]
+    fn scoped_completion_with_agent_session_id_is_ignored() {
+        // Scope-nested agent captures don't contribute to the
+        // top-level session maps — locks the v1-parity-first scope
+        // documented on `Progress::agent_session_ids`. A future PR
+        // that adds scope-aware session semantics can lift this by
+        // widening the field, not by removing the guard.
+        let mut payload = step_completed("inner_agent", Some("ses_scoped"));
+        payload["scope_context"] = json!({
+            "container": "loop",
+            "iteration": 0,
+            "position": 0,
+        });
+        let events = vec![evt(1, payload)];
+        let progress = compute_progress(&events).unwrap();
+        assert_eq!(progress.completed_steps, 0);
+        assert!(progress.agent_session_ids.is_empty());
+        assert_eq!(progress.first_agent_session_id, None);
+    }
+
+    #[test]
+    fn legacy_log_without_agent_session_id_field_stays_clean() {
+        // Pre-PR-5a logs never carry `agent_session_id`. The scan must
+        // treat absence as `None` without error so replay across the
+        // version boundary just works.
+        let events = vec![evt(
+            1,
+            json!({
+                "event": "step_completed",
+                "step_name": "legacy",
+                "step_type": "cmd",
+                "duration_ms": 50,
+                "timestamp": "2026-04-15T00:00:00Z",
+                "sandboxed": false,
+            }),
+        )];
+        let progress = compute_progress(&events).unwrap();
+        assert_eq!(progress.completed_steps, 1);
+        assert!(progress.agent_session_ids.is_empty());
+        assert_eq!(progress.first_agent_session_id, None);
+    }
+
+    #[test]
+    fn malformed_agent_session_id_payload_errors_loudly() {
+        // A corrupted log row (non-string `agent_session_id`) must
+        // surface as `InvalidState` — silent drop would let a corrupt
+        // log produce a different resume argv than the live run,
+        // breaking the exact determinism this scan enforces.
+        let events = vec![evt(
+            1,
+            json!({
+                "event": "step_completed",
+                "step_name": "bad",
+                "step_type": "agent",
+                "duration_ms": 50,
+                "timestamp": "2026-04-20T00:00:00Z",
+                "sandboxed": false,
+                "agent_session_id": 42,
+            }),
+        )];
+        let err = compute_progress(&events).expect_err("numeric session_id must error");
+        match err {
+            EngineError::InvalidState(msg) => {
+                assert!(
+                    msg.contains("agent_session_id"),
+                    "error must name the malformed field, got: {msg}"
+                );
+            }
+            other => panic!("expected InvalidState, got {other:?}"),
+        }
     }
 }
