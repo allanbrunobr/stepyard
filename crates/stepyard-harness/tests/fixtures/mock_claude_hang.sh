@@ -27,7 +27,13 @@ trap 'exit 143' SIGTERM
 trap 'exit 130' SIGINT
 
 cat >/dev/null
-# `sleep infinity` is GNU-only; BSD `sleep` (macOS default) rejects it.
-# A big fixed number plus a loop keeps the mock alive past any realistic
-# test timeout on every platform CI runs on.
-while :; do sleep 3600; done
+# `exec sleep` (not a bash loop + child sleep) so the direct process the
+# harness spawned IS the sleep — `kill_on_drop(true)` only kills the
+# immediate child, so a `while … do sleep` loop leaves the `sleep`
+# grandchild alive after the bash wrapper dies. Replacing the shell with
+# sleep via `exec` collapses the tree to a single process.
+#
+# 3600 (= 1 h) is BSD/Linux-portable; `sleep infinity` is GNU-only and
+# BSD `sleep` (macOS default) rejects it. Any realistic test timeout is
+# far below 3600s.
+exec sleep 3600
