@@ -26,6 +26,7 @@
 //! ported in Story 2.4+. This deliberate scope cut keeps the contract
 //! (step/resume/cancel) provable with minimal surface area.
 
+mod agent_exec;
 mod defaults;
 mod engine;
 mod executor;

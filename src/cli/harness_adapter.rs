@@ -326,9 +326,10 @@ fn adapt_agent(s: &StepDef) -> Result<Step, AdapterError> {
     let mut step = Step::agent(s.name.clone(), prompt).with_env(s.env.clone());
 
     // v1 surfaced agent knobs through the untyped `config:` bag
-    // (`src/workflow/schema.rs:128`). Translate the six string keys the
-    // executor cares about into typed fields so the v2 harness can stay
-    // YAML-unaware.
+    // (`src/workflow/schema.rs:128`). Translate the seven string keys the
+    // executor cares about (model, system_prompt_append, permissions,
+    // resume, fork_session, session, command) into typed fields so the
+    // v2 harness can stay YAML-unaware.
     step.model = agent_config_str(s, "model")?.map(String::from);
     step.system_prompt_append =
         agent_config_str(s, "system_prompt_append")?.map(String::from);

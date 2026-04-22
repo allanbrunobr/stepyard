@@ -446,15 +446,28 @@ impl Engine {
                 .await;
         }
 
-        // Kinds other than Cmd/Gate/Call/Repeat/Map/Template/Script are
-        // still rejected at the adapter boundary. If an in-process caller
-        // constructs one anyway, emit a structured StepFailed instead
-        // of silently dispatching the cmd path — a typed "not yet
-        // supported" outcome is easier to debug than a command with an
-        // empty string.
+        // Agent dispatch: spawn the Claude CLI, pipe the rendered prompt
+        // to its stdin, parse the stream-json response, and lift
+        // usage/session_id onto the StepCompleted event. The session-id
+        // map plus first-wins capture come from `progress` so the argv
+        // builder's `resume:` / `fork_session:` / default-shared paths
+        // see the same state a replay would reconstruct. PR 5a of #31.
+        if matches!(step.kind, StepKind::Agent) {
+            let step_index = progress.completed_steps as u32;
+            return self
+                .run_agent_step(step, &progress, start, step_index)
+                .await;
+        }
+
+        // Kinds other than Cmd/Gate/Call/Repeat/Map/Template/Script/Agent
+        // are still rejected at the adapter boundary. If an in-process
+        // caller constructs one anyway, emit a structured StepFailed
+        // instead of silently dispatching the cmd path — a typed "not
+        // yet supported" outcome is easier to debug than a command with
+        // an empty string.
         if !matches!(step.kind, StepKind::Cmd) {
             let error = format!(
-                "step type `{step_type}` not yet supported in v2 engine — PR 4 of #31 ships cmd + gate + call/repeat/map + template + script"
+                "step type `{step_type}` not yet supported in v2 engine — PR 5a of #31 ships cmd + gate + call/repeat/map + template + script + agent"
             );
             self.emit(Event::StepFailed {
                 step_name: step.name.clone(),
@@ -1083,6 +1096,170 @@ impl Engine {
         })
     }
 
+    /// Execute a [`StepKind::Agent`] step — resolve env, render the
+    /// prompt against the current [`RenderContext`], spawn the Claude CLI
+    /// via [`crate::agent_exec::run_agent_step`], and emit a unified
+    /// `StepCompleted` carrying `{ stdout: response, stderr: "", exit_code: 0 }`
+    /// plus `{ input_tokens, output_tokens, cost_usd, agent_session_id }`
+    /// at the event level. PR 5a of Task #31.
+    ///
+    /// Replay is the same story as every other step: once the session log
+    /// holds a terminal event for this step, [`Self::progress_from_log`]
+    /// advances past it and the runner never re-enters this method. That
+    /// is how the log's first-wins `first_agent_session_id` capture
+    /// survives a crash — the event with the captured `agent_session_id`
+    /// is durable before we return.
+    async fn run_agent_step(
+        &mut self,
+        step: &Step,
+        progress: &Progress,
+        start: Instant,
+        _step_index: u32,
+    ) -> Result<StepOutcome, EngineError> {
+        let step_type = step_type_label(&step.kind);
+
+        // Env resolution: fail-fast on unresolved `${VAR}` (Story 3.4 AC2),
+        // same contract as cmd. A missing host var is a user-config bug,
+        // not a runtime bug — stop the workflow instead of running the CLI
+        // with a half-built env.
+        let resolved_env = match self.prepare_step(step) {
+            Ok(env) => env,
+            Err(e) => {
+                let error = e.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        // Adapter enforces `prompt: Some(_)` for agent kind
+        // (`cli::harness_adapter::AdapterError::AgentMissingPrompt`), so
+        // an absent prompt here means an in-process caller bypassed the
+        // adapter. Surface it as StepFailed rather than unwrapping —
+        // replay should show the breach, not panic.
+        let Some(prompt_template) = step.prompt.as_deref() else {
+            let error = format!(
+                "agent step `{}` has no prompt — the adapter should have rejected this at load time",
+                step.name
+            );
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error: error.clone(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            return Ok(StepOutcome::StepFailed {
+                step_name: step.name.clone(),
+                error,
+            });
+        };
+
+        let ctx = RenderContext {
+            steps: &progress.outputs,
+            target: &self.run_context.target,
+            vars: &self.run_context.vars,
+            scope: None,
+        };
+        let rendered_prompt = match render(prompt_template, &ctx) {
+            Ok(s) => s,
+            Err(e) => {
+                let error = format!("agent prompt render failed: {e}");
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        let state = crate::agent_exec::AgentSessionState {
+            agent_session_ids: &progress.agent_session_ids,
+            first_agent_session_id: progress.first_agent_session_id.as_deref(),
+        };
+        let output = match crate::agent_exec::run_agent_step(
+            step,
+            &rendered_prompt,
+            &state,
+            &resolved_env,
+        )
+        .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                let error = e.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        // Snapshot follows the template/script convention: the unified
+        // `{ stdout, stderr, exit_code }` shape so `{{ steps.ask.stdout }}`
+        // resolves without a schema change. The child's actual process
+        // exit code intentionally does *not* leak here — v1 treats a
+        // non-zero exit with a captured response as SUCCESS (tool_use
+        // failure with a fallback response), and `agent_exec` has already
+        // honored that rule before returning an `Ok(_)`.
+        let snapshot = StepOutputSnapshot {
+            stdout: output.response,
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        self.emit(Event::StepCompleted {
+            step_name: step.name.clone(),
+            step_type: step_type.into(),
+            duration_ms: start.elapsed().as_millis() as u64,
+            timestamp: Utc::now(),
+            input_tokens: output.input_tokens,
+            output_tokens: output.output_tokens,
+            cost_usd: output.cost_usd,
+            sandboxed: false,
+            output: Some(snapshot),
+            scope_context: None,
+            gate_outcome: None,
+            agent_session_id: output.session_id,
+        })
+        .await?;
+        Ok(StepOutcome::StepCompleted {
+            step_name: step.name.clone(),
+        })
+    }
+
     // ── Internals ───────────────────────────────────────────────────────
 
     pub(crate) async fn emit(&self, event: Event) -> Result<(), EngineError> {
@@ -1189,7 +1366,6 @@ struct Progress {
     /// rejects duplicates at the adapter boundary, so this branch is
     /// unreachable in practice; the semantics here is just "don't
     /// special-case it".
-    #[allow(dead_code, reason = "consumed by agent_exec.rs in the next commit of PR 5a")]
     agent_session_ids: HashMap<String, String>,
     /// First-wins top-level agent session_id, mirroring v1's
     /// `SessionManager::capture` semantics. Consumed by the v2 agent
@@ -1202,7 +1378,6 @@ struct Progress {
     /// `None` on a fresh log and on logs containing only non-agent
     /// completions. Scope-nested completions do not contribute (see
     /// [`Self::agent_session_ids`]).
-    #[allow(dead_code, reason = "consumed by agent_exec.rs in the next commit of PR 5a")]
     first_agent_session_id: Option<String>,
 }
 
