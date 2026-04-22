@@ -931,6 +931,13 @@ async fn nested_container_inside_scope_fails_on_outer_container() {
             parallel: None,
             outputs: None,
             prompt: None,
+            model: None,
+            system_prompt_append: None,
+            permissions: None,
+            resume: None,
+            fork_session: None,
+            agent_session: None,
+            agent_command: None,
         };
         let wf = workflow_with_scope(
             "nested-guard",

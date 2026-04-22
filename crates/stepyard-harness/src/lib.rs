@@ -44,7 +44,7 @@ pub use engine::{
 pub use executor::StepExecutor;
 pub use gate::{GateAction, GateError, GateOutcome};
 pub use render::{render, RenderContext, RenderError};
-pub use workflow::{Scope, Step, StepKind, Workflow};
+pub use workflow::{AgentPermissions, AgentSessionMode, Scope, Step, StepKind, Workflow};
 
 // Re-export so callers matching on `EngineError::StepFailed.reason` don't
 // need to import minion-core directly (Story 1.4).
