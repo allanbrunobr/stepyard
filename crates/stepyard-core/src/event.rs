@@ -81,6 +81,15 @@ pub enum Event {
         /// instead, so `fail` is not a valid `gate_outcome` value.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         gate_outcome: Option<GateOutcome>,
+        /// Claude CLI `session_id` captured from an `agent` step's
+        /// streaming JSON — persisted so a follow-up agent step with
+        /// `session: shared` / `isolated` can derive its `--resume` /
+        /// `--fork-session` argv from the session log alone (PR 5a of
+        /// Task #31). `None` for every other step kind and for every
+        /// log entry written before PR 5a, so existing JSON still
+        /// deserializes unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_session_id: Option<String>,
     },
     /// A step finished with an error.
     StepFailed {

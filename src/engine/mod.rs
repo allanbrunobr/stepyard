@@ -1082,11 +1082,14 @@ impl Engine {
                     // (PR 2 of Task #31); leaving it unset here keeps v1 events
                     // byte-identical to pre-widening output. Same argument
                     // applies to `scope_context` / `gate_outcome` (PR 3 of
-                    // Task #31) — v1 has its own scope bookkeeping and its
-                    // own gate path, so both stay `None` on the v1 event.
+                    // Task #31) and `agent_session_id` (PR 5a of Task #31) —
+                    // v1 has its own scope bookkeeping, gate path, and agent
+                    // session tracking via `Context`, so all stay `None` on
+                    // the v1 event.
                     output: None,
                     scope_context: None,
                     gate_outcome: None,
+                    agent_session_id: None,
                 })
                 .await
                 .map_err(|e| StepError::Fail(e.to_string()))?;

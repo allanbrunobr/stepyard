@@ -66,6 +66,43 @@ impl std::fmt::Display for StepKind {
     }
 }
 
+/// Claude CLI permission posture for [`StepKind::Agent`] steps. Maps to
+/// the absence/presence of `--dangerously-skip-permissions` on the child
+/// process argv (PR 5a of Task #31). Stored as a typed enum on [`Step`]
+/// — v1 carried this as a free-form string in its [`StepConfig`] bag
+/// (`"default"` / `"skip"`), which v2 tightens so unknown values fail at
+/// the adapter boundary rather than silently becoming the default.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPermissions {
+    /// Run the CLI with its standard permission prompts. No extra flags.
+    #[default]
+    Default,
+    /// Append `--dangerously-skip-permissions` to the CLI argv. Opt-in
+    /// only; the adapter never infers this.
+    Skip,
+}
+
+/// Workflow-level session mode for [`StepKind::Agent`] steps that don't
+/// declare explicit `resume:` / `fork_session:` (PR 5a of Task #31).
+/// Mirrors v1's `session:` YAML key (`"shared"` / `"isolated"`). When
+/// [`Self::Shared`], the executor feeds the first captured
+/// `agent_session_id` from the session log via `--resume`; when
+/// [`Self::Isolated`], each agent step starts fresh.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionMode {
+    /// Continue the workflow's shared session. Default when the field is
+    /// absent — matches v1's `SessionManager` first-wins semantics.
+    #[default]
+    Shared,
+    /// Start a brand new session for this step. No `--resume` args are
+    /// derived from the session log.
+    Isolated,
+}
+
 /// A complete workflow definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workflow {
@@ -197,12 +234,73 @@ pub struct Step {
     /// scope-body step's output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outputs: Option<String>,
-    /// [`StepKind::Template`] only: Tera expression rendered once to
-    /// produce the prompt-file basename. Absent → fall back to
-    /// `step.name`. Two-pass render matches v1
-    /// `src/steps/template_step.rs:32-36`. PR 4 of Task #31.
+    /// Dual-use prompt field. [`StepKind::Template`]: Tera expression
+    /// rendered once to produce the prompt-file basename (absent → fall
+    /// back to `step.name`, two-pass render matches v1
+    /// `src/steps/template_step.rs:32-36`, PR 4 of Task #31).
+    /// [`StepKind::Agent`]: inline prompt piped to the Claude CLI's
+    /// stdin (v1 parity with `StepDef.prompt` at
+    /// `src/workflow/schema.rs:106`, required by the adapter for agent
+    /// steps, PR 5a of Task #31).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// [`StepKind::Agent`] only: Claude CLI model override, threaded to
+    /// `--model <value>` on the child process argv. v1 parity with
+    /// `config.get_str("model")` in `src/steps/agent.rs:28-30`. Absent
+    /// = CLI default. PR 5a of Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// [`StepKind::Agent`] only: appended to the system prompt via
+    /// `--append-system-prompt <value>`. v1 parity with
+    /// `src/steps/agent.rs:31-33`. Absent = no append. PR 5a of #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_append: Option<String>,
+    /// [`StepKind::Agent`] only: permission posture for the child CLI.
+    /// `None` or `Some(Default)` = no extra flag; `Some(Skip)` appends
+    /// `--dangerously-skip-permissions`. v1 parity with
+    /// `config.get_str("permissions") == Some("skip")` at
+    /// `src/steps/agent.rs:34-36`. PR 5a of #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<AgentPermissions>,
+    /// [`StepKind::Agent`] only: name of a prior agent step whose
+    /// captured `agent_session_id` the executor resolves (from the
+    /// session log) and passes via `--resume <id>`. v1 parity with
+    /// `config.get_str("resume")` + `lookup_session_id` at
+    /// `src/steps/agent.rs:39-43`. Mutually exclusive with
+    /// `fork_session` at the adapter boundary. PR 5a of #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
+    /// [`StepKind::Agent`] only: name of a prior agent step whose
+    /// `agent_session_id` the executor uses to fork a new session
+    /// (`--fork-session --resume <id>`). v1 parity with
+    /// `config.get_str("fork_session")` at `src/steps/agent.rs:46-50`
+    /// (v1 used the bare `--resume`; v2 emits `--fork-session` too so
+    /// the argv reflects the semantic intent). Mutually exclusive with
+    /// `resume` at the adapter boundary. PR 5a of #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_session: Option<String>,
+    /// [`StepKind::Agent`] only: workflow-level session mode applied
+    /// when no explicit `resume:` / `fork_session:` is set. `None` =
+    /// [`AgentSessionMode::Shared`] (v1 default). v1 parity with
+    /// `config.get_str("session") == Some("isolated")` at
+    /// `src/steps/agent.rs:55`. PR 5a of #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session: Option<AgentSessionMode>,
+    /// [`StepKind::Agent`] only: path (or PATH-resolvable name) of the
+    /// Claude CLI binary the executor spawns. `None` = fall back to
+    /// `"claude"`. v1 parity with `config.get_str("command")` at
+    /// `src/steps/agent.rs:24`; this keeps workflows that point at a
+    /// wrapper, path-pinned binary, corporate script, or mock CLI
+    /// (integration tests) working unchanged on v2.
+    ///
+    /// Deliberately named `agent_command` rather than reusing
+    /// [`Self::command`] — the latter is the shell source for
+    /// [`StepKind::Cmd`] and the Rhai source for [`StepKind::Script`];
+    /// reusing it for the agent binary path would conflate two
+    /// unrelated semantic axes and make YAML serialization ambiguous.
+    /// PR 5a of Task #31.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_command: Option<String>,
 }
 
 impl Step {
@@ -267,6 +365,17 @@ impl Step {
         step
     }
 
+    /// Constructor for a [`StepKind::Agent`] step — invokes the Claude CLI
+    /// with `prompt` piped over stdin. Additional knobs (`model`,
+    /// `system_prompt_append`, `permissions`, `resume`, `fork_session`,
+    /// `agent_session`) land via direct field assignment on the returned
+    /// `Step`. PR 5a of Task #31.
+    pub fn agent(name: impl Into<String>, prompt: impl Into<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Agent);
+        step.prompt = Some(prompt.into());
+        step
+    }
+
     fn empty(name: impl Into<String>, kind: StepKind) -> Self {
         Self {
             name: name.into(),
@@ -285,6 +394,13 @@ impl Step {
             parallel: None,
             outputs: None,
             prompt: None,
+            model: None,
+            system_prompt_append: None,
+            permissions: None,
+            resume: None,
+            fork_session: None,
+            agent_session: None,
+            agent_command: None,
         }
     }
 
@@ -509,5 +625,151 @@ scopes:
             back.steps[2].items.as_deref(),
             Some("{{ steps.list.stdout }}")
         );
+    }
+
+    #[test]
+    fn agent_fields_roundtrip_through_yaml() {
+        let yaml = r#"
+name: with-agent
+steps:
+  - name: plan
+    type: agent
+    prompt: "Summarize {{ target }}"
+    model: claude-sonnet-4-6
+    system_prompt_append: "Be concise."
+    permissions: skip
+    agent_session: isolated
+  - name: refine
+    type: agent
+    prompt: "Continue from plan"
+    resume: plan
+  - name: branch
+    type: agent
+    prompt: "Try alternative"
+    fork_session: plan
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(wf.steps.len(), 3);
+
+        let plan = &wf.steps[0];
+        assert_eq!(plan.kind, StepKind::Agent);
+        assert_eq!(plan.prompt.as_deref(), Some("Summarize {{ target }}"));
+        assert_eq!(plan.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(plan.system_prompt_append.as_deref(), Some("Be concise."));
+        assert_eq!(plan.permissions, Some(AgentPermissions::Skip));
+        assert_eq!(plan.agent_session, Some(AgentSessionMode::Isolated));
+        assert!(plan.resume.is_none());
+        assert!(plan.fork_session.is_none());
+
+        let refine = &wf.steps[1];
+        assert_eq!(refine.resume.as_deref(), Some("plan"));
+        assert!(refine.fork_session.is_none());
+
+        let branch = &wf.steps[2];
+        assert!(branch.resume.is_none());
+        assert_eq!(branch.fork_session.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn agent_permissions_default_variant_roundtrips() {
+        let yaml = r#"
+name: agent-default-perms
+steps:
+  - name: ask
+    type: agent
+    prompt: "Hi"
+    permissions: default
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(wf.steps[0].permissions, Some(AgentPermissions::Default));
+    }
+
+    #[test]
+    fn cmd_step_omits_agent_fields_from_serialized_output() {
+        // Backward-compat mirror of the earlier gate/container guards:
+        // cmd steps must not leak any of the six agent fields added in
+        // PR 5a of #31 onto the wire, otherwise existing workflow
+        // round-trips would gain noise.
+        let step = Step::cmd("s", "true");
+        let yaml = serde_yaml::to_string(&step).unwrap();
+        for field in [
+            "model:",
+            "system_prompt_append:",
+            "permissions:",
+            "resume:",
+            "fork_session:",
+            "agent_session:",
+            "agent_command:",
+        ] {
+            assert!(
+                !yaml.contains(field),
+                "cmd step leaked `{field}` onto the wire: {yaml}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_command_roundtrips_through_yaml() {
+        // v1 parity: `config.command` in the legacy agent bag carries the
+        // CLI binary path (wrapper, mock, path-pinned claude). v2 promotes
+        // it to a typed top-level field on agent steps — this guards the
+        // serde roundtrip in both directions.
+        let yaml = r#"
+name: with-agent-command
+steps:
+  - name: ask
+    type: agent
+    prompt: "Hi"
+    agent_command: "/usr/local/bin/claude"
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            wf.steps[0].agent_command.as_deref(),
+            Some("/usr/local/bin/claude")
+        );
+
+        let back = serde_yaml::to_string(&wf).unwrap();
+        assert!(
+            back.contains("agent_command: /usr/local/bin/claude"),
+            "agent_command must be serialized back: {back}"
+        );
+    }
+
+    #[test]
+    fn agent_command_absent_by_default_on_agent_constructor() {
+        // Defensive: the `Step::agent` constructor must not coerce a
+        // default binary string — absent-equals-fall-back is what the
+        // executor enforces at spawn time.
+        let step = Step::agent("ask", "Hi");
+        assert!(step.agent_command.is_none());
+    }
+
+    #[test]
+    fn agent_constructor_roundtrips_through_serde() {
+        let mut step = Step::agent("plan", "Summarize {{ target }}");
+        step.model = Some("claude-sonnet-4-6".into());
+        step.resume = Some("prior".into());
+        step.agent_session = Some(AgentSessionMode::Isolated);
+
+        let wf = Workflow::new("ctor", vec![step]);
+        let yaml = serde_yaml::to_string(&wf).unwrap();
+        let back: Workflow = serde_yaml::from_str(&yaml).unwrap();
+
+        let s = &back.steps[0];
+        assert_eq!(s.kind, StepKind::Agent);
+        assert_eq!(s.prompt.as_deref(), Some("Summarize {{ target }}"));
+        assert_eq!(s.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(s.resume.as_deref(), Some("prior"));
+        assert_eq!(s.agent_session, Some(AgentSessionMode::Isolated));
+    }
+
+    #[test]
+    fn agent_session_mode_default_is_shared() {
+        assert_eq!(AgentSessionMode::default(), AgentSessionMode::Shared);
+    }
+
+    #[test]
+    fn agent_permissions_default_is_default_variant() {
+        assert_eq!(AgentPermissions::default(), AgentPermissions::Default);
     }
 }
