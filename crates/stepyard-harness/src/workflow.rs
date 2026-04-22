@@ -6,10 +6,14 @@
 //! gate-specific fields (`condition` / `on_pass` / `on_fail` / `message`);
 //! PR 3 adds the container fields (`scope` / `max_iterations` / `items` /
 //! `parallel` / `initial_value` / `outputs`) that `call` / `repeat` / `map`
-//! need, plus the scope runner that executes them. **Executable kinds
-//! today:** `cmd`, `gate`, `call`, `repeat`, `map`, `template`, `script`.
-//! Other kinds (`agent` / `chat` / `parallel`) still round-trip through
-//! serde but are rejected by the CLI adapter
+//! need, plus the scope runner that executes them. PR 5a wires the
+//! Claude-CLI agent executor; PR 5b adds the chat-step data model
+//! (`chat_provider` / `max_tokens` / `temperature` / `api_key_env` /
+//! `base_url` / `chat_session` / `truncation`), with the rig-core
+//! runtime landing in a follow-up PR. **Executable kinds today:**
+//! `cmd`, `gate`, `call`, `repeat`, `map`, `template`, `script`,
+//! `agent`. Remaining kinds (`chat` / `parallel`) still round-trip
+//! through serde but are rejected by the CLI adapter
 //! (`src/cli/harness_adapter.rs`).
 
 use std::collections::HashMap;
@@ -20,9 +24,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// Executable today: [`StepKind::Cmd`], [`StepKind::Gate`], [`StepKind::Call`],
 /// [`StepKind::Repeat`], [`StepKind::Map`], [`StepKind::Template`],
-/// [`StepKind::Script`]. The remaining variants (`Agent` / `Chat` /
-/// `Parallel`) round-trip through serde but are rejected at the CLI
-/// adapter boundary until follow-up PRs wire each executor.
+/// [`StepKind::Script`], [`StepKind::Agent`]. The remaining variants
+/// (`Chat` / `Parallel`) round-trip through serde but are rejected at
+/// the CLI adapter boundary until follow-up PRs wire each executor
+/// (the chat-step data model landed in PR 5b of Task #31 — runtime
+/// arrives in a follow-up).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepKind {
@@ -317,10 +323,13 @@ pub struct Step {
     /// PR 5b of Task #31).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    /// [`StepKind::Agent`] only: Claude CLI model override, threaded to
-    /// `--model <value>` on the child process argv. v1 parity with
-    /// `config.get_str("model")` in `src/steps/agent.rs:28-30`. Absent
-    /// = CLI default. PR 5a of Task #31.
+    /// Model override shared by [`StepKind::Agent`] and [`StepKind::Chat`].
+    /// For agent steps, threaded to `--model <value>` on the Claude CLI
+    /// argv (v1 parity with `config.get_str("model")` at
+    /// `src/steps/agent.rs:28-30`, PR 5a of Task #31). For chat steps,
+    /// forwarded to the selected rig-core provider's model parameter —
+    /// absent = per-provider default resolved at the adapter boundary
+    /// (PR 5b of Task #31). Left `None` for every other kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// [`StepKind::Agent`] only: appended to the system prompt via
