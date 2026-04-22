@@ -1147,6 +1147,7 @@ impl Engine {
                     output: None,
                     scope_context: Some(scope_ctx.clone()),
                     gate_outcome: Some(stepyard_core::GateOutcome::Continue),
+                    agent_session_id: None,
                 })
                 .await?;
                 Ok(BodyStep::Continue(None))
@@ -1164,6 +1165,7 @@ impl Engine {
                     output: None,
                     scope_context: Some(scope_ctx.clone()),
                     gate_outcome: Some(stepyard_core::GateOutcome::Skip),
+                    agent_session_id: None,
                 })
                 .await?;
                 Ok(BodyStep::Skip)
@@ -1181,6 +1183,7 @@ impl Engine {
                     output: None,
                     scope_context: Some(scope_ctx.clone()),
                     gate_outcome: Some(stepyard_core::GateOutcome::Break),
+                    agent_session_id: None,
                 })
                 .await?;
                 Ok(BodyStep::Break)
@@ -1257,6 +1260,7 @@ impl Engine {
             output: Some(synthetic),
             scope_context: None,
             gate_outcome: None,
+            agent_session_id: None,
         })
         .await?;
         Ok(StepOutcome::StepCompleted {

@@ -709,6 +709,7 @@ impl Engine {
                     output: Some(snapshot.clone()),
                     scope_context,
                     gate_outcome: None,
+                    agent_session_id: None,
                 })
                 .await?;
                 Ok(CmdOutcome::Success(snapshot))
@@ -863,6 +864,7 @@ impl Engine {
                     output: None,
                     scope_context: None,
                     gate_outcome: Some(stepyard_core::GateOutcome::Continue),
+                    agent_session_id: None,
                 })
                 .await?;
                 Ok(StepOutcome::StepCompleted {
@@ -1004,6 +1006,7 @@ impl Engine {
             output: Some(snapshot),
             scope_context: None,
             gate_outcome: None,
+            agent_session_id: None,
         })
         .await?;
         Ok(StepOutcome::StepCompleted {
@@ -1072,6 +1075,7 @@ impl Engine {
             output: Some(snapshot),
             scope_context: None,
             gate_outcome: None,
+            agent_session_id: None,
         })
         .await?;
         Ok(StepOutcome::StepCompleted {
