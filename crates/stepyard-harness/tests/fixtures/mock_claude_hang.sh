@@ -10,11 +10,10 @@
 # - Emit NOTHING on stdout and sleep forever. The harness spawns with
 #   `.kill_on_drop(true)`, so when the outer `tokio::select!` drops the
 #   exec future on cancel / signal / timeout, Tokio sends SIGKILL and
-#   this mock goes away without outliving the terminal event.
-# - Trap SIGTERM / SIGINT with a non-zero exit so stray graceful signals
-#   still terminate cleanly. SIGKILL (the default path) cannot be trapped;
-#   these traps are belt-and-suspenders for any future code path that
-#   opts into graceful shutdown first.
+#   this mock goes away without outliving the terminal event. SIGKILL
+#   cannot be trapped, so no signal handlers are installed — `sleep`'s
+#   default SIGTERM/SIGINT behavior (exit 143 / 130) is already correct
+#   if any future code path sends a graceful signal before SIGKILL.
 
 if [ -n "${MOCK_CLAUDE_ARGV_FILE:-}" ]; then
     : > "$MOCK_CLAUDE_ARGV_FILE"
@@ -22,9 +21,6 @@ if [ -n "${MOCK_CLAUDE_ARGV_FILE:-}" ]; then
         printf '%s\n' "$arg" >> "$MOCK_CLAUDE_ARGV_FILE"
     done
 fi
-
-trap 'exit 143' SIGTERM
-trap 'exit 130' SIGINT
 
 cat >/dev/null
 # `exec sleep` (not a bash loop + child sleep) so the direct process the
