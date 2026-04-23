@@ -148,6 +148,56 @@ pub enum ChatProvider {
     OpenAiCompatible,
 }
 
+impl ChatProvider {
+    /// Per-provider default model name applied by the adapter when the
+    /// workflow omits `config.model`. Mirrors the v1 fallback match at
+    /// `src/steps/chat.rs:341-348` (PR 5b of Task #31). Variants v1 didn't
+    /// enumerate (Anthropic, Cohere, Perplexity, Xai, Mistral,
+    /// OpenAiCompatible) inherit v1's catch-all
+    /// `"claude-3-haiku-20240307"` — a known v1 quirk that the adapter
+    /// preserves so workflows that relied on the fallback keep running.
+    pub fn default_model(&self) -> &'static str {
+        match self {
+            Self::OpenAi => "gpt-4o-mini",
+            Self::Ollama => "llama3.2",
+            Self::Groq => "llama-3.3-70b-versatile",
+            Self::DeepSeek => "deepseek-chat",
+            Self::Gemini => "gemini-2.0-flash",
+            Self::Anthropic
+            | Self::Cohere
+            | Self::Perplexity
+            | Self::Xai
+            | Self::Mistral
+            | Self::OpenAiCompatible => "claude-3-haiku-20240307",
+        }
+    }
+
+    /// Per-provider default environment variable name the runtime reads
+    /// for the provider's API key when the workflow omits
+    /// `config.api_key_env`. Mirrors the v1 match at
+    /// `src/steps/chat.rs:363-373`. `None` for [`Self::Ollama`] — v1
+    /// skipped the key lookup entirely for Ollama
+    /// (`src/steps/chat.rs:359-362`) because local Ollama endpoints don't
+    /// authenticate. [`Self::OpenAiCompatible`] returns
+    /// `Some("ANTHROPIC_API_KEY")` to preserve v1 parity (v1's catch-all
+    /// `_ =>`); operators targeting a non-Anthropic gateway are expected
+    /// to set `config.api_key_env` explicitly.
+    pub fn default_api_key_env(&self) -> Option<&'static str> {
+        match self {
+            Self::Ollama => None,
+            Self::OpenAi => Some("OPENAI_API_KEY"),
+            Self::Groq => Some("GROQ_API_KEY"),
+            Self::DeepSeek => Some("DEEPSEEK_API_KEY"),
+            Self::Gemini => Some("GEMINI_API_KEY"),
+            Self::Cohere => Some("COHERE_API_KEY"),
+            Self::Perplexity => Some("PERPLEXITY_API_KEY"),
+            Self::Xai => Some("XAI_API_KEY"),
+            Self::Mistral => Some("MISTRAL_API_KEY"),
+            Self::Anthropic | Self::OpenAiCompatible => Some("ANTHROPIC_API_KEY"),
+        }
+    }
+}
+
 /// History truncation strategy for [`StepKind::Chat`] steps (PR 5b of
 /// Task #31). Mirrors v1's `truncation:` config shape. Absent at the
 /// [`Step`] level (field is `None`) means no truncation — the runtime
@@ -236,11 +286,7 @@ pub struct Step {
     /// field name is `type` to match the legacy workflow schema. Absent
     /// `type:` defaults to [`StepKind::Cmd`] so existing cmd-only YAML
     /// keeps deserializing unchanged.
-    #[serde(
-        default,
-        rename = "type",
-        skip_serializing_if = "StepKind::is_cmd"
-    )]
+    #[serde(default, rename = "type", skip_serializing_if = "StepKind::is_cmd")]
     pub kind: StepKind,
     /// Shell command for [`StepKind::Cmd`] steps and Rhai source for
     /// [`StepKind::Script`] steps — both map to the same legacy YAML field
