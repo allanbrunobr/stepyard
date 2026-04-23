@@ -127,6 +127,29 @@ pub enum Event {
     SignalReceived {
         signal: String,
     },
+    /// One turn of an `agent` / `chat` step's conversation was persisted
+    /// to the session log. Emitted once per role turn so a post-crash
+    /// replay can reconstruct the full `chat_sessions` map from the log
+    /// alone (PR 5b of Task #31 — Invariante 11 means the runtime has no
+    /// in-memory chat history between `step` calls).
+    ///
+    /// `session` is the chat-session bucket key — not necessarily the
+    /// step name. Steps running under `session: shared` all emit with
+    /// the same `session`; steps under `session: isolated` emit with
+    /// their own step name. Replay groups turns by `session` and
+    /// preserves log append order inside each bucket.
+    ///
+    /// `role` is the strongly-typed [`ChatRole`] — serde will reject
+    /// any value outside `user` / `assistant` at deserialize time, so a
+    /// corrupted log entry surfaces as a scan error rather than a
+    /// silent drop.
+    ChatMessageAppended {
+        step_name: String,
+        session: String,
+        role: ChatRole,
+        content: String,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 /// Frozen exec output attached to [`Event::StepCompleted`] so the harness can
@@ -199,6 +222,37 @@ pub enum GateOutcome {
     Break,
 }
 
+/// Role of a turn inside a chat session. Serialized as `snake_case`
+/// strings (`user`, `assistant`) so unknown roles (`system`, `tool_use`,
+/// ...) fail loud at deserialize time instead of being silently coerced
+/// to a default. PR 5b of Task #31 ships only the two v1 roles; a
+/// follow-up PR that surfaces system prompts can add a variant without a
+/// major bump thanks to `#[non_exhaustive]`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatRole {
+    /// A user-authored turn (the rendered prompt template, plus any
+    /// prior user turns if the workflow is running a multi-turn chat).
+    User,
+    /// An assistant-authored turn (the provider's completion response).
+    Assistant,
+}
+
+/// One turn of chat history, reconstructed from the session log by the
+/// harness so a `session: shared` chat step landing after a crash sees
+/// the same conversation the pre-crash run did (PR 5b of Task #31).
+///
+/// The wire type mirrors v1's `ChatMessage` except `role` is typed —
+/// serde rejects values outside [`ChatRole`] at deserialize time, which
+/// is the replay gate for "a corrupted log row must fail the scan, not
+/// silently change the prompt the next turn sees."
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +322,84 @@ mod tests {
             }
             other => panic!("roundtrip produced unexpected variant: {other:?}"),
         }
+    }
+
+    fn chat_timestamp() -> DateTime<Utc> {
+        "2026-04-22T12:00:00Z".parse().unwrap()
+    }
+
+    #[test]
+    fn chat_message_appended_serializes_with_event_tag_and_snake_case_role() {
+        let event = Event::ChatMessageAppended {
+            step_name: "draft".into(),
+            session: "shared".into(),
+            role: ChatRole::User,
+            content: "hello".into(),
+            timestamp: chat_timestamp(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "chat_message_appended",
+                "step_name": "draft",
+                "session": "shared",
+                "role": "user",
+                "content": "hello",
+                "timestamp": "2026-04-22T12:00:00Z",
+            })
+        );
+    }
+
+    #[test]
+    fn chat_message_appended_roundtrips_through_json() {
+        let original = Event::ChatMessageAppended {
+            step_name: "review".into(),
+            session: "review".into(),
+            role: ChatRole::Assistant,
+            content: "ack".into(),
+            timestamp: chat_timestamp(),
+        };
+        let s = serde_json::to_string(&original).unwrap();
+        let back: Event = serde_json::from_str(&s).unwrap();
+        match back {
+            Event::ChatMessageAppended {
+                step_name,
+                session,
+                role,
+                content,
+                timestamp,
+            } => {
+                assert_eq!(step_name, "review");
+                assert_eq!(session, "review");
+                assert_eq!(role, ChatRole::Assistant);
+                assert_eq!(content, "ack");
+                assert_eq!(timestamp, chat_timestamp());
+            }
+            other => panic!("roundtrip produced unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_role_unknown_variants_fail_to_deserialize() {
+        // The replay gate: a log row carrying `role: "system"` (or any
+        // other value outside user/assistant) must error at the serde
+        // layer so `compute_progress` surfaces it as `InvalidState`
+        // instead of silently coercing the turn into a default role.
+        let payload = serde_json::json!({
+            "event": "chat_message_appended",
+            "step_name": "s",
+            "session": "s",
+            "role": "system",
+            "content": "",
+            "timestamp": "2026-04-22T12:00:00Z",
+        });
+        let err = serde_json::from_value::<Event>(payload)
+            .expect_err("unknown role must fail to deserialize");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("role") || msg.contains("variant"),
+            "error must reference the role field, got: {msg}"
+        );
     }
 }

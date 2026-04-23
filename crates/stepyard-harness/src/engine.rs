@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use chrono::Utc;
-use stepyard_core::{Event, StepOutputSnapshot};
+use stepyard_core::{ChatMessage, Event, StepOutputSnapshot};
 use stepyard_sandbox_orchestrator::SandboxLifecycle;
 use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
 use tokio::sync::broadcast;
@@ -1514,6 +1514,28 @@ struct Progress {
     /// completions. Scope-nested completions do not contribute (see
     /// [`Self::agent_session_ids`]).
     first_agent_session_id: Option<String>,
+    /// Chat-session history keyed by the session bucket name (the
+    /// `session` field on [`Event::ChatMessageAppended`]). Each bucket
+    /// holds turns in log-append order so a post-crash replay of a
+    /// `session: shared` chat step sees the same conversation the
+    /// pre-crash run did — Invariante 11 means there's no in-memory
+    /// chat history between `step` calls, so the log is the only
+    /// source of truth (PR 5b of Task #31).
+    ///
+    /// Populated strictly from the log: every `chat_message_appended`
+    /// event with a well-formed payload appends one [`ChatMessage`] to
+    /// its bucket. A malformed row (missing/invalid `session`, `role`,
+    /// or `content`) aborts the scan with [`EngineError::InvalidState`]
+    /// — silent drop would let a corrupted log hand the next turn a
+    /// shorter history than the live run saw, breaking the exact
+    /// determinism this scan enforces.
+    ///
+    /// Unread by production code until a later PR lands the v2 chat
+    /// executor. The scan contract ships first so it can be unit-tested
+    /// with hand-constructed logs before the runtime path exists — the
+    /// same staging `outputs` / `agent_session_ids` used in PR 2 / 5a.
+    #[allow(dead_code)]
+    chat_sessions: HashMap<String, Vec<ChatMessage>>,
 }
 
 /// Pure scan from a session's persisted events to replay state.
@@ -1544,6 +1566,12 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
     // completions.
     let mut agent_session_ids: HashMap<String, String> = HashMap::new();
     let mut first_agent_session_id: Option<String> = None;
+    // PR 5b of Task #31: rebuild the chat-session history from the log
+    // in the same scan. Turns land in insertion order per bucket, so a
+    // `session: shared` chat step running after a crash sees the same
+    // conversation the pre-crash run did without the runtime holding
+    // any in-memory state (Invariante 11).
+    let mut chat_sessions: HashMap<String, Vec<ChatMessage>> = HashMap::new();
 
     for evt in events.iter() {
         let Some(tag) = evt.payload.get("event").and_then(|v| v.as_str()) else {
@@ -1623,6 +1651,52 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
             }
+            "chat_message_appended" => {
+                // PR 5b of Task #31: append each chat turn to the
+                // bucket named by its `session` field. Unlike
+                // `step_completed`, every chat payload is
+                // replay-critical: skipping a turn with missing
+                // session/role/content would hand the next chat step
+                // a shorter history than the live run saw. So all
+                // three fields are strict — present + well-typed, or
+                // the scan aborts with `InvalidState`.
+                //
+                // `step_name` is intentionally unused here: the bucket
+                // key is `session`, not the step name (they coincide
+                // only for `session: isolated`). A typed decode of
+                // `role` + `content` into `ChatMessage` doubles as the
+                // role-enum gate — serde rejects any value outside
+                // `user` / `assistant` at parse time.
+                let session = match evt.payload.get("session") {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    _ => {
+                        return Err(EngineError::InvalidState(
+                            "chat_message_appended log entry is missing or has malformed `session`"
+                                .to_string(),
+                        ));
+                    }
+                };
+                let role_raw = evt.payload.get("role").cloned().ok_or_else(|| {
+                    EngineError::InvalidState(
+                        "chat_message_appended log entry is missing `role`".to_string(),
+                    )
+                })?;
+                let content_raw = evt.payload.get("content").cloned().ok_or_else(|| {
+                    EngineError::InvalidState(
+                        "chat_message_appended log entry is missing `content`".to_string(),
+                    )
+                })?;
+                let message = serde_json::from_value::<ChatMessage>(serde_json::json!({
+                    "role": role_raw,
+                    "content": content_raw,
+                }))
+                .map_err(|e| {
+                    EngineError::InvalidState(format!(
+                        "chat_message_appended log entry has malformed `role`/`content` payload: {e}"
+                    ))
+                })?;
+                chat_sessions.entry(session).or_default().push(message);
+            }
             _ => {}
         }
     }
@@ -1634,6 +1708,7 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
         outputs,
         agent_session_ids,
         first_agent_session_id,
+        chat_sessions,
     })
 }
 
@@ -1933,6 +2008,235 @@ mod progress_tests {
                     "error must name the malformed field, got: {msg}"
                 );
             }
+            other => panic!("expected InvalidState, got {other:?}"),
+        }
+    }
+
+    fn chat_message_appended(
+        step_name: &str,
+        session: &str,
+        role: &str,
+        content: &str,
+    ) -> serde_json::Value {
+        json!({
+            "event": "chat_message_appended",
+            "step_name": step_name,
+            "session": session,
+            "role": role,
+            "content": content,
+            "timestamp": "2026-04-22T12:00:00Z",
+        })
+    }
+
+    #[test]
+    fn empty_log_yields_empty_chat_sessions() {
+        let progress = compute_progress(&[]).unwrap();
+        assert!(progress.chat_sessions.is_empty());
+    }
+
+    #[test]
+    fn single_chat_turn_populates_bucket_and_does_not_count_as_completion() {
+        let events = vec![evt(
+            1,
+            chat_message_appended("draft", "shared", "user", "hello"),
+        )];
+        let progress = compute_progress(&events).unwrap();
+        // Chat turns aren't step completions — they must not advance
+        // the top-level step index.
+        assert_eq!(progress.completed_steps, 0);
+        let bucket = progress
+            .chat_sessions
+            .get("shared")
+            .expect("shared bucket must exist");
+        assert_eq!(bucket.len(), 1);
+        assert_eq!(bucket[0].role, stepyard_core::ChatRole::User);
+        assert_eq!(bucket[0].content, "hello");
+    }
+
+    #[test]
+    fn multi_turn_shared_session_preserves_log_append_order() {
+        // A `session: shared` workflow emits alternating user/assistant
+        // turns under the same bucket; replay must hand them back in
+        // exact insertion order, otherwise a re-rendered prompt would
+        // see the assistant's reply before the user's question.
+        let events = vec![
+            evt(1, chat_message_appended("draft", "shared", "user", "q1")),
+            evt(
+                2,
+                chat_message_appended("draft", "shared", "assistant", "a1"),
+            ),
+            evt(3, chat_message_appended("review", "shared", "user", "q2")),
+            evt(
+                4,
+                chat_message_appended("review", "shared", "assistant", "a2"),
+            ),
+        ];
+        let progress = compute_progress(&events).unwrap();
+        let bucket = progress.chat_sessions.get("shared").expect("shared bucket");
+        assert_eq!(
+            bucket
+                .iter()
+                .map(|m| (m.role, m.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (stepyard_core::ChatRole::User, "q1"),
+                (stepyard_core::ChatRole::Assistant, "a1"),
+                (stepyard_core::ChatRole::User, "q2"),
+                (stepyard_core::ChatRole::Assistant, "a2"),
+            ]
+        );
+    }
+
+    #[test]
+    fn distinct_sessions_are_isolated_into_separate_buckets() {
+        // `session: isolated` puts each step's turns into its own
+        // bucket keyed by step name. The scan must keep them apart —
+        // merging would let an isolated chat see another step's
+        // history on replay.
+        let events = vec![
+            evt(1, chat_message_appended("alpha", "alpha", "user", "a_q")),
+            evt(2, chat_message_appended("beta", "beta", "user", "b_q")),
+            evt(
+                3,
+                chat_message_appended("alpha", "alpha", "assistant", "a_a"),
+            ),
+        ];
+        let progress = compute_progress(&events).unwrap();
+        assert_eq!(progress.chat_sessions.len(), 2);
+        assert_eq!(progress.chat_sessions.get("alpha").unwrap().len(), 2);
+        assert_eq!(progress.chat_sessions.get("beta").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn chat_events_do_not_pollute_step_completion_counters() {
+        // Verifies the "chat is not a step" axis stays crisp even when
+        // chats are interleaved with actual step completions.
+        let events = vec![
+            evt(1, step_completed("setup", None)),
+            evt(
+                2,
+                chat_message_appended("draft", "shared", "user", "hello"),
+            ),
+            evt(3, step_completed("teardown", None)),
+        ];
+        let progress = compute_progress(&events).unwrap();
+        assert_eq!(progress.completed_steps, 2);
+        assert_eq!(progress.chat_sessions.get("shared").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn chat_event_missing_session_fails_loudly() {
+        // Replay contract gate #4: missing `session` can't be silently
+        // defaulted — we wouldn't know which bucket the turn belongs
+        // to. Fail the whole scan so a corrupt log cannot hand the
+        // next chat step a silently-truncated history.
+        let events = vec![evt(
+            1,
+            json!({
+                "event": "chat_message_appended",
+                "step_name": "draft",
+                "role": "user",
+                "content": "hello",
+                "timestamp": "2026-04-22T12:00:00Z",
+            }),
+        )];
+        let err = compute_progress(&events).expect_err("missing session must error");
+        match err {
+            EngineError::InvalidState(msg) => assert!(
+                msg.contains("session"),
+                "error must name the missing field, got: {msg}"
+            ),
+            other => panic!("expected InvalidState, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_event_missing_content_fails_loudly() {
+        let events = vec![evt(
+            1,
+            json!({
+                "event": "chat_message_appended",
+                "step_name": "draft",
+                "session": "shared",
+                "role": "user",
+                "timestamp": "2026-04-22T12:00:00Z",
+            }),
+        )];
+        let err = compute_progress(&events).expect_err("missing content must error");
+        match err {
+            EngineError::InvalidState(msg) => assert!(
+                msg.contains("content"),
+                "error must name the missing field, got: {msg}"
+            ),
+            other => panic!("expected InvalidState, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_event_with_numeric_role_fails_loudly() {
+        // The typed ChatRole enum is the replay gate for "unknown
+        // role". A log row carrying `role: 42` (or `role: "system"`)
+        // must fail the scan — silent coercion would change what
+        // prompt the next turn renders.
+        let events = vec![evt(
+            1,
+            json!({
+                "event": "chat_message_appended",
+                "step_name": "draft",
+                "session": "shared",
+                "role": 42,
+                "content": "",
+                "timestamp": "2026-04-22T12:00:00Z",
+            }),
+        )];
+        let err = compute_progress(&events).expect_err("numeric role must error");
+        match err {
+            EngineError::InvalidState(msg) => assert!(
+                msg.contains("role") || msg.contains("content"),
+                "error must reference role/content parse, got: {msg}"
+            ),
+            other => panic!("expected InvalidState, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_event_with_unknown_role_string_fails_loudly() {
+        // `system`, `tool_use`, etc. are future-reserved but not in
+        // the v1 wire format. Until a PR widens ChatRole, they must
+        // reject at deserialize time so replay stays deterministic.
+        let events = vec![evt(
+            1,
+            chat_message_appended("draft", "shared", "system", "you are ..."),
+        )];
+        let err = compute_progress(&events).expect_err("system role must error");
+        match err {
+            EngineError::InvalidState(msg) => assert!(
+                msg.contains("role") || msg.contains("variant"),
+                "error must reference role parse, got: {msg}"
+            ),
+            other => panic!("expected InvalidState, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_event_with_non_string_session_fails_loudly() {
+        let events = vec![evt(
+            1,
+            json!({
+                "event": "chat_message_appended",
+                "step_name": "draft",
+                "session": 42,
+                "role": "user",
+                "content": "hello",
+                "timestamp": "2026-04-22T12:00:00Z",
+            }),
+        )];
+        let err = compute_progress(&events).expect_err("numeric session must error");
+        match err {
+            EngineError::InvalidState(msg) => assert!(
+                msg.contains("session"),
+                "error must reference session, got: {msg}"
+            ),
             other => panic!("expected InvalidState, got {other:?}"),
         }
     }

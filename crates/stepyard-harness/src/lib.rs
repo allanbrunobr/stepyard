@@ -53,3 +53,10 @@ pub use workflow::{
 // Re-export so callers matching on `EngineError::StepFailed.reason` don't
 // need to import minion-core directly (Story 1.4).
 pub use stepyard_core::TerminationReason;
+
+// Re-exported chat turn types (PR 5b of Task #31). Chat-producing
+// callers (the upcoming `run_chat_step` + subscribers replaying
+// history) need these to construct / deserialize
+// [`stepyard_core::Event::ChatMessageAppended`] without pulling the
+// core crate in separately.
+pub use stepyard_core::{ChatMessage, ChatRole};

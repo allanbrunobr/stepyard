@@ -467,10 +467,10 @@ pub struct Step {
     /// the conversation history. Two chat steps with the same
     /// `chat_session` share history; distinct names isolate. Absent =
     /// stateless single-turn (v1 parity with `config.get_str("session")`
-    /// absent). The runtime replays [`Event::ChatMessageAppended`]
-    /// entries from the session log rather than keeping per-session
-    /// state in memory, so history survives a process crash. PR 5b of
-    /// Task #31.
+    /// absent). The runtime replays
+    /// [`stepyard_core::Event::ChatMessageAppended`] entries from the
+    /// session log rather than keeping per-session state in memory, so
+    /// history survives a process crash. PR 5b of Task #31.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat_session: Option<String>,
     /// [`StepKind::Chat`] only: history truncation strategy applied
