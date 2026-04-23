@@ -14,19 +14,24 @@
 //! the StepCompleted, or that emits a StepCompleted without any turns,
 //! silently corrupts replayed chat history on process crash.
 //!
-//! This test is `#[ignore]`d in commit 1 because `chat_exec.rs` +
-//! Engine dispatch land in PR 5c commit 2; running it today would just
-//! hit the `step_type \`chat\` not yet supported` fallback at
-//! `engine.rs:468-486`. Commit 2 removes the `#[ignore]` tag as its
-//! green-bar. The contract this test encodes MUST NOT change even if
-//! commit 2 reshapes the dispatch site.
+//! Commit 1 of PR 5c landed this test behind `#[ignore]` as the red
+//! bar; commit 2 (the runtime seam in `chat_exec.rs` + Engine
+//! dispatch) removes the tag and wires a `MockChatClient` so the
+//! contract can be pinned without linking rig-core. The runtime
+//! residuals commit 1 held for commit 2 — per-turn `session`,
+//! `role`, `content` assertions — are enforced here. The contract
+//! this test encodes MUST NOT change even if a later commit
+//! reshapes the dispatch site.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
-use stepyard_harness::{Engine, HarnessConfig, Step, StepExecutor, StepOutcome, Workflow};
+use stepyard_harness::{
+    ChatClient, ChatClientError, ChatCompletionRequest, ChatCompletionResponse, Engine,
+    HarnessConfig, Step, StepExecutor, StepOutcome, Workflow,
+};
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionEvent};
 use uuid::Uuid;
@@ -78,6 +83,38 @@ impl StepExecutor for UnreachableExecutor {
     }
 }
 
+/// Canned-response chat client. Commit 2's dispatch seam speaks a
+/// trait so tests don't depend on rig-core or an HTTP provider. The
+/// mock ignores the incoming request fields and replies with the
+/// pre-wired `reply`, which is enough to pin the emission order and
+/// the `session` / `role` / `content` contract PR 5b's
+/// `compute_progress` drain keys on.
+#[derive(Debug)]
+struct MockChatClient {
+    reply: String,
+}
+
+impl MockChatClient {
+    fn new(reply: impl Into<String>) -> Self {
+        Self {
+            reply: reply.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatClient for MockChatClient {
+    async fn complete(
+        &self,
+        _req: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, ChatClientError> {
+        Ok(ChatCompletionResponse {
+            content: self.reply.clone(),
+            ..Default::default()
+        })
+    }
+}
+
 fn lifecycle() -> Arc<dyn SandboxLifecycle> {
     Arc::new(MockLifecycle::new())
 }
@@ -102,6 +139,18 @@ fn event_step_type(ev: &SessionEvent) -> Option<&str> {
     ev.payload.get("step_type").and_then(|v| v.as_str())
 }
 
+fn event_session(ev: &SessionEvent) -> Option<&str> {
+    ev.payload.get("session").and_then(|v| v.as_str())
+}
+
+fn event_role(ev: &SessionEvent) -> Option<&str> {
+    ev.payload.get("role").and_then(|v| v.as_str())
+}
+
+fn event_content(ev: &SessionEvent) -> Option<&str> {
+    ev.payload.get("content").and_then(|v| v.as_str())
+}
+
 // ---------------------------------------------------------------------------
 // Ordering contract: a chat step's lifecycle MUST be StepStarted followed by
 // one or more ChatMessageAppended entries, terminated by a single
@@ -112,22 +161,27 @@ fn event_step_type(ev: &SessionEvent) -> Option<&str> {
 // that re-orders these events corrupts replayed history on crash/retry.
 // ---------------------------------------------------------------------------
 #[tokio::test]
-#[ignore = "PR 5c commit 1: fails until chat_exec.rs + Engine dispatch land in commit 2"]
 async fn chat_runtime_emits_step_started_then_appends_then_completed_in_order() {
     db_test!(pool, {
         let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
             .await
             .expect("session");
 
-        let wf = Workflow::new("chat-order", vec![Step::chat("ask", "Hello")]);
+        let mut step = Step::chat("ask", "Hello");
+        step.chat_session = Some("shared".into());
+        let wf = Workflow::new("chat-order", vec![step]);
 
-        let mut engine = Engine::with_executor(
-            HarnessConfig::default(),
-            session,
-            wf,
-            lifecycle(),
-            unreachable_executor(),
-        );
+        // Inject the mock at the `chat_client` seam added in commit 2.
+        // Commit 3 flips the CLI adapter to accept chat steps; in commit
+        // 2 we drive the engine directly so the runtime contract can be
+        // proven without opening the provider surface.
+        let config = HarnessConfig {
+            chat_client: Some(Arc::new(MockChatClient::new("Mock reply"))),
+            ..Default::default()
+        };
+
+        let mut engine =
+            Engine::with_executor(config, session, wf, lifecycle(), unreachable_executor());
         let outcome = engine.resume().await.expect("resume");
         assert_eq!(
             outcome,
@@ -158,7 +212,38 @@ async fn chat_runtime_emits_step_started_then_appends_then_completed_in_order() 
                     );
                     started_idx = Some(idx);
                 }
-                Some("chat_message_appended") => chat_indices.push(idx),
+                Some("chat_message_appended") => {
+                    // PR 5c commit 2 residual from commit 1: the staging
+                    // key (`session`) and the per-turn payload (`role`,
+                    // `content`) are load-bearing for
+                    // `compute_progress`. If any drift, replayed
+                    // history diverges from the live-run view. Pin all
+                    // three per-turn.
+                    assert_eq!(
+                        event_session(ev),
+                        Some("shared"),
+                        "chat_message_appended must carry the `chat_session` bucket"
+                    );
+                    let role = event_role(ev).expect("chat turn missing `role`");
+                    let content = event_content(ev).expect("chat turn missing `content`");
+                    if chat_indices.is_empty() {
+                        assert_eq!(role, "user", "first chat turn must be the user prompt");
+                        assert_eq!(
+                            content, "Hello",
+                            "first chat turn must carry the rendered prompt"
+                        );
+                    } else {
+                        assert_eq!(
+                            role, "assistant",
+                            "second chat turn must be the assistant reply"
+                        );
+                        assert_eq!(
+                            content, "Mock reply",
+                            "second chat turn must carry the provider's reply verbatim"
+                        );
+                    }
+                    chat_indices.push(idx);
+                }
                 Some("step_completed") => {
                     assert!(
                         completed_idx.is_none(),
@@ -183,9 +268,11 @@ async fn chat_runtime_emits_step_started_then_appends_then_completed_in_order() 
 
         let started = started_idx.expect("step_started for `ask` missing from replay");
         let completed = completed_idx.expect("step_completed for `ask` missing from replay");
-        assert!(
-            !chat_indices.is_empty(),
-            "chat step must emit at least one ChatMessageAppended between StepStarted and StepCompleted"
+        assert_eq!(
+            chat_indices.len(),
+            2,
+            "chat step must emit exactly user + assistant turns, got {} events",
+            chat_indices.len()
         );
         assert!(
             started < completed,

@@ -12,6 +12,7 @@ use stepyard_sandbox_orchestrator::SandboxLifecycle;
 use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
 use tokio::sync::broadcast;
 
+use crate::chat_exec::ChatClient;
 use crate::defaults::Defaults;
 use crate::executor::{SandboxStepExecutor, StepExecutor};
 use crate::gate::{evaluate_bool, outcome_for, GateAction, GateError, GateOutcome};
@@ -86,6 +87,17 @@ pub struct HarnessConfig {
     /// guarantees read-your-write across threads without a lock.
     #[serde(skip, default = "default_shutdown_signal")]
     pub shutdown_signal: Arc<OnceLock<String>>,
+    /// Injected chat-completion client for [`StepKind::Chat`] dispatch
+    /// (PR 5c commit 2 of Task #31). `None` in commit 2 — an in-process
+    /// caller that constructs a chat step without injecting a client
+    /// surfaces a typed `StepFailed` (`ChatExecError::NoClientConfigured`)
+    /// rather than a panic. Commit 3 flips the CLI adapter to accept
+    /// `chat` steps and wires a production default here. Never
+    /// serialised — `#[serde(skip, default)]` keeps
+    /// YAML-deserialised configs buildable (main() rewires the field
+    /// before any engine spawns, mirroring `shutdown_tx`).
+    #[serde(skip, default)]
+    pub chat_client: Option<Arc<dyn ChatClient>>,
 }
 
 impl Default for HarnessConfig {
@@ -95,6 +107,7 @@ impl Default for HarnessConfig {
             shutdown_tx: default_shutdown_tx(),
             shutdown_grace_s: default_shutdown_grace_s(),
             shutdown_signal: default_shutdown_signal(),
+            chat_client: None,
         }
     }
 }
@@ -459,7 +472,18 @@ impl Engine {
                 .await;
         }
 
-        // Kinds other than Cmd/Gate/Call/Repeat/Map/Template/Script/Agent
+        // Chat dispatch: call the injected `ChatClient` seam and emit
+        // the user turn + assistant turn + terminal StepCompleted in
+        // the atomic order `compute_progress` relies on (engine.rs
+        // around the `step_type == "chat"` drain). Commit 2 of PR 5c
+        // is happy-path only; commit 4 folds this branch into a
+        // cancel/signal/timeout select like cmd and agent. PR 5c of
+        // Task #31.
+        if matches!(step.kind, StepKind::Chat) {
+            return self.run_chat_step(step, &progress, start).await;
+        }
+
+        // Kinds other than Cmd/Gate/Call/Repeat/Map/Template/Script/Agent/Chat
         // are still rejected at the adapter boundary. If an in-process
         // caller constructs one anyway, emit a structured StepFailed
         // instead of silently dispatching the cmd path — a typed "not
@@ -467,7 +491,7 @@ impl Engine {
         // an empty string.
         if !matches!(step.kind, StepKind::Cmd) {
             let error = format!(
-                "step type `{step_type}` not yet supported in v2 engine — PR 5a of #31 ships cmd + gate + call/repeat/map + template + script + agent"
+                "step type `{step_type}` not yet supported in v2 engine — PR 5c of #31 ships cmd + gate + call/repeat/map + template + script + agent + chat"
             );
             self.emit(Event::StepFailed {
                 step_name: step.name.clone(),
@@ -1395,6 +1419,272 @@ impl Engine {
         })
     }
 
+    /// Execute a [`StepKind::Chat`] step — resolve env, render the
+    /// prompt, emit the user turn, invoke the injected
+    /// [`ChatClient`] seam, emit the assistant turn, and land a
+    /// unified `StepCompleted` carrying `{ stdout: response }` plus
+    /// `{ input_tokens, output_tokens, cost_usd }` at the event
+    /// level. PR 5c commit 2 of Task #31.
+    ///
+    /// # Atomicity
+    ///
+    /// Emission order
+    /// `StepStarted → ChatMessageAppended (user) → ChatMessageAppended (assistant) → StepCompleted`
+    /// is the boundary `compute_progress` relies on — chat turns
+    /// stage under `step_name` on emission and only promote into
+    /// `chat_sessions` when the terminal `StepCompleted` with
+    /// `step_type: "chat"` commits. A runtime that reorders or
+    /// drops one of these events silently corrupts replayed chat
+    /// history on a crash.
+    ///
+    /// # Cancellation contract
+    ///
+    /// Commit 2 is happy-path only. The cancel / signal /
+    /// step-timeout / shutdown-broadcast race the cmd and agent
+    /// paths run (via `tokio::select!`) is deliberately deferred
+    /// to commit 4's hardening pass — mixing it into commit 2
+    /// would drag the provider seam through the same blast
+    /// radius and break the user's sequenced commit plan.
+    async fn run_chat_step(
+        &mut self,
+        step: &Step,
+        progress: &Progress,
+        start: Instant,
+    ) -> Result<StepOutcome, EngineError> {
+        let step_type = step_type_label(&step.kind);
+
+        // Env resolution: same fail-fast contract as cmd/agent. A
+        // missing `${VAR}` is a user-config bug, not a runtime bug —
+        // stop the workflow instead of invoking the provider with a
+        // half-built env.
+        let resolved_env = match self.prepare_step(step) {
+            Ok(env) => env,
+            Err(e) => {
+                let error = e.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        // Adapter will enforce `prompt: Some(_)` for chat in commit
+        // 3 (`src/cli/harness_adapter.rs`). In-process callers that
+        // bypass the adapter still get a typed StepFailed rather
+        // than a panic.
+        let Some(prompt_template) = step.prompt.as_deref() else {
+            let error = crate::chat_exec::ChatExecError::MissingPrompt {
+                step: step.name.clone(),
+            }
+            .to_string();
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error: error.clone(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            return Ok(StepOutcome::StepFailed {
+                step_name: step.name.clone(),
+                error,
+            });
+        };
+
+        let ctx = RenderContext {
+            steps: &progress.outputs,
+            target: &self.run_context.target,
+            vars: &self.run_context.vars,
+            scope: None,
+        };
+        let rendered_prompt = match render(prompt_template, &ctx) {
+            Ok(s) => s,
+            Err(e) => {
+                let error = format!("chat prompt render failed: {e}");
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        // Session bucket: explicit `chat_session:` or the step name
+        // as fallback, so `compute_progress` keys history on a
+        // stable identifier across reruns.
+        let session_bucket = step
+            .chat_session
+            .clone()
+            .unwrap_or_else(|| step.name.clone());
+
+        // History reconstructed by compute_progress. First turn in a
+        // bucket sees an empty vec; later turns see every
+        // previously-committed turn in log-append order.
+        let history = progress
+            .chat_sessions
+            .get(&session_bucket)
+            .cloned()
+            .unwrap_or_default();
+
+        // Resolve `api_key_env: VAR_NAME` per the field contract at
+        // `workflow::Step::api_key_env`: the value is the NAME of an
+        // env var, not a key into the merged workflow map. Precedence
+        // (workflow env override -> host env fallback) lives in
+        // `chat_exec::resolve_api_key` so unit tests can pin it
+        // without standing up the engine. Missing everywhere is a
+        // user-config problem — fail loud as StepFailed, same
+        // contract as env resolution.
+        let resolved_api_key = match crate::chat_exec::resolve_api_key(
+            &step.name,
+            step.api_key_env.as_deref(),
+            &resolved_env,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                let error = e.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        // Client injection. Commit 2 surfaces the absent-client case
+        // as a typed StepFailed so an in-process caller sees a
+        // structured error; commit 3 wires the production default
+        // and flips the adapter to accept chat steps.
+        let Some(client) = self.config.chat_client.clone() else {
+            let error = crate::chat_exec::ChatExecError::NoClientConfigured {
+                step: step.name.clone(),
+            }
+            .to_string();
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error: error.clone(),
+                duration_ms: start.elapsed().as_millis() as u64,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            return Ok(StepOutcome::StepFailed {
+                step_name: step.name.clone(),
+                error,
+            });
+        };
+
+        // Persist the user turn BEFORE calling the provider so
+        // replay sees the prompt even if the call fails. The turn
+        // stages under `step_name` in `pending_chat_turns` and is
+        // dropped on the terminal StepFailed arm, matching the
+        // atomicity contract PR 5b locked in.
+        self.emit(Event::ChatMessageAppended {
+            step_name: step.name.clone(),
+            session: session_bucket.clone(),
+            role: stepyard_core::ChatRole::User,
+            content: rendered_prompt.clone(),
+            timestamp: Utc::now(),
+        })
+        .await?;
+
+        let req =
+            crate::chat_exec::build_chat_request(step, rendered_prompt, history, resolved_api_key);
+
+        let exec_result = crate::chat_exec::run_chat_step(step, req, client.as_ref()).await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        let output = match exec_result {
+            Ok(o) => o,
+            Err(e) => {
+                let error = e.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
+        };
+
+        // Assistant turn THEN StepCompleted — the atomic boundary
+        // compute_progress relies on. If the assistant append
+        // fails, the next scan sees only the staged user turn for
+        // this step_name, and the next `step_started` will drop it
+        // on rerun (Invariante 11).
+        self.emit(Event::ChatMessageAppended {
+            step_name: step.name.clone(),
+            session: session_bucket,
+            role: stepyard_core::ChatRole::Assistant,
+            content: output.response.clone(),
+            timestamp: Utc::now(),
+        })
+        .await?;
+
+        let snapshot = StepOutputSnapshot {
+            stdout: output.response,
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        self.emit(Event::StepCompleted {
+            step_name: step.name.clone(),
+            step_type: step_type.into(),
+            duration_ms,
+            timestamp: Utc::now(),
+            input_tokens: output.input_tokens,
+            output_tokens: output.output_tokens,
+            cost_usd: output.cost_usd,
+            sandboxed: false,
+            output: Some(snapshot),
+            scope_context: None,
+            gate_outcome: None,
+            agent_session_id: None,
+        })
+        .await?;
+        Ok(StepOutcome::StepCompleted {
+            step_name: step.name.clone(),
+        })
+    }
+
     // ── Internals ───────────────────────────────────────────────────────
 
     pub(crate) async fn emit(&self, event: Event) -> Result<(), EngineError> {
@@ -1539,12 +1829,12 @@ struct Progress {
     /// different history than the live run saw, breaking the exact
     /// determinism this scan enforces.
     ///
-    /// Unread by production code until a later PR lands the v2 chat
-    /// executor. The scan contract ships first so it can be unit-
-    /// tested with hand-constructed logs before the runtime path
-    /// exists — the same staging pattern `outputs` / `agent_session_ids`
-    /// used in PR 2 / 5a.
-    #[allow(dead_code)]
+    /// Consumed by [`Engine::run_chat_step`] — a chat step's first
+    /// read here becomes the `history` it hands the
+    /// [`crate::chat_exec::ChatClient`] seam, so a post-crash rerun
+    /// sees the same prior turns the pre-crash run durably
+    /// produced. PR 5c of Task #31 activates this field; PR 5b
+    /// shipped the staging contract first.
     chat_sessions: HashMap<String, Vec<ChatMessage>>,
 }
 
