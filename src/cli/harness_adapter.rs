@@ -41,13 +41,25 @@
 //! bodies stay rejected by [`AdapterError::ScopedStepUnsupported`] until
 //! a later PR widens scope-body dispatch.
 //!
+//! PR 5b of Task #31 adds the chat-step translation helper
+//! ([`parse_chat_step`]). The helper walks the v1 `config` bag
+//! (`provider` / `model` / `max_tokens` / `temperature` / `api_key_env` /
+//! `base_url` / `session` / `truncation_strategy` family) and produces a
+//! typed [`stepyard_harness::Step`]. **Intentionally not wired into
+//! [`adapt_step`] yet** — the public adapter still rejects `chat` with
+//! [`AdapterError::UnsupportedStepType`] so v2 workflows can't reach a
+//! runtime that doesn't exist. PR 5c will flip the dispatch arm after
+//! the rig-core runtime lands.
+//!
 //! Executors for `call` / `repeat` / `map` landed in the scope-runner commit.
 //! Kinds not yet executable (`chat` / `parallel`) continue to fail with
 //! [`AdapterError::UnsupportedStepType`].
 
 use std::collections::{HashMap, HashSet};
 
-use stepyard_harness::{AgentPermissions, AgentSessionMode, Scope, Step, Workflow};
+use stepyard_harness::{
+    AgentPermissions, AgentSessionMode, ChatProvider, ChatTruncation, Scope, Step, Workflow,
+};
 
 use crate::workflow::schema::{ScopeDef, StepDef, StepType, WorkflowDef};
 
@@ -55,7 +67,7 @@ use crate::workflow::schema::{ScopeDef, StepDef, StepType, WorkflowDef};
 pub enum AdapterError {
     #[error(
         "step type `{step_type}` not yet supported by v2 engine — use --engine v1 \
-         or migrate the workflow to a supported kind (cmd, gate, call, repeat, map, template, script)"
+         or migrate the workflow to a supported kind (cmd, gate, call, repeat, map, template, script, agent)"
     )]
     UnsupportedStepType { step_type: StepType },
 
@@ -166,6 +178,56 @@ pub enum AdapterError {
          expected `shared` or `isolated`"
     )]
     AgentInvalidSession { name: String, value: String },
+
+    #[error("chat step `{name}` is missing `prompt:`")]
+    ChatMissingPrompt { name: String },
+
+    #[error(
+        "chat step `{name}` has non-string `config.{key}` — expected a \
+         quoted string (v1 parity: chat provider/model/api_key_env/base_url/\
+         session/truncation_strategy are always strings in the legacy config bag)"
+    )]
+    ChatConfigNotString { name: String, key: &'static str },
+
+    #[error(
+        "chat step `{name}` has non-integer `config.{key}` — expected a \
+         non-negative integer (v1 parity: numeric chat knobs parse as u64)"
+    )]
+    ChatConfigNotU64 { name: String, key: &'static str },
+
+    #[error(
+        "chat step `{name}` has non-numeric `config.{key}` — expected a \
+         floating-point number (v1 parity: temperature parses as f64)"
+    )]
+    ChatConfigNotF64 { name: String, key: &'static str },
+
+    #[error(
+        "chat step `{name}` has unknown `config.provider=\"{value}\"` — \
+         set `config.base_url:` to treat it as an OpenAI-compatible endpoint, \
+         or use a known provider (anthropic, openai, ollama, groq, deepseek, \
+         gemini/google, cohere, perplexity, xai/grok, mistral)"
+    )]
+    ChatUnknownProvider { name: String, value: String },
+
+    #[error(
+        "chat step `{name}` uses `config.provider=\"openai_compatible\"` but \
+         no `config.base_url:` — set `base_url:` to the endpoint URL so the \
+         runtime knows where to POST"
+    )]
+    ChatOpenAiCompatibleMissingBaseUrl { name: String },
+
+    #[error(
+        "chat step `{name}` has `config.truncation_strategy=\"{value}\"` — \
+         expected one of: none, last, first, first_last, sliding_window"
+    )]
+    ChatInvalidTruncationStrategy { name: String, value: String },
+
+    #[error(
+        "chat step `{name}` has malformed `config.timeout=\"{value}\"` — \
+         expected a non-negative integer optionally suffixed with `ms`, `s`, \
+         or `m` (v1 parity: bare numbers are seconds)"
+    )]
+    ChatInvalidTimeout { name: String, value: String },
 }
 
 #[derive(Clone, Copy)]
@@ -192,7 +254,10 @@ pub fn adapt(def: &WorkflowDef) -> Result<Workflow, AdapterError> {
 
     let mut scopes: HashMap<String, Scope> = HashMap::with_capacity(def.scopes.len());
     for (scope_name, scope_def) in &def.scopes {
-        scopes.insert(scope_name.clone(), adapt_scope(scope_name, scope_def, &scope_names)?);
+        scopes.insert(
+            scope_name.clone(),
+            adapt_scope(scope_name, scope_def, &scope_names)?,
+        );
     }
 
     let mut wf = Workflow::new(def.name.clone(), steps);
@@ -257,12 +322,9 @@ fn adapt_step(
 }
 
 fn adapt_cmd(s: &StepDef) -> Result<Step, AdapterError> {
-    let cmd = s
-        .run
-        .clone()
-        .ok_or_else(|| AdapterError::CmdMissingRun {
-            name: s.name.clone(),
-        })?;
+    let cmd = s.run.clone().ok_or_else(|| AdapterError::CmdMissingRun {
+        name: s.name.clone(),
+    })?;
     Ok(Step::cmd(s.name.clone(), cmd).with_env(s.env.clone()))
 }
 
@@ -331,8 +393,7 @@ fn adapt_agent(s: &StepDef) -> Result<Step, AdapterError> {
     // resume, fork_session, session, command) into typed fields so the
     // v2 harness can stay YAML-unaware.
     step.model = agent_config_str(s, "model")?.map(String::from);
-    step.system_prompt_append =
-        agent_config_str(s, "system_prompt_append")?.map(String::from);
+    step.system_prompt_append = agent_config_str(s, "system_prompt_append")?.map(String::from);
 
     if let Some(value) = agent_config_str(s, "permissions")? {
         step.permissions = Some(parse_agent_permissions(&s.name, value)?);
@@ -366,7 +427,10 @@ fn adapt_agent(s: &StepDef) -> Result<Step, AdapterError> {
 /// `StepConfig::get_str` shape — v1 silently returned `None` on
 /// non-string payloads; v2 surfaces the mismatch so operators don't ship
 /// a misspelled YAML shape that silently ignores a flag.
-fn agent_config_str<'a>(s: &'a StepDef, key: &'static str) -> Result<Option<&'a str>, AdapterError> {
+fn agent_config_str<'a>(
+    s: &'a StepDef,
+    key: &'static str,
+) -> Result<Option<&'a str>, AdapterError> {
     match s.config.get(key) {
         None | Some(serde_yaml::Value::Null) => Ok(None),
         Some(serde_yaml::Value::String(v)) => Ok(Some(v.as_str())),
@@ -377,10 +441,7 @@ fn agent_config_str<'a>(s: &'a StepDef, key: &'static str) -> Result<Option<&'a 
     }
 }
 
-fn parse_agent_permissions(
-    step_name: &str,
-    value: &str,
-) -> Result<AgentPermissions, AdapterError> {
+fn parse_agent_permissions(step_name: &str, value: &str) -> Result<AgentPermissions, AdapterError> {
     match value {
         "default" => Ok(AgentPermissions::Default),
         "skip" => Ok(AgentPermissions::Skip),
@@ -397,6 +458,239 @@ fn parse_agent_session(step_name: &str, value: &str) -> Result<AgentSessionMode,
         "isolated" => Ok(AgentSessionMode::Isolated),
         other => Err(AdapterError::AgentInvalidSession {
             name: step_name.to_string(),
+            value: other.to_string(),
+        }),
+    }
+}
+
+/// Translates a v1 `type: chat` step into a typed [`Step`] by walking
+/// the `config:` bag (`provider` / `model` / `max_tokens` / `temperature`
+/// / `api_key_env` / `base_url` / `session` / `truncation_strategy` and
+/// its `truncation_count` / `truncation_first` / `truncation_last` /
+/// `truncation_max_tokens` siblings).
+///
+/// **Not wired into [`adapt_step`] in PR 5b.** The public adapter keeps
+/// rejecting `chat` with [`AdapterError::UnsupportedStepType`] until the
+/// rig-core runtime lands in PR 5c; this helper is exercised only by
+/// the unit tests below so the parsing contract can be frozen ahead of
+/// the runtime work.
+#[allow(dead_code)] // wired into adapt_step in PR 5c
+fn parse_chat_step(s: &StepDef) -> Result<Step, AdapterError> {
+    let prompt = s
+        .prompt
+        .clone()
+        .filter(|p| !p.trim().is_empty())
+        .ok_or_else(|| AdapterError::ChatMissingPrompt {
+            name: s.name.clone(),
+        })?;
+
+    let mut step = Step::chat(s.name.clone(), prompt).with_env(s.env.clone());
+
+    // The adapter cristallizes every v1 "missing = default" fallback into
+    // an explicit typed value here so the runtime never has to guess. v1
+    // spread these defaults across `src/steps/chat.rs:340-357`; keeping
+    // them in the adapter matches D6 (resolve env/defaults at the
+    // adapter boundary) and leaves the runtime a single clean code path.
+    let provider_raw = chat_config_str(s, "provider")?.unwrap_or("anthropic");
+    let base_url = chat_config_str(s, "base_url")?.map(String::from);
+    let provider = parse_chat_provider(&s.name, provider_raw, base_url.as_deref())?;
+
+    step.model = Some(
+        chat_config_str(s, "model")?
+            .map(String::from)
+            .unwrap_or_else(|| provider.default_model().to_string()),
+    );
+    step.api_key_env = match chat_config_str(s, "api_key_env")? {
+        Some(v) => Some(v.to_string()),
+        None => provider.default_api_key_env().map(String::from),
+    };
+    step.max_tokens = Some(chat_config_u64(s, "max_tokens")?.unwrap_or(1024));
+    step.temperature = Some(chat_config_f64(s, "temperature")?.unwrap_or(0.0));
+    step.timeout = Some(parse_chat_timeout_ms(s)?.unwrap_or(120_000));
+    step.chat_provider = Some(provider);
+    step.base_url = base_url;
+    step.chat_session = chat_config_str(s, "session")?.map(String::from);
+    step.truncation = parse_chat_truncation(s)?;
+
+    Ok(step)
+}
+
+/// Parses the v1 duration format used by `config.timeout:` into
+/// milliseconds (v1 source: `src/config/mod.rs:42-57`). Accepts string
+/// values with `ms` / `s` / `m` suffixes — bare numeric strings are
+/// seconds per v1 parity. Integer/float YAML values error (v1's
+/// `get_duration` silently fell back to the default in that case — a
+/// quirk the adapter tightens so operators learn about malformed
+/// timeouts at load time instead of at the 120-second default boundary).
+#[allow(dead_code)] // wired into adapt_step in PR 5c
+fn parse_chat_timeout_ms(s: &StepDef) -> Result<Option<u64>, AdapterError> {
+    let raw = match chat_config_str(s, "timeout")? {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+    let trimmed = raw.trim();
+    let (digits, multiplier_ms): (&str, u64) = if let Some(rest) = trimmed.strip_suffix("ms") {
+        (rest.trim_end(), 1)
+    } else if let Some(rest) = trimmed.strip_suffix('s') {
+        (rest.trim_end(), 1_000)
+    } else if let Some(rest) = trimmed.strip_suffix('m') {
+        (rest.trim_end(), 60_000)
+    } else {
+        (trimmed, 1_000)
+    };
+    let n: u64 = digits
+        .parse()
+        .map_err(|_| AdapterError::ChatInvalidTimeout {
+            name: s.name.clone(),
+            value: raw.to_string(),
+        })?;
+    n.checked_mul(multiplier_ms)
+        .map(Some)
+        .ok_or_else(|| AdapterError::ChatInvalidTimeout {
+            name: s.name.clone(),
+            value: raw.to_string(),
+        })
+}
+
+/// Looks up a string-valued chat `config:` key. Mirrors
+/// [`agent_config_str`] for the same reason — v1 silently returned
+/// `None` on non-string payloads; v2 surfaces the mismatch so a
+/// misspelled YAML shape doesn't drop a flag on the floor.
+#[allow(dead_code)] // wired into adapt_step in PR 5c
+fn chat_config_str<'a>(s: &'a StepDef, key: &'static str) -> Result<Option<&'a str>, AdapterError> {
+    match s.config.get(key) {
+        None | Some(serde_yaml::Value::Null) => Ok(None),
+        Some(serde_yaml::Value::String(v)) => Ok(Some(v.as_str())),
+        Some(_) => Err(AdapterError::ChatConfigNotString {
+            name: s.name.clone(),
+            key,
+        }),
+    }
+}
+
+/// Looks up a `u64`-valued chat `config:` key. v1's `get_u64` silently
+/// swallowed non-integer payloads (a stray string on `max_tokens` would
+/// ship as "no override"); the adapter errors instead so a typo in the
+/// YAML surfaces at load time.
+#[allow(dead_code)] // wired into adapt_step in PR 5c
+fn chat_config_u64(s: &StepDef, key: &'static str) -> Result<Option<u64>, AdapterError> {
+    match s.config.get(key) {
+        None | Some(serde_yaml::Value::Null) => Ok(None),
+        Some(serde_yaml::Value::Number(n)) => {
+            n.as_u64()
+                .map(Some)
+                .ok_or_else(|| AdapterError::ChatConfigNotU64 {
+                    name: s.name.clone(),
+                    key,
+                })
+        }
+        Some(_) => Err(AdapterError::ChatConfigNotU64 {
+            name: s.name.clone(),
+            key,
+        }),
+    }
+}
+
+/// Looks up an `f64`-valued chat `config:` key (only `temperature`
+/// today). Accepts both integer and float YAML numbers so
+/// `temperature: 0` and `temperature: 0.7` both work — v1 parity at
+/// `src/steps/chat.rs:350-354`.
+#[allow(dead_code)] // wired into adapt_step in PR 5c
+fn chat_config_f64(s: &StepDef, key: &'static str) -> Result<Option<f64>, AdapterError> {
+    match s.config.get(key) {
+        None | Some(serde_yaml::Value::Null) => Ok(None),
+        Some(serde_yaml::Value::Number(n)) => {
+            n.as_f64()
+                .map(Some)
+                .ok_or_else(|| AdapterError::ChatConfigNotF64 {
+                    name: s.name.clone(),
+                    key,
+                })
+        }
+        Some(_) => Err(AdapterError::ChatConfigNotF64 {
+            name: s.name.clone(),
+            key,
+        }),
+    }
+}
+
+/// Resolves a v1 provider string to a typed [`ChatProvider`]. Mirrors
+/// the v1 match arm at `src/steps/chat.rs:220-322`, including the
+/// `google → Gemini` and `grok → Xai` aliases. Unknown providers fall
+/// through to [`ChatProvider::OpenAiCompatible`] only when `base_url:`
+/// is set — v1's escape hatch for self-hosted gateways. Without it, an
+/// unknown name is treated as a typo.
+#[allow(dead_code)] // wired into adapt_step in PR 5c
+fn parse_chat_provider(
+    step_name: &str,
+    value: &str,
+    base_url: Option<&str>,
+) -> Result<ChatProvider, AdapterError> {
+    match value {
+        "anthropic" => Ok(ChatProvider::Anthropic),
+        "openai" => Ok(ChatProvider::OpenAi),
+        "ollama" => Ok(ChatProvider::Ollama),
+        "groq" => Ok(ChatProvider::Groq),
+        "deepseek" => Ok(ChatProvider::DeepSeek),
+        "gemini" | "google" => Ok(ChatProvider::Gemini),
+        "cohere" => Ok(ChatProvider::Cohere),
+        "perplexity" => Ok(ChatProvider::Perplexity),
+        "xai" | "grok" => Ok(ChatProvider::Xai),
+        "mistral" => Ok(ChatProvider::Mistral),
+        "openai_compatible" => {
+            if base_url.is_some() {
+                Ok(ChatProvider::OpenAiCompatible)
+            } else {
+                Err(AdapterError::ChatOpenAiCompatibleMissingBaseUrl {
+                    name: step_name.to_string(),
+                })
+            }
+        }
+        other => {
+            if base_url.is_some() {
+                Ok(ChatProvider::OpenAiCompatible)
+            } else {
+                Err(AdapterError::ChatUnknownProvider {
+                    name: step_name.to_string(),
+                    value: other.to_string(),
+                })
+            }
+        }
+    }
+}
+
+/// Resolves the v1 flat truncation knobs (`truncation_strategy` plus
+/// `truncation_count` / `truncation_first` / `truncation_last` /
+/// `truncation_max_tokens`) into a typed [`ChatTruncation`]. Absent or
+/// `"none"` normalize to `None` at the adapter boundary — the runtime
+/// only sees a strategy when one was actually requested. Default counts
+/// match `src/steps/chat.rs:34-57` (10, 10, 2+5, 50_000).
+#[allow(dead_code)] // wired into adapt_step in PR 5c
+fn parse_chat_truncation(s: &StepDef) -> Result<Option<ChatTruncation>, AdapterError> {
+    let Some(strategy) = chat_config_str(s, "truncation_strategy")? else {
+        return Ok(None);
+    };
+    match strategy {
+        "none" => Ok(None),
+        "last" => {
+            let count = chat_config_u64(s, "truncation_count")?.unwrap_or(10);
+            Ok(Some(ChatTruncation::Last { count }))
+        }
+        "first" => {
+            let count = chat_config_u64(s, "truncation_count")?.unwrap_or(10);
+            Ok(Some(ChatTruncation::First { count }))
+        }
+        "first_last" => {
+            let first = chat_config_u64(s, "truncation_first")?.unwrap_or(2);
+            let last = chat_config_u64(s, "truncation_last")?.unwrap_or(5);
+            Ok(Some(ChatTruncation::FirstLast { first, last }))
+        }
+        "sliding_window" => {
+            let max_tokens = chat_config_u64(s, "truncation_max_tokens")?.unwrap_or(50_000);
+            Ok(Some(ChatTruncation::SlidingWindow { max_tokens }))
+        }
+        other => Err(AdapterError::ChatInvalidTruncationStrategy {
+            name: s.name.clone(),
             value: other.to_string(),
         }),
     }
@@ -531,10 +825,7 @@ mod tests {
     use std::io::Write;
 
     fn write_tmp(contents: &str) -> tempfile::NamedTempFile {
-        let mut f = tempfile::Builder::new()
-            .suffix(".yaml")
-            .tempfile()
-            .unwrap();
+        let mut f = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
         f.write_all(contents.as_bytes()).unwrap();
         f
     }
@@ -582,12 +873,24 @@ steps:
         let def = parser::parse_file(file.path()).unwrap();
         let wf = adapt(&def).unwrap();
 
-        assert_eq!(wf.env.get("WF_VAR").map(String::as_str), Some("workflow_value"));
-        assert_eq!(wf.env.get("SHARED").map(String::as_str), Some("from_workflow"));
+        assert_eq!(
+            wf.env.get("WF_VAR").map(String::as_str),
+            Some("workflow_value")
+        );
+        assert_eq!(
+            wf.env.get("SHARED").map(String::as_str),
+            Some("from_workflow")
+        );
 
         let step_one_env = &wf.steps[0].env;
-        assert_eq!(step_one_env.get("STEP_VAR").map(String::as_str), Some("step_value"));
-        assert_eq!(step_one_env.get("SHARED").map(String::as_str), Some("from_step"));
+        assert_eq!(
+            step_one_env.get("STEP_VAR").map(String::as_str),
+            Some("step_value")
+        );
+        assert_eq!(
+            step_one_env.get("SHARED").map(String::as_str),
+            Some("from_step")
+        );
 
         assert!(
             wf.steps[1].env.is_empty(),
@@ -1359,5 +1662,758 @@ scopes:
             ),
             "got {err:?}"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // PR 5b commit 2 — parse_chat_step helper (private, not yet wired
+    // into adapt_step). The first test locks the invariant that the
+    // public adapter still rejects chat; the rest exercise the helper
+    // directly so the parsing contract is frozen before PR 5c flips the
+    // dispatch arm.
+    // ------------------------------------------------------------------
+
+    /// Returns the first step from a single-step chat YAML fixture.
+    /// Used by the helper tests below — they can't go through `adapt`
+    /// because chat is still rejected publicly in PR 5b.
+    fn chat_step_def(yaml: &str) -> StepDef {
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        def.steps.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn chat_kind_still_rejected_by_adapt_step() {
+        // Invariant test for checklist item #1: PR 5b must NOT wire
+        // parse_chat_step into the public dispatcher. A chat step that
+        // flows through `adapt(&def)` has to come back as
+        // UnsupportedStepType until the rig-core runtime lands in 5c.
+        let yaml = r#"
+name: chat-still-rejected
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      provider: openai
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::UnsupportedStepType { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_accepts_full_knob_set() {
+        let yaml = r#"
+name: chat-full
+steps:
+  - name: ask
+    type: chat
+    prompt: "summarize"
+    env:
+      OPENAI_API_KEY: shh
+    config:
+      provider: openai
+      model: gpt-4o-mini
+      max_tokens: 1024
+      temperature: 0.7
+      api_key_env: OPENAI_API_KEY
+      base_url: "https://api.openai.com/v1"
+      session: assistant
+      truncation_strategy: sliding_window
+      truncation_max_tokens: 8000
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+
+        assert_eq!(step.name, "ask");
+        assert_eq!(step.kind, stepyard_harness::StepKind::Chat);
+        assert_eq!(step.prompt.as_deref(), Some("summarize"));
+        assert_eq!(step.chat_provider, Some(ChatProvider::OpenAi));
+        assert_eq!(step.model.as_deref(), Some("gpt-4o-mini"));
+        assert_eq!(step.max_tokens, Some(1024));
+        assert_eq!(step.temperature, Some(0.7));
+        assert_eq!(step.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
+        assert_eq!(step.base_url.as_deref(), Some("https://api.openai.com/v1"));
+        assert_eq!(step.chat_session.as_deref(), Some("assistant"));
+        assert_eq!(
+            step.truncation,
+            Some(ChatTruncation::SlidingWindow { max_tokens: 8000 })
+        );
+        assert_eq!(
+            step.env.get("OPENAI_API_KEY").map(String::as_str),
+            Some("shh")
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_defaults_provider_to_anthropic_when_absent() {
+        // Checklist #2: absent `provider:` must promote to an explicit
+        // ChatProvider::Anthropic at the adapter boundary so the
+        // runtime never has to guess the default.
+        let yaml = r#"
+name: chat-default-provider
+steps:
+  - name: ask
+    type: chat
+    prompt: "hello"
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.chat_provider, Some(ChatProvider::Anthropic));
+    }
+
+    #[test]
+    fn parse_chat_step_rejects_missing_prompt() {
+        let yaml = r#"
+name: chat-no-prompt
+steps:
+  - name: hollow
+    type: chat
+    config:
+      provider: anthropic
+"#;
+        let def = chat_step_def(yaml);
+        let err = parse_chat_step(&def).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::ChatMissingPrompt { ref name } if name == "hollow"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_rejects_blank_prompt() {
+        let yaml = r#"
+name: chat-blank-prompt
+steps:
+  - name: blank
+    type: chat
+    prompt: "   "
+"#;
+        let def = chat_step_def(yaml);
+        let err = parse_chat_step(&def).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::ChatMissingPrompt { ref name } if name == "blank"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_maps_google_to_gemini() {
+        // Checklist #4: `google` alias mirrors v1's match arm at
+        // `src/steps/chat.rs:346` and maps to ChatProvider::Gemini.
+        let yaml = r#"
+name: chat-google
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      provider: google
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.chat_provider, Some(ChatProvider::Gemini));
+    }
+
+    #[test]
+    fn parse_chat_step_maps_grok_to_xai() {
+        // Checklist #4: `grok` alias mirrors v1's match arm and maps
+        // to ChatProvider::Xai.
+        let yaml = r#"
+name: chat-grok
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      provider: grok
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.chat_provider, Some(ChatProvider::Xai));
+    }
+
+    #[test]
+    fn parse_chat_step_unknown_provider_with_base_url_becomes_openai_compatible() {
+        // Checklist #3 (positive): v1's escape hatch — unknown provider
+        // + explicit base_url is treated as an OpenAI-compatible endpoint.
+        let yaml = r#"
+name: chat-unknown-with-base-url
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      provider: vllm-selfhost
+      base_url: "http://localhost:8000/v1"
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.chat_provider, Some(ChatProvider::OpenAiCompatible));
+        assert_eq!(step.base_url.as_deref(), Some("http://localhost:8000/v1"));
+    }
+
+    #[test]
+    fn parse_chat_step_unknown_provider_without_base_url_errors() {
+        // Checklist #3 (negative): no base_url means the operator typoed
+        // a provider name — surface it instead of silently accepting.
+        let yaml = r#"
+name: chat-unknown-no-base-url
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      provider: vllm-selfhost
+"#;
+        let def = chat_step_def(yaml);
+        let err = parse_chat_step(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::ChatUnknownProvider { ref name, ref value }
+                    if name == "ask" && value == "vllm-selfhost"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_openai_compatible_requires_base_url() {
+        let yaml = r#"
+name: chat-openai-compatible-no-url
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      provider: openai_compatible
+"#;
+        let def = chat_step_def(yaml);
+        let err = parse_chat_step(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::ChatOpenAiCompatibleMissingBaseUrl { ref name }
+                    if name == "ask"
+            ),
+            "got {err:?}"
+        );
+        // The error message has to literally name `base_url:` so the
+        // operator knows the escape hatch (advisor lock-in).
+        assert!(
+            err.to_string().contains("base_url:"),
+            "missing `base_url:` literal: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_rejects_non_string_provider() {
+        let yaml = r#"
+name: chat-non-string-provider
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      provider: 42
+"#;
+        let def = chat_step_def(yaml);
+        let err = parse_chat_step(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::ChatConfigNotString { ref name, key: "provider" }
+                    if name == "ask"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_rejects_non_integer_max_tokens() {
+        let yaml = r#"
+name: chat-non-int-max-tokens
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      max_tokens: "1024"
+"#;
+        let def = chat_step_def(yaml);
+        let err = parse_chat_step(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::ChatConfigNotU64 { ref name, key: "max_tokens" }
+                    if name == "ask"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_rejects_non_numeric_temperature() {
+        let yaml = r#"
+name: chat-non-numeric-temp
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      temperature: "hot"
+"#;
+        let def = chat_step_def(yaml);
+        let err = parse_chat_step(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::ChatConfigNotF64 { ref name, key: "temperature" }
+                    if name == "ask"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_accepts_integer_temperature() {
+        // v1 parity: `temperature: 0` must round-trip (float coercion).
+        let yaml = r#"
+name: chat-int-temp
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      temperature: 0
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.temperature, Some(0.0));
+    }
+
+    #[test]
+    fn parse_chat_step_truncation_none_normalizes_to_none() {
+        // Checklist #5: explicit `truncation_strategy: none` must
+        // normalize to `Option<ChatTruncation>::None` at the adapter
+        // boundary — the enum never carries a `None` variant.
+        let yaml = r#"
+name: chat-trunc-none
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: none
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.truncation, None);
+    }
+
+    #[test]
+    fn parse_chat_step_truncation_absent_is_none() {
+        let yaml = r#"
+name: chat-trunc-absent
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.truncation, None);
+    }
+
+    #[test]
+    fn parse_chat_step_truncation_variants_roundtrip_with_v1_defaults() {
+        // Table-driven cover of the four enum variants — once with
+        // overrides to confirm the flat `truncation_*` keys are wired
+        // to the right enum fields, once with defaults to lock v1
+        // parity at `src/steps/chat.rs:34-57` (10, 10, 2+5, 50_000).
+        struct Case {
+            yaml: &'static str,
+            expected: ChatTruncation,
+        }
+
+        let cases = [
+            // Explicit overrides
+            Case {
+                yaml: r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: last
+      truncation_count: 3
+"#,
+                expected: ChatTruncation::Last { count: 3 },
+            },
+            Case {
+                yaml: r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: first
+      truncation_count: 7
+"#,
+                expected: ChatTruncation::First { count: 7 },
+            },
+            Case {
+                yaml: r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: first_last
+      truncation_first: 1
+      truncation_last: 2
+"#,
+                expected: ChatTruncation::FirstLast { first: 1, last: 2 },
+            },
+            Case {
+                yaml: r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: sliding_window
+      truncation_max_tokens: 8000
+"#,
+                expected: ChatTruncation::SlidingWindow { max_tokens: 8000 },
+            },
+            // v1 defaults when count/first/last/max_tokens are absent
+            Case {
+                yaml: r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: last
+"#,
+                expected: ChatTruncation::Last { count: 10 },
+            },
+            Case {
+                yaml: r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: first
+"#,
+                expected: ChatTruncation::First { count: 10 },
+            },
+            Case {
+                yaml: r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: first_last
+"#,
+                expected: ChatTruncation::FirstLast { first: 2, last: 5 },
+            },
+            Case {
+                yaml: r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: sliding_window
+"#,
+                expected: ChatTruncation::SlidingWindow { max_tokens: 50_000 },
+            },
+        ];
+
+        for (idx, case) in cases.iter().enumerate() {
+            let def = chat_step_def(case.yaml);
+            let step = parse_chat_step(&def).unwrap_or_else(|e| panic!("case {idx}: {e}"));
+            assert_eq!(step.truncation, Some(case.expected.clone()), "case {idx}");
+        }
+    }
+
+    #[test]
+    fn parse_chat_step_rejects_invalid_truncation_strategy() {
+        let yaml = r#"
+name: chat-bad-trunc
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      truncation_strategy: weird
+"#;
+        let def = chat_step_def(yaml);
+        let err = parse_chat_step(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::ChatInvalidTruncationStrategy { ref name, ref value }
+                    if name == "ask" && value == "weird"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Default-cascade tests (model, api_key_env, max_tokens, temperature,
+    // timeout). The adapter cristallizes v1's "missing = default" behavior
+    // into explicit typed values so the runtime receives a fully resolved
+    // Step. Each test pins one default so a drift surfaces as a targeted
+    // failure instead of a generic "step doesn't match" diff.
+    // ------------------------------------------------------------------
+
+    /// Builds a minimal chat StepDef with an optional `config:` provider
+    /// line. Used by the default-per-provider tables so every case stays
+    /// a one-line YAML patch.
+    fn chat_step_def_with_provider(provider: Option<&str>) -> StepDef {
+        let config = match provider {
+            Some(p) => format!("    config:\n      provider: {p}\n"),
+            None => String::new(),
+        };
+        let yaml = format!(
+            r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+{config}"#
+        );
+        chat_step_def(&yaml)
+    }
+
+    #[test]
+    fn parse_chat_step_model_default_per_provider() {
+        // Pins the v1 fallback at `src/steps/chat.rs:341-348`. Providers
+        // v1 didn't enumerate (anthropic, cohere, perplexity, xai,
+        // mistral, openai_compatible) share the catch-all
+        // `"claude-3-haiku-20240307"` — the v1 quirk the adapter
+        // preserves.
+        let cases = [
+            (Some("anthropic"), "claude-3-haiku-20240307"),
+            (Some("openai"), "gpt-4o-mini"),
+            (Some("ollama"), "llama3.2"),
+            (Some("groq"), "llama-3.3-70b-versatile"),
+            (Some("deepseek"), "deepseek-chat"),
+            (Some("gemini"), "gemini-2.0-flash"),
+            (Some("google"), "gemini-2.0-flash"),
+            (Some("cohere"), "claude-3-haiku-20240307"),
+            (Some("perplexity"), "claude-3-haiku-20240307"),
+            (Some("xai"), "claude-3-haiku-20240307"),
+            (Some("grok"), "claude-3-haiku-20240307"),
+            (Some("mistral"), "claude-3-haiku-20240307"),
+            (None, "claude-3-haiku-20240307"), // absent → anthropic → haiku
+        ];
+        for (provider, expected_model) in cases {
+            let def = chat_step_def_with_provider(provider);
+            let step = parse_chat_step(&def).unwrap();
+            assert_eq!(
+                step.model.as_deref(),
+                Some(expected_model),
+                "provider={provider:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_chat_step_api_key_env_default_per_provider() {
+        // Pins the v1 fallback at `src/steps/chat.rs:363-373`. Ollama is
+        // the sole `None` case (v1 skipped the lookup entirely for local
+        // endpoints). OpenAI-compatible mirrors v1's catch-all
+        // `ANTHROPIC_API_KEY` — operators targeting a non-Anthropic
+        // gateway must set `api_key_env:` explicitly.
+        let cases = [
+            (Some("anthropic"), Some("ANTHROPIC_API_KEY")),
+            (Some("openai"), Some("OPENAI_API_KEY")),
+            (Some("ollama"), None),
+            (Some("groq"), Some("GROQ_API_KEY")),
+            (Some("deepseek"), Some("DEEPSEEK_API_KEY")),
+            (Some("gemini"), Some("GEMINI_API_KEY")),
+            (Some("google"), Some("GEMINI_API_KEY")),
+            (Some("cohere"), Some("COHERE_API_KEY")),
+            (Some("perplexity"), Some("PERPLEXITY_API_KEY")),
+            (Some("xai"), Some("XAI_API_KEY")),
+            (Some("grok"), Some("XAI_API_KEY")),
+            (Some("mistral"), Some("MISTRAL_API_KEY")),
+            (None, Some("ANTHROPIC_API_KEY")),
+        ];
+        for (provider, expected_env) in cases {
+            let def = chat_step_def_with_provider(provider);
+            let step = parse_chat_step(&def).unwrap();
+            assert_eq!(
+                step.api_key_env.as_deref(),
+                expected_env,
+                "provider={provider:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_chat_step_ollama_has_no_default_api_key_env() {
+        // Duplicates one case from the table above, but on its own so
+        // "Ollama is special" is greppable from the test name when
+        // someone debugs "why is my env var None here?".
+        let def = chat_step_def_with_provider(Some("ollama"));
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.chat_provider, Some(ChatProvider::Ollama));
+        assert_eq!(step.api_key_env, None);
+    }
+
+    #[test]
+    fn parse_chat_step_openai_compatible_default_api_key_env_is_anthropic() {
+        // v1 parity quirk: openai_compatible falls into `_ =>
+        // ANTHROPIC_API_KEY` at `src/steps/chat.rs:372`. The adapter
+        // preserves that so pre-existing workflows don't behave
+        // differently on v2. Operators targeting a real gateway are
+        // expected to set `api_key_env:` explicitly.
+        let yaml = r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      provider: openai_compatible
+      base_url: "https://gateway.internal/v1"
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.chat_provider, Some(ChatProvider::OpenAiCompatible));
+        assert_eq!(step.api_key_env.as_deref(), Some("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn parse_chat_step_max_tokens_defaults_to_1024() {
+        // v1 default at `src/steps/chat.rs:349`.
+        let def = chat_step_def_with_provider(None);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.max_tokens, Some(1024));
+    }
+
+    #[test]
+    fn parse_chat_step_temperature_defaults_to_zero() {
+        // v1 default at `src/steps/chat.rs:350-354`.
+        let def = chat_step_def_with_provider(None);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.temperature, Some(0.0));
+    }
+
+    #[test]
+    fn parse_chat_step_timeout_defaults_to_120_seconds() {
+        // v1 default at `src/steps/chat.rs:355-357` (120s). The adapter
+        // stores it in `Step.timeout` (u64 ms) so the harness never
+        // re-resolves the unit.
+        let def = chat_step_def_with_provider(None);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.timeout, Some(120_000));
+    }
+
+    #[test]
+    fn parse_chat_step_timeout_parses_v1_duration_formats() {
+        // Table-driven cover of the v1 duration shapes
+        // (`src/config/mod.rs:42-57`): `ms` / `s` / `m` suffixes plus
+        // bare numeric strings (treated as seconds).
+        let cases = [
+            ("60000ms", 60_000),
+            ("120s", 120_000),
+            ("2m", 120_000),
+            ("120", 120_000), // bare number → seconds
+            ("0ms", 0),
+            ("1m", 60_000),
+        ];
+        for (raw, expected_ms) in cases {
+            let yaml = format!(
+                r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      timeout: "{raw}"
+"#
+            );
+            let def = chat_step_def(&yaml);
+            let step = parse_chat_step(&def).unwrap();
+            assert_eq!(step.timeout, Some(expected_ms), "raw={raw}");
+        }
+    }
+
+    #[test]
+    fn parse_chat_step_timeout_rejects_malformed_string() {
+        // Tightens the v1 quirk where a bad `timeout:` silently fell
+        // back to the 120s default — operators learn about the typo at
+        // load time instead.
+        let yaml = r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      timeout: "zzz"
+"#;
+        let def = chat_step_def(yaml);
+        let err = parse_chat_step(&def).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                AdapterError::ChatInvalidTimeout { ref name, ref value }
+                    if name == "ask" && value == "zzz"
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_chat_step_explicit_values_override_defaults() {
+        // Sanity: explicit values in `config:` aren't clobbered by the
+        // default cascade. Guards against a future refactor accidentally
+        // reordering the `.unwrap_or(default)` against `explicit`.
+        let yaml = r#"
+name: t
+steps:
+  - name: ask
+    type: chat
+    prompt: "hi"
+    config:
+      provider: openai
+      model: gpt-4-turbo
+      api_key_env: CUSTOM_KEY
+      max_tokens: 4096
+      temperature: 0.9
+      timeout: "30s"
+"#;
+        let def = chat_step_def(yaml);
+        let step = parse_chat_step(&def).unwrap();
+        assert_eq!(step.chat_provider, Some(ChatProvider::OpenAi));
+        assert_eq!(step.model.as_deref(), Some("gpt-4-turbo"));
+        assert_eq!(step.api_key_env.as_deref(), Some("CUSTOM_KEY"));
+        assert_eq!(step.max_tokens, Some(4096));
+        assert_eq!(step.temperature, Some(0.9));
+        assert_eq!(step.timeout, Some(30_000));
     }
 }

@@ -8,7 +8,7 @@
 
 use chrono::TimeZone;
 use stepyard_core::{
-    EngineError, Event, EventSubscriber, GateOutcome, ScopeContext, StepOutputSnapshot,
+    ChatRole, EngineError, Event, EventSubscriber, GateOutcome, ScopeContext, StepOutputSnapshot,
     TerminationReason,
 };
 use serde::Deserialize;
@@ -368,6 +368,85 @@ fn legacy_step_completed_without_agent_session_id_deserializes() {
         } => assert_eq!(step_name, "review"),
         other => panic!("legacy step_completed must deserialize: {other:?}"),
     }
+}
+
+// ── PR 5b of #31 — ChatMessageAppended wire-shape lock ──────────────────
+
+#[test]
+fn chat_message_appended_roundtrips() {
+    // The new variant that lets post-crash replay rebuild
+    // `chat_sessions` from the session log alone (Invariante 11 — no
+    // in-memory chat history between `step` calls). Freezes the five
+    // fields and the `snake_case` role spelling that subscribers /
+    // replay scanners rely on.
+    let ts = chrono::Utc.with_ymd_and_hms(2026, 4, 22, 12, 0, 0).unwrap();
+    let original = Event::ChatMessageAppended {
+        step_name: "draft".into(),
+        session: "shared".into(),
+        role: ChatRole::Assistant,
+        content: "ack".into(),
+        timestamp: ts,
+    };
+
+    let value = serde_json::to_value(&original).unwrap();
+    assert_eq!(value["event"], json!("chat_message_appended"));
+    assert_eq!(value["step_name"], json!("draft"));
+    assert_eq!(value["session"], json!("shared"));
+    assert_eq!(value["role"], json!("assistant"));
+    assert_eq!(value["content"], json!("ack"));
+    assert_eq!(value["timestamp"], json!("2026-04-22T12:00:00Z"));
+
+    let back: Event = serde_json::from_value(value).unwrap();
+    match back {
+        Event::ChatMessageAppended {
+            step_name,
+            session,
+            role,
+            content,
+            ..
+        } => {
+            assert_eq!(step_name, "draft");
+            assert_eq!(session, "shared");
+            assert_eq!(role, ChatRole::Assistant);
+            assert_eq!(content, "ack");
+        }
+        other => panic!("roundtrip produced unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
+fn chat_role_rejects_unknown_values_on_deserialize() {
+    // The replay gate: a corrupted log row claiming `role: "system"`
+    // (or any other value outside user/assistant) must fail to
+    // deserialize so `compute_progress` surfaces it as `InvalidState`
+    // rather than silently coercing the turn into a default role and
+    // changing the prompt the next chat turn sees. Mirrors the
+    // `gate_outcome_rejects_unknown_values_on_deserialize` lock.
+    let bad = json!({
+        "event": "chat_message_appended",
+        "step_name": "s",
+        "session": "s",
+        "role": "system",
+        "content": "",
+        "timestamp": "2026-04-22T12:00:00Z",
+    });
+    assert!(
+        serde_json::from_value::<Event>(bad).is_err(),
+        "unknown role value must fail deserialization"
+    );
+
+    let numeric = json!({
+        "event": "chat_message_appended",
+        "step_name": "s",
+        "session": "s",
+        "role": 0,
+        "content": "",
+        "timestamp": "2026-04-22T12:00:00Z",
+    });
+    assert!(
+        serde_json::from_value::<Event>(numeric).is_err(),
+        "non-string role must fail deserialization"
+    );
 }
 
 #[test]
