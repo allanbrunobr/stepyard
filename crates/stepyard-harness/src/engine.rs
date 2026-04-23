@@ -1516,24 +1516,34 @@ struct Progress {
     first_agent_session_id: Option<String>,
     /// Chat-session history keyed by the session bucket name (the
     /// `session` field on [`Event::ChatMessageAppended`]). Each bucket
-    /// holds turns in log-append order so a post-crash replay of a
-    /// `session: shared` chat step sees the same conversation the
-    /// pre-crash run did — Invariante 11 means there's no in-memory
-    /// chat history between `step` calls, so the log is the only
-    /// source of truth (PR 5b of Task #31).
+    /// holds the **committed** turns in log-append order, so a post-
+    /// crash replay of a `session: shared` chat step sees the same
+    /// conversation the pre-crash run durably produced — Invariante 11
+    /// means there's no in-memory chat history between `step` calls,
+    /// so the log is the only source of truth (PR 5b of Task #31).
     ///
-    /// Populated strictly from the log: every `chat_message_appended`
-    /// event with a well-formed payload appends one [`ChatMessage`] to
-    /// its bucket. A malformed row (missing/invalid `session`, `role`,
-    /// or `content`) aborts the scan with [`EngineError::InvalidState`]
+    /// Commit boundary mirrors [`Event::StepCompleted`]'s semantic for
+    /// `output` and `agent_session_id`: a turn only lands in this map
+    /// when its producing chat step reaches a non-scoped
+    /// [`Event::StepCompleted`] with `step_type: "chat"`. Turns
+    /// emitted by a step that crashed before completion (no
+    /// StepCompleted), failed, or is still in flight are discarded.
+    /// A rerun after resume re-stages from scratch, so the rebuilt
+    /// history always matches the durable-run view — a chat step's
+    /// second attempt never sees a "phantom" turn from an abandoned
+    /// first attempt.
+    ///
+    /// Malformed rows (missing/invalid `step_name`, `session`, `role`,
+    /// or `content`) abort the scan with [`EngineError::InvalidState`]
     /// — silent drop would let a corrupted log hand the next turn a
-    /// shorter history than the live run saw, breaking the exact
+    /// different history than the live run saw, breaking the exact
     /// determinism this scan enforces.
     ///
     /// Unread by production code until a later PR lands the v2 chat
-    /// executor. The scan contract ships first so it can be unit-tested
-    /// with hand-constructed logs before the runtime path exists — the
-    /// same staging `outputs` / `agent_session_ids` used in PR 2 / 5a.
+    /// executor. The scan contract ships first so it can be unit-
+    /// tested with hand-constructed logs before the runtime path
+    /// exists — the same staging pattern `outputs` / `agent_session_ids`
+    /// used in PR 2 / 5a.
     #[allow(dead_code)]
     chat_sessions: HashMap<String, Vec<ChatMessage>>,
 }
@@ -1566,18 +1576,36 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
     // completions.
     let mut agent_session_ids: HashMap<String, String> = HashMap::new();
     let mut first_agent_session_id: Option<String> = None;
-    // PR 5b of Task #31: rebuild the chat-session history from the log
-    // in the same scan. Turns land in insertion order per bucket, so a
-    // `session: shared` chat step running after a crash sees the same
-    // conversation the pre-crash run did without the runtime holding
-    // any in-memory state (Invariante 11).
+    // PR 5b/3 of Task #31: rebuild the chat-session history from the
+    // log in the same scan. Turns stage by `step_name` in
+    // `pending_chat_turns` and only commit into `chat_sessions` when a
+    // matching non-scoped `step_completed` with `step_type: "chat"`
+    // lands — the same atomicity boundary PR 2 gave `outputs` and PR
+    // 5a gave `agent_session_ids`. Turns from a step that crashes
+    // before completion, fails, or is still in flight are discarded;
+    // a `step_started` for the same `step_name` clears the stage so a
+    // post-resume rerun re-stages from scratch (Invariante 11).
     let mut chat_sessions: HashMap<String, Vec<ChatMessage>> = HashMap::new();
+    let mut pending_chat_turns: HashMap<String, Vec<(String, ChatMessage)>> = HashMap::new();
 
     for evt in events.iter() {
         let Some(tag) = evt.payload.get("event").and_then(|v| v.as_str()) else {
             continue;
         };
         match tag {
+            "step_started" => {
+                // PR 5b/3 of #31: a fresh StepStarted for `step_name`
+                // is the rerun boundary for staged chat turns. The
+                // runtime re-emits StepStarted when resume retries an
+                // incomplete step, so clearing the stage here drops any
+                // turns left behind by the crashed attempt and lets the
+                // retry re-stage from scratch. Non-chat step_started
+                // events miss the map entirely — `remove` is a no-op,
+                // so there's no branch on `step_type`.
+                if let Some(name) = evt.payload.get("step_name").and_then(|v| v.as_str()) {
+                    pending_chat_turns.remove(name);
+                }
+            }
             "step_completed" => {
                 // Scope-body completions carry a `scope_context` object;
                 // top-level completions either omit the field (legacy
@@ -1595,6 +1623,17 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
                 let step_name = evt
                     .payload
                     .get("step_name")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                // PR 5b/3 of #31: `step_type` gates the chat-history
+                // drain below. Non-chat completions leave
+                // `pending_chat_turns` alone (no drain, no drop),
+                // which preserves the commit boundary when an agent
+                // step completes between two still-in-flight chat
+                // steps.
+                let step_type = evt
+                    .payload
+                    .get("step_type")
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
                 // Absent `output` stays OK — that's how log entries
@@ -1635,6 +1674,19 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
                     if let Some(snap) = snapshot {
                         outputs.insert(name.clone(), snap);
                     }
+                    // PR 5b/3 of #31: a non-scoped chat completion is
+                    // the commit boundary for staged turns — drain
+                    // under `name` into `chat_sessions[session]`.
+                    // Non-chat completions don't touch the stage, so
+                    // an agent step sharing a name with nothing else
+                    // is a no-op here.
+                    if step_type.as_deref() == Some("chat") {
+                        if let Some(turns) = pending_chat_turns.remove(&name) {
+                            for (session, msg) in turns {
+                                chat_sessions.entry(session).or_default().push(msg);
+                            }
+                        }
+                    }
                     if let Some(sid) = captured_session_id {
                         if first_agent_session_id.is_none() {
                             first_agent_session_id = Some(sid.clone());
@@ -1645,28 +1697,46 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
             }
             "step_failed" => {
                 has_failure = true;
-                last_failed = evt
+                let step_name = evt
                     .payload
                     .get("step_name")
                     .and_then(|v| v.as_str())
                     .map(str::to_string);
+                // PR 5b/3 of #31: a failed chat step must not pollute
+                // history. The runtime treats StepFailed as terminal
+                // (no rerun), so any staged turns the attempt emitted
+                // are abandoned for good. `remove` on a non-chat name
+                // is a no-op.
+                if let Some(ref name) = step_name {
+                    pending_chat_turns.remove(name);
+                }
+                last_failed = step_name;
             }
             "chat_message_appended" => {
-                // PR 5b of Task #31: append each chat turn to the
-                // bucket named by its `session` field. Unlike
-                // `step_completed`, every chat payload is
-                // replay-critical: skipping a turn with missing
-                // session/role/content would hand the next chat step
-                // a shorter history than the live run saw. So all
-                // three fields are strict — present + well-typed, or
-                // the scan aborts with `InvalidState`.
+                // PR 5b/3 of #31: stage this turn by `step_name` — it
+                // only becomes durable `chat_sessions` history when
+                // the matching non-scoped StepCompleted lands (see
+                // the `step_completed` arm above). Every payload is
+                // replay-critical: a turn with missing step_name /
+                // session / role / content would either mis-stage
+                // (wrong bucket / wrong commit key) or silently hand
+                // the next turn a shorter history than the live run
+                // saw. So all four fields are strict — present +
+                // well-typed, or the scan aborts with `InvalidState`.
                 //
-                // `step_name` is intentionally unused here: the bucket
-                // key is `session`, not the step name (they coincide
-                // only for `session: isolated`). A typed decode of
-                // `role` + `content` into `ChatMessage` doubles as the
-                // role-enum gate — serde rejects any value outside
-                // `user` / `assistant` at parse time.
+                // A typed decode of `role` + `content` into
+                // `ChatMessage` doubles as the role-enum gate: serde
+                // rejects any value outside `user` / `assistant` at
+                // parse time.
+                let step_name = match evt.payload.get("step_name") {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    _ => {
+                        return Err(EngineError::InvalidState(
+                            "chat_message_appended log entry is missing or has malformed `step_name`"
+                                .to_string(),
+                        ));
+                    }
+                };
                 let session = match evt.payload.get("session") {
                     Some(serde_json::Value::String(s)) => s.clone(),
                     _ => {
@@ -1695,7 +1765,10 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
                         "chat_message_appended log entry has malformed `role`/`content` payload: {e}"
                     ))
                 })?;
-                chat_sessions.entry(session).or_default().push(message);
+                pending_chat_turns
+                    .entry(step_name)
+                    .or_default()
+                    .push((session, message));
             }
             _ => {}
         }
@@ -2028,6 +2101,38 @@ mod progress_tests {
         })
     }
 
+    fn chat_step_started(step_name: &str) -> serde_json::Value {
+        json!({
+            "event": "step_started",
+            "step_name": step_name,
+            "step_type": "chat",
+            "timestamp": "2026-04-22T12:00:00Z",
+        })
+    }
+
+    fn chat_step_completed(step_name: &str) -> serde_json::Value {
+        json!({
+            "event": "step_completed",
+            "step_name": step_name,
+            "step_type": "chat",
+            "duration_ms": 100,
+            "timestamp": "2026-04-22T12:00:00Z",
+            "sandboxed": false,
+        })
+    }
+
+    fn chat_step_failed(step_name: &str) -> serde_json::Value {
+        json!({
+            "event": "step_failed",
+            "step_name": step_name,
+            "step_type": "chat",
+            "error": "boom".to_string(),
+            "duration_ms": 100,
+            "timestamp": "2026-04-22T12:00:00Z",
+            "sandboxed": false,
+        })
+    }
+
     #[test]
     fn empty_log_yields_empty_chat_sessions() {
         let progress = compute_progress(&[]).unwrap();
@@ -2035,7 +2140,12 @@ mod progress_tests {
     }
 
     #[test]
-    fn single_chat_turn_populates_bucket_and_does_not_count_as_completion() {
+    fn orphan_chat_event_without_step_completed_is_dropped_from_chat_sessions() {
+        // A `chat_message_appended` whose producing step never
+        // reaches StepCompleted represents an in-flight or crashed
+        // attempt. Committing it would hand the rerun a phantom turn
+        // the durable log never contains — the exact atomicity bug
+        // this commit boundary exists to prevent.
         let events = vec![evt(
             1,
             chat_message_appended("draft", "shared", "user", "hello"),
@@ -2044,32 +2154,67 @@ mod progress_tests {
         // Chat turns aren't step completions — they must not advance
         // the top-level step index.
         assert_eq!(progress.completed_steps, 0);
-        let bucket = progress
-            .chat_sessions
-            .get("shared")
-            .expect("shared bucket must exist");
-        assert_eq!(bucket.len(), 1);
-        assert_eq!(bucket[0].role, stepyard_core::ChatRole::User);
-        assert_eq!(bucket[0].content, "hello");
+        // And without a matching StepCompleted, the stage stays
+        // pending and `chat_sessions` is empty.
+        assert!(
+            progress.chat_sessions.is_empty(),
+            "orphan chat turn must not land in chat_sessions, got {:?}",
+            progress.chat_sessions
+        );
     }
 
     #[test]
-    fn multi_turn_shared_session_preserves_log_append_order() {
-        // A `session: shared` workflow emits alternating user/assistant
-        // turns under the same bucket; replay must hand them back in
-        // exact insertion order, otherwise a re-rendered prompt would
-        // see the assistant's reply before the user's question.
+    fn chat_turns_commit_only_after_matching_chat_step_completed() {
+        // Positive commit path: StepStarted → two chat turns → a
+        // non-scoped chat StepCompleted drains the stage into
+        // `chat_sessions[session]`, preserving log-append order.
         let events = vec![
-            evt(1, chat_message_appended("draft", "shared", "user", "q1")),
+            evt(1, chat_step_started("draft")),
+            evt(2, chat_message_appended("draft", "shared", "user", "q1")),
             evt(
-                2,
+                3,
                 chat_message_appended("draft", "shared", "assistant", "a1"),
             ),
-            evt(3, chat_message_appended("review", "shared", "user", "q2")),
+            evt(4, chat_step_completed("draft")),
+        ];
+        let progress = compute_progress(&events).unwrap();
+        assert_eq!(progress.completed_steps, 1);
+        let bucket = progress.chat_sessions.get("shared").expect("shared bucket");
+        assert_eq!(
+            bucket
+                .iter()
+                .map(|m| (m.role, m.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (stepyard_core::ChatRole::User, "q1"),
+                (stepyard_core::ChatRole::Assistant, "a1"),
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_turn_shared_session_preserves_log_append_order_across_steps() {
+        // Two `session: shared` chat steps run back-to-back; each
+        // step commits its own turns on StepCompleted. The shared
+        // bucket must hold all four turns in exact step-by-step,
+        // turn-by-turn order — otherwise a re-rendered prompt in a
+        // later step would see the assistant's reply before the
+        // user's question.
+        let events = vec![
+            evt(1, chat_step_started("draft")),
+            evt(2, chat_message_appended("draft", "shared", "user", "q1")),
             evt(
-                4,
+                3,
+                chat_message_appended("draft", "shared", "assistant", "a1"),
+            ),
+            evt(4, chat_step_completed("draft")),
+            evt(5, chat_step_started("review")),
+            evt(6, chat_message_appended("review", "shared", "user", "q2")),
+            evt(
+                7,
                 chat_message_appended("review", "shared", "assistant", "a2"),
             ),
+            evt(8, chat_step_completed("review")),
         ];
         let progress = compute_progress(&events).unwrap();
         let bucket = progress.chat_sessions.get("shared").expect("shared bucket");
@@ -2092,14 +2237,19 @@ mod progress_tests {
         // `session: isolated` puts each step's turns into its own
         // bucket keyed by step name. The scan must keep them apart —
         // merging would let an isolated chat see another step's
-        // history on replay.
+        // history on replay. Each step commits on its own
+        // StepCompleted.
         let events = vec![
-            evt(1, chat_message_appended("alpha", "alpha", "user", "a_q")),
-            evt(2, chat_message_appended("beta", "beta", "user", "b_q")),
+            evt(1, chat_step_started("alpha")),
+            evt(2, chat_message_appended("alpha", "alpha", "user", "a_q")),
             evt(
                 3,
                 chat_message_appended("alpha", "alpha", "assistant", "a_a"),
             ),
+            evt(4, chat_step_completed("alpha")),
+            evt(5, chat_step_started("beta")),
+            evt(6, chat_message_appended("beta", "beta", "user", "b_q")),
+            evt(7, chat_step_completed("beta")),
         ];
         let progress = compute_progress(&events).unwrap();
         assert_eq!(progress.chat_sessions.len(), 2);
@@ -2109,8 +2259,11 @@ mod progress_tests {
 
     #[test]
     fn chat_events_do_not_pollute_step_completion_counters() {
-        // Verifies the "chat is not a step" axis stays crisp even when
-        // chats are interleaved with actual step completions.
+        // Verifies the "chat is not a step" axis stays crisp even
+        // when chats are interleaved with non-chat completions. The
+        // orphan chat event is staged (no matching chat StepCompleted)
+        // and ends up discarded — the assertion here is specifically
+        // about the completion counter, not chat_sessions population.
         let events = vec![
             evt(1, step_completed("setup", None)),
             evt(
@@ -2121,15 +2274,134 @@ mod progress_tests {
         ];
         let progress = compute_progress(&events).unwrap();
         assert_eq!(progress.completed_steps, 2);
-        assert_eq!(progress.chat_sessions.get("shared").unwrap().len(), 1);
+        // The orphan turn has no matching chat StepCompleted, so the
+        // stage drops it — and `step_completed("setup"/"teardown")`
+        // is `step_type: "agent"`, which never drains the chat stage.
+        assert!(
+            progress.chat_sessions.is_empty(),
+            "agent completions must not drain the chat stage, got {:?}",
+            progress.chat_sessions
+        );
+    }
+
+    #[test]
+    fn failed_chat_step_drops_staged_turns_from_history() {
+        // If the chat step fails, its attempted turns are abandoned:
+        // the runtime won't rerun a failed step, and committing the
+        // partial history would hand the *next* chat step a prefix
+        // the successful run never produced. Must stay empty.
+        let events = vec![
+            evt(1, chat_step_started("draft")),
+            evt(2, chat_message_appended("draft", "shared", "user", "q1")),
+            evt(3, chat_step_failed("draft")),
+        ];
+        let progress = compute_progress(&events).unwrap();
+        assert!(progress.has_failure);
+        assert_eq!(progress.last_failed_step.as_deref(), Some("draft"));
+        assert!(
+            progress.chat_sessions.is_empty(),
+            "failed chat step must not pollute history, got {:?}",
+            progress.chat_sessions
+        );
+    }
+
+    #[test]
+    fn rerun_after_crash_restages_only_the_committed_attempt() {
+        // Simulates the atomicity scenario: run 1 emits a turn, then
+        // crashes before StepCompleted. Run 2 (after resume) emits a
+        // fresh StepStarted for the same step_name, its own turns,
+        // then a StepCompleted. The replay must see ONLY run 2's
+        // turns — the StepStarted reset drops the orphan run-1 turn.
+        let events = vec![
+            // Run 1 (crashed — no StepCompleted).
+            evt(1, chat_step_started("draft")),
+            evt(
+                2,
+                chat_message_appended("draft", "shared", "user", "q1-run1"),
+            ),
+            // Run 2 (resume — fresh StepStarted, full turns, commit).
+            evt(3, chat_step_started("draft")),
+            evt(
+                4,
+                chat_message_appended("draft", "shared", "user", "q1-run2"),
+            ),
+            evt(
+                5,
+                chat_message_appended("draft", "shared", "assistant", "a1-run2"),
+            ),
+            evt(6, chat_step_completed("draft")),
+        ];
+        let progress = compute_progress(&events).unwrap();
+        let bucket = progress.chat_sessions.get("shared").expect("shared bucket");
+        assert_eq!(
+            bucket
+                .iter()
+                .map(|m| (m.role, m.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (stepyard_core::ChatRole::User, "q1-run2"),
+                (stepyard_core::ChatRole::Assistant, "a1-run2"),
+            ],
+            "post-crash replay must not carry the orphan run-1 turn"
+        );
+    }
+
+    #[test]
+    fn chat_event_missing_step_name_fails_loudly() {
+        // Replay contract gate: without `step_name` we can't key the
+        // stage, so we'd either mis-attribute the turn to another
+        // step or silently drop it. Both mis-commit history. Fail
+        // the whole scan.
+        let events = vec![evt(
+            1,
+            json!({
+                "event": "chat_message_appended",
+                "session": "shared",
+                "role": "user",
+                "content": "hello",
+                "timestamp": "2026-04-22T12:00:00Z",
+            }),
+        )];
+        let err = compute_progress(&events).expect_err("missing step_name must error");
+        match err {
+            EngineError::InvalidState(msg) => assert!(
+                msg.contains("step_name"),
+                "error must name the missing field, got: {msg}"
+            ),
+            other => panic!("expected InvalidState, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_event_with_non_string_step_name_fails_loudly() {
+        let events = vec![evt(
+            1,
+            json!({
+                "event": "chat_message_appended",
+                "step_name": 42,
+                "session": "shared",
+                "role": "user",
+                "content": "hello",
+                "timestamp": "2026-04-22T12:00:00Z",
+            }),
+        )];
+        let err = compute_progress(&events).expect_err("numeric step_name must error");
+        match err {
+            EngineError::InvalidState(msg) => assert!(
+                msg.contains("step_name"),
+                "error must reference step_name, got: {msg}"
+            ),
+            other => panic!("expected InvalidState, got {other:?}"),
+        }
     }
 
     #[test]
     fn chat_event_missing_session_fails_loudly() {
-        // Replay contract gate #4: missing `session` can't be silently
-        // defaulted — we wouldn't know which bucket the turn belongs
-        // to. Fail the whole scan so a corrupt log cannot hand the
-        // next chat step a silently-truncated history.
+        // Replay contract gate: missing `session` can't be silently
+        // defaulted — we wouldn't know which bucket to drain the
+        // turn into on StepCompleted. Fail the whole scan so a
+        // corrupt log cannot hand the next chat step a
+        // silently-truncated history.
         let events = vec![evt(
             1,
             json!({
