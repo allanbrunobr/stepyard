@@ -13,6 +13,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::docker_errors::{classify_create_stderr, classify_destroy_stderr};
 use crate::sandbox::{ExecFn, ExecOutput, Sandbox, SandboxError, SandboxId, SandboxState};
 use crate::SandboxLifecycle;
 
@@ -96,8 +97,7 @@ impl SandboxLifecycle for DockerLifecycle {
             .map_err(|e| SandboxError::BackendUnavailable(e.to_string()))?;
 
         if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(SandboxError::CreateFailed(err));
+            return Err(classify_create_stderr(&output.stderr));
         }
 
         // We generate our own SandboxId rather than using the Docker hash,
@@ -132,11 +132,11 @@ impl SandboxLifecycle for DockerLifecycle {
             .await
             .map_err(|e| SandboxError::BackendUnavailable(e.to_string()))?;
         if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            // `docker rm -f` on a non-existent container is not an error for
-            // our purposes — destroy is idempotent.
-            if !err.contains("No such container") {
-                return Err(SandboxError::DestroyFailed(err));
+            // `docker rm -f` on an already-gone container is not an error
+            // — destroy is idempotent. The classifier returns `None` for
+            // that case and typed variants for everything else.
+            if let Some(err) = classify_destroy_stderr(&output.stderr) {
+                return Err(err);
             }
         }
         Ok(())
@@ -178,12 +178,10 @@ impl SandboxLifecycle for DockerLifecycle {
         let name = Self::container_name(*id.as_uuid());
         let mut pairs: Vec<(&String, &String)> = env.iter().collect();
         pairs.sort_by(|a, b| a.0.cmp(b.0));
-        let env_values: Vec<String> = pairs
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect();
+        let env_values: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
 
-        let mut docker_args: Vec<&str> = Vec::with_capacity(2 + env_values.len() * 2 + 1 + cmd.len());
+        let mut docker_args: Vec<&str> =
+            Vec::with_capacity(2 + env_values.len() * 2 + 1 + cmd.len());
         docker_args.push("exec");
         for value in &env_values {
             docker_args.push("--env");

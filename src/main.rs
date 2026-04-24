@@ -9,6 +9,7 @@ mod claude;
 mod cli;
 mod config;
 mod control_flow;
+mod display;
 mod engine;
 mod error;
 mod events;
@@ -46,14 +47,10 @@ async fn main() -> ExitCode {
     // would drop immediately). `install_handlers` then calls `signal(..)`
     // again to obtain its own stream — tokio documents this as supported
     // and equivalent to the eagerly-installed one.
-    let _eager_sigint = tokio::signal::unix::signal(
-        tokio::signal::unix::SignalKind::interrupt(),
-    )
-    .expect("install SIGINT handler");
-    let _eager_sigterm = tokio::signal::unix::signal(
-        tokio::signal::unix::SignalKind::terminate(),
-    )
-    .expect("install SIGTERM handler");
+    let _eager_sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .expect("install SIGINT handler");
+    let _eager_sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
 
     // D4 per-process shutdown channel. Only `main()` owns the `Sender`; every
     // `Engine` calls `config.shutdown_tx.subscribe()` (Story 2.1). The signal
@@ -83,7 +80,15 @@ async fn main() -> ExitCode {
             match run_result {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("\x1b[31merror:\x1b[0m {e:#}");
+                    // Round 3 Story 4: route the anyhow-chain rendering through
+                    // `sanitize_human` so any raw stderr captured in a
+                    // `SandboxError::Other(String)` (or future classifier
+                    // payload) cannot smuggle ANSI escapes or bidi overrides
+                    // into the terminal. The red `error:` ANSI prefix is part
+                    // of the CLI's own UI — kept verbatim, outside the sanitize
+                    // pass — so only the untrusted error body is normalized.
+                    let body = format!("{e:#}");
+                    eprintln!("\x1b[31merror:\x1b[0m {}", display::sanitize_human(&body));
                     ExitCode::from(1)
                 }
             }

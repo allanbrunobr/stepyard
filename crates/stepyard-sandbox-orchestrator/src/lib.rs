@@ -25,6 +25,7 @@
 //!   step and get either the cached container or a fresh one.
 
 mod docker;
+mod docker_errors;
 mod local;
 pub mod mock;
 mod sandbox;
