@@ -522,6 +522,16 @@ fn engine_error_display_messages_are_stable() {
         .to_string(),
         "step 2 failed: step timeout after 5000ms"
     );
+    assert_eq!(
+        EngineError::InvalidWorkflowField {
+            path: "steps[0].timeout".into(),
+            got: "30".into(),
+            expected: "duration string (e.g. 30s, 500ms, 1h30m)",
+        }
+        .to_string(),
+        "invalid workflow field at `steps[0].timeout`: got `30`, \
+         expected duration string (e.g. 30s, 500ms, 1h30m)"
+    );
 }
 
 #[test]
