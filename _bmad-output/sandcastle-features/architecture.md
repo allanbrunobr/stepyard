@@ -421,6 +421,15 @@ Everything else in this section is scoped to specific stories, crates, or API su
 
 - `StepFailed { step_index, reason: TerminationReason }` is the ONLY termination error; agents must NOT add sibling variants like `StepTimeout` or `StepCancelled` at the top level
 - `TerminationReason` variants are plain PascalCase: `StepTimeout`, `IdleTimeout`, `Cancelled`, `SignalReceived(String)`, `Other(String)`
+- **Parse-error variant (new, party mode Round 3):** `EngineError::InvalidWorkflowField { path: String, got: String, expected: &'static str }` is the unified workflow-parse-error variant. All parse-time validation failures (duration strings, env keys, env values, enum strings) map into this variant with a best-effort `path` (e.g., `steps[2].env.FOO`, `steps[0].timeout`) and a stable `expected` description. Agents MUST NOT add sibling variants like `InvalidEnvKey`, `InvalidEnvValue`, `InvalidTimeout` — taxonomic sprawl is worse than one variant with rich fields.
+
+**`Other(String)` discipline (both `TerminationReason::Other` and `SandboxError::Other`, new, party mode Round 3):**
+
+- **Stored form:** raw UTF-8-lossy of external output, truncated at 8 KiB at a UTF-8 char boundary. Preserved verbatim as an internal diagnostic. PostgreSQL storage is NOT a security boundary.
+- **Displayed form:** every path from a stored `Other(String)` to a human/API surface MUST route through `sanitize_human` at the display boundary (see Display Boundary Sanitization below). The raw stored form MUST NEVER reach a terminal, log line, rendered event-payload field, or CLI error printout without sanitization.
+- **Construction:** only permitted inside `*_errors.rs` classifier modules (`docker_errors.rs`, `git_errors.rs`, `workspace_errors.rs`). Call sites elsewhere MUST map external output through the classifier first; a classifier returning `Other(raw)` is the single escape hatch for unclassified output.
+- **Reviewer checklist:** new `Other(...)` construction outside a classifier module is a review-stop. New display of `Other(...)` without `sanitize_human` is a review-stop.
+- Future: known-secret redaction (API keys, tokens, passwords by regex) tracked as a separate ADR.
 
 **Database Naming (inherited):**
 
@@ -431,7 +440,7 @@ Everything else in this section is scoped to specific stories, crates, or API su
 **YAML Field Naming (new conventions):**
 
 - All fields: `snake_case` matching Rust field names
-- New fields: `timeout:` (u64 ms), `idle_timeout:` (u64 ms), `env:` (map), `branch_strategy:` (enum string), `branch_name:` (string)
+- New fields: `timeout:` (duration string, see Timeout Field Format), `idle_timeout:` (duration string, see Timeout Field Format), `env:` (`HashMap<String, String>`, see Env Var Key/Value Validation), `branch_strategy:` (enum string), `branch_name:` (string)
 - Enum values in YAML: `snake_case` strings (`head`, `merge_to_head`, `named_branch`) — NOT PascalCase, NOT kebab-case
 
 ### Structure Patterns
@@ -484,6 +493,40 @@ Everything else in this section is scoped to specific stories, crates, or API su
 - ❌ `result.push_str(&raw_value);`
 - **Known issue (Round 2):** `serde_yaml` (dtolnay) was archived in late 2024. The workspace currently uses it (inherited from Engine v2), which makes this a slow-burning tech-debt item. Planned migration to `serde_yml` (maintained fork) or `serde_yaml_ng` is scoped to the Growth phase and will be tracked as a separate ADR. For MVP, `serde_yaml` remains in use; the substitution pattern is independent of the underlying crate choice.
 
+**Timeout Field Format (new, party mode Round 3):**
+
+- YAML `timeout:` and `idle_timeout:` fields are **duration strings**, not numeric milliseconds. Grammar: `duration := segment+; segment := integer unit; unit := "ms" | "s" | "m" | "h"`.
+- Parser lives in `stepyard-core/src/duration.rs` with **narrow public API**: `pub use duration::{parse_duration, deserialize_optional, DurationParseError}` — nothing else is re-exported from the module.
+- **Strict rules:** units MUST appear in decreasing magnitude order; no whitespace anywhere; no duplicate units; no bare numbers; no fractional values; no negative values; empty string rejected.
+- Accepted: `30s`, `500ms`, `10m`, `2h`, `1h30m`, `2h15m30s`, `1m500ms`.
+- Rejected (each must produce `EngineError::InvalidWorkflowField`): `30`, `30 s`, `30 seconds`, `1.5h`, `-5s`, `1m30m`, `30s1m`, `""`.
+- **`0s` semantics:** a valid-parse zero duration; follows the full timeout path (emit `StepTimeoutFired` → `StepFailed { reason: TerminationReason::StepTimeout { configured_ms: 0 } }`) before any lifecycle call. NOT a sentinel for "no timeout" — absence of the YAML key means no timeout.
+- Parse errors wrap into `InvalidWorkflowField { path, got, expected: "duration string like \"30s\" or \"1h30m\"" }`.
+- **Rationale for custom grammar (not `humantime_serde`):** `humantime` accepts too much (`"30 seconds"`, `"1 hour 30 minutes"`, fractionals); the workflow schema needs a small, audit-friendly, stable surface that will not silently accept new dialects on crate upgrade.
+
+**Env Var Key/Value Validation (new, party mode Round 3):**
+
+- YAML `env:` field is typed `HashMap<String, String>` at the serde level; non-string keys are rejected by serde before custom validation runs.
+- **Key grammar:** `^[A-Za-z_][A-Za-z0-9_]*$` (POSIX-compatible environment variable identifiers).
+- **Value grammar:** arbitrary UTF-8 except NUL (`\0`). Leading/trailing whitespace is preserved verbatim.
+- Validation failures wrap into `InvalidWorkflowField` with best-effort path (e.g., `steps[2].env.BAD-KEY`) — a custom visitor to yield exact paths is deferred; the default serde path ("env") plus the offending key suffix is acceptable for MVP.
+- `expected` strings (stable, for reviewer and grep audit):
+  - Key failure: `"env key matching ^[A-Za-z_][A-Za-z0-9_]*$"`
+  - Value failure: `"env value (UTF-8 without NUL)"`
+
+**Display Boundary Sanitization (new, party mode Round 3):**
+
+- **API:** `stepyard::display::sanitize_human(input: &str) -> String`. Character-level contract (operates on `char`s after any upstream `String::from_utf8_lossy`):
+  - Preserve `\n` (U+000A), `\r` (U+000D), `\t` (U+0009) verbatim.
+  - Any other `char::is_control()` char is escaped as `\u{XXXX}` (lowercase hex, zero-padded to min 4 digits).
+  - All other printable chars preserved verbatim — including multibyte UTF-8, emoji, and bidi-neutral scripts.
+- **Length ceiling:** truncate to 8192 **bytes** at a UTF-8 char boundary; append literal `… [truncated <N> bytes]` where `<N>` is the byte count of the dropped tail.
+- **Call site discipline:** `sanitize_human` is invoked at the **display boundary** (CLI error printer, structured-log rendering site, API response serializer) — NOT inside `thiserror::Error` `#[error(...)]` format strings at construction. Keeping sanitization at the output site means the stored error value is the raw diagnostic; only the rendered form is safe.
+- **Required tests (stepyard binary test suite):**
+  - U+202E RIGHT-TO-LEFT OVERRIDE (bidi attack) — must appear as `\u{202e}` after sanitize.
+  - `\x1b[2J\x1b[H<fake-prompt>` (ANSI CSI clear-screen + cursor-home) — `\x1b` must appear as `\u{001b}`.
+  - Long input (>8192 bytes) — must terminate with the truncation marker, and the byte count must match the dropped tail exactly.
+
 ### Communication Patterns
 
 **Event Emission — synchronous-append-before-IO (revised, party mode):**
@@ -505,6 +548,7 @@ Everything else in this section is scoped to specific stories, crates, or API su
 - Structured fields, not format strings: `tracing::info!(session_id = %id, step = step_index, "step started")` NOT `tracing::info!("step {} started for session {}", step_index, id)`
 - Field names: `snake_case` matching event field names when possible (correlates logs to events)
 - Log levels: `debug` for verbose internal state, `info` for session milestones, `warn` for recoverable issues, `error` for fatal
+- **Env-value confidentiality (new, party mode Round 3):** env **values** (the `v` in `env[k] = v`) MUST NOT appear in any `tracing::*!` field, `Event` payload field, or `thiserror::Error` `#[error(...)]` format string. Only env **keys** are permitted to be logged or emitted, as `env_keys: Vec<String>`. A doc comment MUST sit at the docker exec argv construction site: `// env_values cross here: argv only, never logged or event-emitted`. Rationale: env values routinely carry API keys, tokens, and database URLs; the log/event channel is shared with operators and external aggregators (Loki, Datadog) where exposure is out of stepyard's control.
 
 ### Process Patterns
 
@@ -514,6 +558,7 @@ Everything else in this section is scoped to specific stories, crates, or API su
 - NEVER hold `std::sync::Mutex` or `parking_lot::Mutex` across `.await`
 - Use `Arc<AtomicBool>` for flags, `tokio::sync::Mutex` if mutex-across-await is unavoidable (it usually is avoidable)
 - `async fn` in traits: `#[async_trait]` annotation required (existing pattern; tokio runtime is a given)
+- **Public `async fn` futures MUST be `Send` (not `Send + 'static`, new, party mode Round 3):** every public `async fn` in a library crate has a compile-time `assert_send` test verifying the returned future is `Send`. The `'static` bound is deliberately NOT required — it would force callers to clone or own all captured references, which is wrong for APIs that borrow from `&self` or local scopes. The `Send` bound alone is sufficient for crossing task boundaries. See Pattern Enforcement G6 for the compile-time check.
 
 **Error Handling:**
 
@@ -572,6 +617,13 @@ Everything else in this section is scoped to specific stories, crates, or API su
 - **Time-determinism in tests (new, party mode — split into 7a/7b in Round 2):**
   - **Rule 7a — In-process tokio tests:** Timing-sensitive `#[tokio::test]` / `#[cfg(test)]` blocks use `tokio::time::pause()` + `advance()` for virtual time. `tokio::time::sleep(…)` is **banned** inside these blocks. _Enforcement status: reviewer-enforced today; the `.github/workflows/check.yml` pre-merge grep check listed above will gain a `tokio::time::sleep` rule as a follow-up; a custom clippy restriction is an alternative if the grep pattern proves fragile._ Rationale: real sleep produces flaky tests and wastes CI wall-clock; virtual time is deterministic and fast.
   - **Rule 7b — Out-of-process `assert_cmd` tests:** Integration tests that shell out via `assert_cmd` cannot use `tokio::time::pause()` because the subprocess has its own runtime. These tests MUST specify `.timeout(Duration::from_secs(N))` on every `Command` — a deliberate ceiling that fails loud if exceeded. Never invoke `.output()` or `.status()` without a `.timeout()`.
+- **CI audit checks (new, party mode Round 3 — planned home `.github/workflows/check.yml`):** The following rules convert reviewer-enforced discipline into pre-merge audits. Each audit name (G1–G6) is stable so story tickets and review comments can reference them. **Honesty caveat:** G1/G2/G3/G5 are ripgrep-based and will miss exotic call shapes (macro-expanded tracing calls, runtime-constructed argv, re-exported aliases); they are tier-A checks that catch the common drift cases, not a proof. G4 is a Rust `cargo xtask` binary with real lexing (via `syn`) and is authoritative for what it covers.
+  - **G1 — Env-value leak guard (ripgrep, blocking):** pattern `rg -U --pcre2 'tracing::(info|warn|error|debug|trace)(_span)?!\s*\([^)]*(\benv\s*=|[?%]env\b)'`. Catches `env = %env_map`, `env = ?env`, and the `?env` / `%env` shorthand inside tracing macros. Any match is a block.
+  - **G2 — Secret field guard (ripgrep, blocking):** scoped to tracing macros only — pattern `rg -U --pcre2 'tracing::(info|warn|error|debug|trace)(_span)?!\s*\([^)]*\b(api_key|secret|token|password|credential)\b\s*=\s*%'`. The `%` Display-format prefix on those field names is a block; the `?` Debug-format prefix is also flagged by a sibling pattern. Scoping to `tracing::*!` invocations prevents false positives on unrelated `api_key =` variable assignments.
+  - **G3 — Shell-string joining guard (ripgrep, blocking):** pattern `rg -U --pcre2 'Command::new\(\s*"(sh|bash|zsh|dash)"\s*\)[\s\S]{0,200}\.arg\(\s*"-c"\s*\)'`. Allowlist: `**/injection_negative.rs` (the negative-control test intentionally invokes the shell). Any other match is a block.
+  - **G4 — Emit-before-IO order (cargo xtask, warning-first then blocking):** `cargo xtask audit-emit-before-io` is a Rust binary that parses consumer crates with `syn`, walks each `async fn` AST, and verifies that for every `Arc<dyn SandboxLifecycle>::*.await` call there is a preceding `self.emit(Event::…)` or `self.session.append(…).await?` on the same function. Scope is **auto-discovered** by scanning for `Arc<dyn SandboxLifecycle>` field usage — new call sites do not need to be hand-registered. Coverage explicitly includes `cancel` and `finalize` paths (not only the happy path). Landing strategy: warning-first for two weeks post-merge to surface historical drift, then flipped to blocking. Future `session.append_many(...)` or `emit_if(...)` helpers will extend the xtask's recognizer list.
+  - **G5 — `Other(...)` construction outside classifier (ripgrep, warning-only):** pattern `rg -U --pcre2 '(TerminationReason|SandboxError)::Other\s*\('`. Allowlist: files whose paths match `*_errors.rs` in each crate (the classifier modules). Warning-only, not blocking — reviewer judgement still required because the grep cannot distinguish legitimate classifier-internal construction from accidental calls. Escalation to blocking is a follow-up ADR after the allowlist shape stabilises.
+  - **G6 — Send-future compile check (per-crate compile-time test, blocking):** each library crate has a `#[cfg(test)] mod compile_asserts` with `fn assert_send<T: Send>(_: T) {}` and one line per public `async fn` (e.g., `assert_send(Engine::run(&mut engine, ctx));`). Per-crate boilerplate is accepted; auto-generation is deferred. `'static` is deliberately NOT asserted — see Async Safety above. A compile failure here blocks the build.
 
 ### Pattern Examples
 

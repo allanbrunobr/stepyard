@@ -15,6 +15,24 @@ pub enum EngineError {
     #[error("invalid workflow: {0}")]
     InvalidWorkflow(String),
 
+    /// A single workflow field failed type-level validation at parse time.
+    ///
+    /// Carries the field path produced by `serde_path_to_error`
+    /// (e.g. `steps[0].timeout`), the offending raw value as a string
+    /// (e.g. `30`), and a static phrase describing the expected shape
+    /// (e.g. `duration string (e.g. 30s, 500ms, 1h30m)`). Round 3 rule
+    /// text: architecture.md §D9 Error Variants.
+    ///
+    /// `InvalidWorkflow(String)` remains the right variant for
+    /// document-level failures that cannot be pinned to a single
+    /// field (malformed YAML, cross-field invariant violations).
+    #[error("invalid workflow field at `{path}`: got `{got}`, expected {expected}")]
+    InvalidWorkflowField {
+        path: String,
+        got: String,
+        expected: &'static str,
+    },
+
     /// Persistence layer failure (session storage, migrations, etc).
     #[error("persistence error: {0}")]
     Persistence(String),
@@ -126,5 +144,19 @@ mod tests {
             reason: TerminationReason::Cancelled,
         };
         assert_eq!(err.to_string(), "step 2 failed: cancelled");
+    }
+
+    #[test]
+    fn invalid_workflow_field_display_is_stable() {
+        let err = EngineError::InvalidWorkflowField {
+            path: "steps[0].timeout".into(),
+            got: "30".into(),
+            expected: "duration string (e.g. 30s, 500ms, 1h30m)",
+        };
+        assert_eq!(
+            err.to_string(),
+            "invalid workflow field at `steps[0].timeout`: got `30`, \
+             expected duration string (e.g. 30s, 500ms, 1h30m)"
+        );
     }
 }

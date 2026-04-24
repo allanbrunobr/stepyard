@@ -3207,6 +3207,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror 2.0.18",
  "uuid",
 ]
@@ -3266,6 +3267,7 @@ dependencies = [
  "rhai",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "serde_yaml",
  "sqlx",
  "stepyard-core",

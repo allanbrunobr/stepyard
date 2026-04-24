@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use stepyard_harness::{
@@ -60,7 +61,8 @@ async fn reloaded_timed_out_session_refuses_to_advance() {
     let tenant = format!("reload-timeout-{}", Uuid::new_v4());
     let workflow = Workflow::new(
         "reload-wf".to_string(),
-        vec![Step::cmd("slow".to_string(), "sleep forever".to_string()).with_timeout(50)],
+        vec![Step::cmd("slow".to_string(), "sleep forever".to_string())
+            .with_timeout(Duration::from_millis(50))],
     );
 
     let mock: Arc<MockLifecycle> = Arc::new(MockLifecycle::new());

@@ -143,12 +143,12 @@ fn hang_fixture_path() -> PathBuf {
 }
 
 /// Agent step pointed at the hanging fixture. Optionally carries a
-/// per-step `timeout: Some(ms)` so the timeout test can pin the
+/// per-step `timeout: Some(duration)` so the timeout test can pin the
 /// wall-clock budget without building a bespoke workflow.
-fn agent_step_hang(name: &str, prompt: &str, timeout_ms: Option<u64>) -> Step {
+fn agent_step_hang(name: &str, prompt: &str, timeout: Option<Duration>) -> Step {
     let mut step = Step::agent(name, prompt);
     step.agent_command = Some(hang_fixture_path().to_string_lossy().into_owned());
-    step.timeout = timeout_ms;
+    step.timeout = timeout;
     step
 }
 
@@ -557,7 +557,7 @@ async fn agent_timeout_emits_step_timeout_fired_then_step_failed() {
             vec![agent_step_hang(
                 "slow-agent",
                 "hang please",
-                Some(configured_ms),
+                Some(Duration::from_millis(configured_ms)),
             )],
         );
 

@@ -17,8 +17,11 @@
 //! (`src/cli/harness_adapter.rs`).
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use stepyard_core::duration as core_duration;
+use stepyard_core::EngineError;
 
 /// Every step kind the harness can represent.
 ///
@@ -263,6 +266,74 @@ impl Workflow {
             prompts_dir: None,
         }
     }
+
+    /// Parse workflow YAML into a [`Workflow`], turning per-field
+    /// deserialization failures into [`EngineError::InvalidWorkflowField`]
+    /// with the serde path (`steps[0].timeout`, `scopes.work.steps[2].timeout`)
+    /// pinned via [`serde_path_to_error`]. Document-level failures
+    /// (malformed YAML, missing required keys) collapse to
+    /// [`EngineError::InvalidWorkflow`], matching Round 3 architecture.md
+    /// §D9 rule text.
+    ///
+    /// The adapter (`src/cli/harness_adapter.rs`) still owns v1 YAML
+    /// shape translation; this entry point is for harness callers that
+    /// already have a v2-shaped workflow document and want the strict,
+    /// field-path-aware error surface.
+    pub fn try_from_yaml(yaml: &str) -> Result<Self, EngineError> {
+        let de = serde_yaml::Deserializer::from_str(yaml);
+        match serde_path_to_error::deserialize::<_, Workflow>(de) {
+            Ok(wf) => Ok(wf),
+            Err(err) => Err(map_path_error(err)),
+        }
+    }
+}
+
+/// Classify a `serde_path_to_error` failure into the right
+/// [`EngineError`] variant. When the offending path points at a known
+/// `Duration`-shaped field (`timeout`) we synthesise
+/// [`EngineError::InvalidWorkflowField`] with the canonical grammar
+/// hint from [`core_duration::EXPECTED`]; everything else stays on
+/// [`EngineError::InvalidWorkflow`] since we can't reliably extract
+/// a stable per-field `expected` phrase for arbitrary types.
+fn map_path_error(err: serde_path_to_error::Error<serde_yaml::Error>) -> EngineError {
+    let path = err.path().to_string();
+    let inner = err.into_inner();
+    if path_points_at_duration_field(&path) {
+        EngineError::InvalidWorkflowField {
+            path,
+            got: extract_got(&inner),
+            expected: core_duration::EXPECTED,
+        }
+    } else {
+        EngineError::InvalidWorkflow(format!("{path}: {inner}"))
+    }
+}
+
+/// True when the serde path ends in a segment we know is a
+/// `Option<Duration>` field on [`Step`]. Kept as a substring match
+/// (not an exact tail check) so nested shapes like
+/// `scopes.work.steps[0].timeout` still route through
+/// [`EngineError::InvalidWorkflowField`] without listing every
+/// possible parent prefix.
+fn path_points_at_duration_field(path: &str) -> bool {
+    path.ends_with(".timeout") || path == "timeout"
+}
+
+/// Pull the offending raw value out of a serde_yaml error message.
+/// serde_yaml renders "invalid type: integer `30`, expected …" (or
+/// `string \"zzz\"`, `floating point \`1.5\``). We peel off the quoted
+/// token so [`EngineError::InvalidWorkflowField`]'s `got` field
+/// matches the operator's YAML without the surrounding noise. If
+/// parsing fails we fall back to the full message — the operator
+/// still sees the error, just with a less precise `got` slot.
+fn extract_got(err: &serde_yaml::Error) -> String {
+    let msg = err.to_string();
+    if let Some(start) = msg.find('`') {
+        if let Some(end) = msg[start + 1..].find('`') {
+            return msg[start + 1..start + 1 + end].to_string();
+        }
+    }
+    msg
 }
 
 /// A named sub-sequence of steps, referenced by repeat/map/call kinds.
@@ -293,10 +364,20 @@ pub struct Step {
     /// (`run:`). Empty for other kinds.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub command: String,
-    /// Wall-clock step timeout in milliseconds. Absent = no timeout.
-    /// YAML field name is `timeout` to match the Story 1.4 workflow schema.
-    #[serde(rename = "timeout", default, skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<u64>,
+    /// Wall-clock step timeout. Absent = no timeout. YAML field name is
+    /// `timeout` to match the Story 1.4 workflow schema. Round 3 Story 1
+    /// tightened the wire type: only duration strings (`30s`, `500ms`,
+    /// `1h30m`) are accepted — bare integers are rejected before
+    /// execution so `timeout: 30` can no longer silently mean "30 ms"
+    /// in one code path and "30 s" in another.
+    #[serde(
+        rename = "timeout",
+        default,
+        serialize_with = "core_duration::serialize_optional",
+        deserialize_with = "core_duration::deserialize_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub timeout: Option<Duration>,
     /// Step-level env vars. Highest precedence in the cascade resolver
     /// (Story 3.4) — overrides workflow, defaults, and host `${VAR}`.
     /// `#[serde(default)]` keeps existing YAML without `env:` parseable
@@ -602,9 +683,12 @@ impl Step {
         }
     }
 
-    /// Builder variant that attaches a wall-clock timeout (milliseconds).
-    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
-        self.timeout = Some(timeout_ms);
+    /// Builder variant that attaches a wall-clock timeout. Accepts a
+    /// [`Duration`] directly so callers don't thread a millisecond
+    /// integer through the constructor — the wire format accepts only
+    /// duration strings after Round 3 Story 1.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
         self
     }
 

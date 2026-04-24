@@ -27,6 +27,7 @@
 //! (step/resume/cancel) provable with minimal surface area.
 
 mod agent_exec;
+mod chat_exec;
 mod defaults;
 mod engine;
 mod executor;
@@ -38,6 +39,7 @@ pub mod startup;
 mod template_exec;
 mod workflow;
 
+pub use chat_exec::{ChatClient, ChatClientError, ChatCompletionRequest, ChatCompletionResponse};
 pub use defaults::Defaults;
 pub use engine::{
     resolve_env, CancelToken, Engine, EngineError, HarnessConfig, RunContext, StepOutcome,
