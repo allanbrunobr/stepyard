@@ -47,8 +47,14 @@ steps:
                 path.contains("timeout"),
                 "path should mention the offending field, got {path:?}"
             );
-            // serde_yaml reports the offending integer inside backticks.
-            assert_eq!(got, "30", "got should be the raw YAML value");
+            // Substring match, not equality: serde_yaml 0.9 quotes the raw
+            // scalar inside backticks, but its exact Display wording is not
+            // part of the contract — the invariant is that `got` carries
+            // the offending value somewhere inside it.
+            assert!(
+                got.contains("30"),
+                "got should carry the raw YAML value, got {got:?}"
+            );
             assert!(
                 expected.contains("duration string"),
                 "expected hint should reference the duration grammar, got {expected:?}"
@@ -102,9 +108,7 @@ steps:
 
     let err = Workflow::try_from_yaml(yaml).expect_err("whitespace must be rejected");
     match err {
-        EngineError::InvalidWorkflowField {
-            path, expected, ..
-        } => {
+        EngineError::InvalidWorkflowField { path, expected, .. } => {
             assert!(path.contains("timeout"));
             assert!(expected.contains("duration string"));
         }

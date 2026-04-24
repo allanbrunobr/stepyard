@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
     Engine, EngineError, HarnessConfig, Step, StepExecutor, TerminationReason, Workflow,
 };
@@ -24,7 +25,6 @@ use stepyard_sandbox_orchestrator::{
     ExecOutput, MockCall, MockLifecycle, SandboxError, SandboxLifecycle,
 };
 use stepyard_session::{migrate, Session};
-use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -95,7 +95,10 @@ async fn zero_second_timeout_fires_step_timeout_fired_then_step_failed() {
             assert_eq!(step_index, 0);
             match reason {
                 TerminationReason::StepTimeout { configured_ms } => {
-                    assert_eq!(configured_ms, 0, "zero-second timeout should surface as 0ms");
+                    assert_eq!(
+                        configured_ms, 0,
+                        "zero-second timeout should surface as 0ms"
+                    );
                 }
                 other => panic!("expected StepTimeout, got {other:?}"),
             }
