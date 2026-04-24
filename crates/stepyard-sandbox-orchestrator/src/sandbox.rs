@@ -94,6 +94,16 @@ pub enum SandboxError {
     /// Catch-all for invariants the orchestrator detects at runtime.
     #[error("invalid state: {0}")]
     InvalidState(String),
+
+    /// Backend produced stderr that no classifier pattern matched. The
+    /// payload is the raw (UTF-8-lossy, 8 KiB-truncated) output preserved
+    /// verbatim for diagnosis. Construction is permitted ONLY inside
+    /// `*_errors.rs` classifier modules — see architecture.md §"`Other(String)`
+    /// discipline" (Round 3). Every render of this value MUST route through
+    /// `sanitize_human` at the display boundary; the raw form MUST NOT
+    /// reach a terminal, log, or API response unsanitized.
+    #[error("unclassified sandbox error: {0}")]
+    Other(String),
 }
 
 /// Internal state shared between the [`Sandbox`] handle and any backend
