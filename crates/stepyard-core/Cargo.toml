@@ -15,5 +15,12 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
+[dev-dependencies]
+# Round 3 Story 1: the duration serde hooks are tested both against
+# `serde_json` (fast, in-process) and `serde_yaml` (the actual workflow
+# wire format) so the bare-integer rejection contract is proven on the
+# real deserializer the harness will use in commit 2.
+serde_yaml = "0.9"
+
 [lints]
 workspace = true

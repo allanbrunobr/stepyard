@@ -27,6 +27,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use stepyard_harness::{
@@ -90,7 +91,7 @@ async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
     let workflow = Workflow::new(
         "timeout-wf".to_string(),
         vec![Step::cmd("slow-step".to_string(), "sleep forever".to_string())
-            .with_timeout(configured_ms)],
+            .with_timeout(Duration::from_millis(configured_ms))],
     );
 
     let mock: Arc<MockLifecycle> = Arc::new(MockLifecycle::new());
