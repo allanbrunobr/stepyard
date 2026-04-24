@@ -5,6 +5,24 @@ members = [
     "crates/stepyard-session",
     "crates/stepyard-sandbox-orchestrator",
     "crates/stepyard-harness",
+    "xtask",
+]
+# `xtask` is an internal task runner (Round 3 Story 5 G4 walker today,
+# future scaffolding helpers). Excluding it from `default-members` is a
+# local-dev ergonomics choice: bare `cargo build` / `cargo test` /
+# `cargo clippy` skip the syn/proc-macro2 dep tree xtask pulls in, so
+# inner-loop compiles stay lean. CI keeps `--workspace` on the main
+# build/test/clippy steps (see .github/workflows/check.yml), which means
+# xtask itself is compiled, tested, and clippy-checked on every PR —
+# drift in the xtask crate is caught by CI the same as any other member.
+# The `cargo xtask …` invocation in CI is how we *run* the audit binary
+# after building it, not a workaround for the default-members split.
+default-members = [
+    ".",
+    "crates/stepyard-core",
+    "crates/stepyard-session",
+    "crates/stepyard-sandbox-orchestrator",
+    "crates/stepyard-harness",
 ]
 
 # Story 1.3 — force consumers of `#[non_exhaustive]` enums across the
