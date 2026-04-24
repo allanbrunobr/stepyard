@@ -16,6 +16,13 @@ async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Round 3 Story 1 commit 2: `Workflow::try_from_yaml` needs `serde_yaml` at
+# runtime so callers outside tests can parse workflow YAML, and wraps it
+# with `serde_path_to_error::deserialize` so a typed-field failure (e.g.
+# `timeout: 30`) lands in `EngineError::InvalidWorkflowField { path, .. }`
+# instead of the opaque `invalid type …` surface serde_yaml emits by default.
+serde_yaml = "0.9"
+serde_path_to_error = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 tracing = "0.1"
@@ -51,10 +58,6 @@ sqlx = { version = "0.8", features = [
 assert_cmd = "2"
 tempfile = "3"
 wait-timeout = "0.2"
-# PR 1 of Task #31 (v2 migration) — serde round-trip tests for the
-# widened workflow shape. Parsing of real workflow YAML still lives in
-# the CLI adapter; the harness only needs this for scaffolding tests.
-serde_yaml = "0.9"
 
 [lints]
 workspace = true

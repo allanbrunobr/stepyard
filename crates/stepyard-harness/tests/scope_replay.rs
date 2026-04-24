@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
@@ -1406,7 +1407,7 @@ async fn scoped_cmd_timeout_in_non_first_container_attributes_step_index() {
         // already correct via `top_level_position_of`, but is asserted
         // here as defence-in-depth).
         let mut body_cmd = Step::cmd("slow", "echo whatever");
-        body_cmd.timeout = Some(10);
+        body_cmd.timeout = Some(Duration::from_millis(10));
 
         let wf = workflow_with_scope(
             "scoped-timeout",

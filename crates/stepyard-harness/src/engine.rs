@@ -622,7 +622,7 @@ impl Engine {
             };
             let timeout_fut = async {
                 match step_clone.timeout {
-                    Some(ms) => tokio::time::sleep(std::time::Duration::from_millis(ms)).await,
+                    Some(d) => tokio::time::sleep(d).await,
                     None => std::future::pending::<()>().await,
                 }
             };
@@ -681,7 +681,10 @@ impl Engine {
         // / container index — scope position lives on `scope_context`
         // (attached to the surrounding StepStarted) rather than here.
         if let StepSelection::TimedOut = selection {
-            let configured_ms = step.timeout.expect("TimedOut requires step.timeout.is_some()");
+            let configured_ms = step
+                .timeout
+                .expect("TimedOut requires step.timeout.is_some()")
+                .as_millis() as u64;
             self.emit(Event::StepTimeoutFired {
                 step_index,
                 configured_ms,
@@ -1269,7 +1272,7 @@ impl Engine {
             };
             let timeout_fut = async {
                 match step_timeout {
-                    Some(ms) => tokio::time::sleep(std::time::Duration::from_millis(ms)).await,
+                    Some(d) => tokio::time::sleep(d).await,
                     None => std::future::pending::<()>().await,
                 }
             };
@@ -1324,7 +1327,10 @@ impl Engine {
         // was None. Agent has no sandbox to destroy, so we skip the
         // `lifecycle.destroy_by_session` call cmd makes.
         if let StepSelection::TimedOut = selection {
-            let configured_ms = step.timeout.expect("TimedOut requires step.timeout.is_some()");
+            let configured_ms = step
+                .timeout
+                .expect("TimedOut requires step.timeout.is_some()")
+                .as_millis() as u64;
             self.emit(Event::StepTimeoutFired {
                 step_index,
                 configured_ms,

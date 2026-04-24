@@ -56,6 +56,7 @@
 //! [`AdapterError::UnsupportedStepType`].
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use stepyard_harness::{
     AgentPermissions, AgentSessionMode, ChatProvider, ChatTruncation, Scope, Step, Workflow,
@@ -506,7 +507,9 @@ fn parse_chat_step(s: &StepDef) -> Result<Step, AdapterError> {
     };
     step.max_tokens = Some(chat_config_u64(s, "max_tokens")?.unwrap_or(1024));
     step.temperature = Some(chat_config_f64(s, "temperature")?.unwrap_or(0.0));
-    step.timeout = Some(parse_chat_timeout_ms(s)?.unwrap_or(120_000));
+    step.timeout = Some(
+        parse_chat_timeout_duration(s)?.unwrap_or_else(|| Duration::from_secs(120)),
+    );
     step.chat_provider = Some(provider);
     step.base_url = base_url;
     step.chat_session = chat_config_str(s, "session")?.map(String::from);
@@ -515,15 +518,24 @@ fn parse_chat_step(s: &StepDef) -> Result<Step, AdapterError> {
     Ok(step)
 }
 
-/// Parses the v1 duration format used by `config.timeout:` into
-/// milliseconds (v1 source: `src/config/mod.rs:42-57`). Accepts string
+/// Parses the v1 duration format used by `config.timeout:` into a
+/// [`Duration`] (v1 source: `src/config/mod.rs:42-57`). Accepts string
 /// values with `ms` / `s` / `m` suffixes — bare numeric strings are
 /// seconds per v1 parity. Integer/float YAML values error (v1's
 /// `get_duration` silently fell back to the default in that case — a
 /// quirk the adapter tightens so operators learn about malformed
 /// timeouts at load time instead of at the 120-second default boundary).
+///
+/// **Not a strict-grammar parser.** This is the v1 chat-config
+/// compatibility boundary: it intentionally does NOT delegate to
+/// [`stepyard_core::duration::parse_duration`], because that parser
+/// rejects bare numerics and the `h` suffix is not part of the v1
+/// chat-config surface. Round 3 Story 1 tightened the workflow-level
+/// `timeout:` field (see `stepyard-harness::Workflow::try_from_yaml`);
+/// migrating this adapter-internal helper to the strict grammar is a
+/// separate decision that would break documented v1 chat-config YAML.
 #[allow(dead_code)] // wired into adapt_step in PR 5c
-fn parse_chat_timeout_ms(s: &StepDef) -> Result<Option<u64>, AdapterError> {
+fn parse_chat_timeout_duration(s: &StepDef) -> Result<Option<Duration>, AdapterError> {
     let raw = match chat_config_str(s, "timeout")? {
         Some(v) => v,
         None => return Ok(None),
@@ -545,7 +557,7 @@ fn parse_chat_timeout_ms(s: &StepDef) -> Result<Option<u64>, AdapterError> {
             value: raw.to_string(),
         })?;
     n.checked_mul(multiplier_ms)
-        .map(Some)
+        .map(|ms| Some(Duration::from_millis(ms)))
         .ok_or_else(|| AdapterError::ChatInvalidTimeout {
             name: s.name.clone(),
             value: raw.to_string(),
@@ -2324,11 +2336,11 @@ steps:
     #[test]
     fn parse_chat_step_timeout_defaults_to_120_seconds() {
         // v1 default at `src/steps/chat.rs:355-357` (120s). The adapter
-        // stores it in `Step.timeout` (u64 ms) so the harness never
-        // re-resolves the unit.
+        // stores it as a `Duration` after Round 3 Story 1 — the harness
+        // never re-resolves the unit.
         let def = chat_step_def_with_provider(None);
         let step = parse_chat_step(&def).unwrap();
-        assert_eq!(step.timeout, Some(120_000));
+        assert_eq!(step.timeout, Some(Duration::from_secs(120)));
     }
 
     #[test]
@@ -2358,7 +2370,11 @@ steps:
             );
             let def = chat_step_def(&yaml);
             let step = parse_chat_step(&def).unwrap();
-            assert_eq!(step.timeout, Some(expected_ms), "raw={raw}");
+            assert_eq!(
+                step.timeout,
+                Some(Duration::from_millis(expected_ms)),
+                "raw={raw}"
+            );
         }
     }
 
@@ -2414,6 +2430,6 @@ steps:
         assert_eq!(step.api_key_env.as_deref(), Some("CUSTOM_KEY"));
         assert_eq!(step.max_tokens, Some(4096));
         assert_eq!(step.temperature, Some(0.9));
-        assert_eq!(step.timeout, Some(30_000));
+        assert_eq!(step.timeout, Some(Duration::from_millis(30_000)));
     }
 }
