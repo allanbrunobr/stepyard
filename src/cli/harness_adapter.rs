@@ -41,18 +41,17 @@
 //! bodies stay rejected by [`AdapterError::ScopedStepUnsupported`] until
 //! a later PR widens scope-body dispatch.
 //!
-//! PR 5b of Task #31 adds the chat-step translation helper
-//! ([`parse_chat_step`]). The helper walks the v1 `config` bag
-//! (`provider` / `model` / `max_tokens` / `temperature` / `api_key_env` /
-//! `base_url` / `session` / `truncation_strategy` family) and produces a
-//! typed [`stepyard_harness::Step`]. **Intentionally not wired into
-//! [`adapt_step`] yet** — the public adapter still rejects `chat` with
-//! [`AdapterError::UnsupportedStepType`] so v2 workflows can't reach a
-//! runtime that doesn't exist. PR 5c will flip the dispatch arm after
-//! the rig-core runtime lands.
+//! PR 5b of Task #31 added the chat-step translation helper
+//! ([`parse_chat_step`]) — walks the v1 `config` bag (`provider` /
+//! `model` / `max_tokens` / `temperature` / `api_key_env` / `base_url` /
+//! `session` / `truncation_strategy` family) and produces a typed
+//! [`stepyard_harness::Step`]. PR 5c commit 3 wires the helper into
+//! [`adapt_step`] so top-level `chat` steps reach the v2 dispatcher;
+//! scope-body chat stays rejected via [`AdapterError::ScopedStepUnsupported`]
+//! until the engine's chat-session map gains scope-body semantics.
 //!
 //! Executors for `call` / `repeat` / `map` landed in the scope-runner commit.
-//! Kinds not yet executable (`chat` / `parallel`) continue to fail with
+//! `parallel` is the only v1 kind still rejected outright with
 //! [`AdapterError::UnsupportedStepType`].
 
 use std::collections::{HashMap, HashSet};
@@ -68,7 +67,7 @@ use crate::workflow::schema::{ScopeDef, StepDef, StepType, WorkflowDef};
 pub enum AdapterError {
     #[error(
         "step type `{step_type}` not yet supported by v2 engine — use --engine v1 \
-         or migrate the workflow to a supported kind (cmd, gate, call, repeat, map, template, script, agent)"
+         or migrate the workflow to a supported kind (cmd, gate, call, repeat, map, template, script, agent, chat)"
     )]
     UnsupportedStepType { step_type: StepType },
 
@@ -316,6 +315,7 @@ fn adapt_step(
         StepType::Template => adapt_template(s),
         StepType::Script => adapt_script(s),
         StepType::Agent => adapt_agent(s),
+        StepType::Chat => parse_chat_step(s),
         other => Err(AdapterError::UnsupportedStepType {
             step_type: other.clone(),
         }),
@@ -470,12 +470,11 @@ fn parse_agent_session(step_name: &str, value: &str) -> Result<AgentSessionMode,
 /// its `truncation_count` / `truncation_first` / `truncation_last` /
 /// `truncation_max_tokens` siblings).
 ///
-/// **Not wired into [`adapt_step`] in PR 5b.** The public adapter keeps
-/// rejecting `chat` with [`AdapterError::UnsupportedStepType`] until the
-/// rig-core runtime lands in PR 5c; this helper is exercised only by
-/// the unit tests below so the parsing contract can be frozen ahead of
-/// the runtime work.
-#[allow(dead_code)] // wired into adapt_step in PR 5c
+/// Wired into [`adapt_step`] in PR 5c commit 3 — top-level `chat`
+/// steps now flow through this helper into the v2 dispatcher. Scope-body
+/// chat is still rejected by [`AdapterError::ScopedStepUnsupported`]
+/// (see [`scope_body_kind_supported`]) because the engine's chat-session
+/// map commits only on a non-scoped chat completion (`engine.rs:1837`).
 fn parse_chat_step(s: &StepDef) -> Result<Step, AdapterError> {
     let prompt = s
         .prompt
@@ -534,7 +533,6 @@ fn parse_chat_step(s: &StepDef) -> Result<Step, AdapterError> {
 /// `timeout:` field (see `stepyard-harness::Workflow::try_from_yaml`);
 /// migrating this adapter-internal helper to the strict grammar is a
 /// separate decision that would break documented v1 chat-config YAML.
-#[allow(dead_code)] // wired into adapt_step in PR 5c
 fn parse_chat_timeout_duration(s: &StepDef) -> Result<Option<Duration>, AdapterError> {
     let raw = match chat_config_str(s, "timeout")? {
         Some(v) => v,
@@ -989,21 +987,21 @@ steps:
 
     #[test]
     fn rejects_still_unsupported_step_type() {
-        // `agent` joined the executable list in PR 5a of #31; `chat` and
-        // `parallel` remain. Pick `chat` so the test keeps its shape.
+        // `agent` joined the executable list in PR 5a of #31, `chat` in
+        // PR 5c commit 3. `parallel` is the only remaining v1 step type
+        // not wired into the v2 dispatcher.
         let yaml = r#"
-name: adapter-reject-chat
+name: adapter-reject-parallel
 steps:
-  - name: ask
-    type: chat
-    prompt: "hello"
+  - name: fan
+    type: parallel
 "#;
         let file = write_tmp(yaml);
         let def = parser::parse_file(file.path()).unwrap();
         let err = adapt(&def).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not yet supported"), "msg={msg}");
-        assert!(msg.contains("chat"), "msg={msg}");
+        assert!(msg.contains("parallel"), "msg={msg}");
     }
 
     #[test]
@@ -1677,16 +1675,15 @@ scopes:
     }
 
     // ------------------------------------------------------------------
-    // PR 5b commit 2 — parse_chat_step helper (private, not yet wired
-    // into adapt_step). The first test locks the invariant that the
-    // public adapter still rejects chat; the rest exercise the helper
-    // directly so the parsing contract is frozen before PR 5c flips the
-    // dispatch arm.
+    // parse_chat_step helper — wired into adapt_step in PR 5c commit 3.
+    // The first test below pins the public dispatch arm; the rest
+    // exercise the helper directly so the parsing contract stays
+    // frozen as new knobs land.
     // ------------------------------------------------------------------
 
     /// Returns the first step from a single-step chat YAML fixture.
-    /// Used by the helper tests below — they can't go through `adapt`
-    /// because chat is still rejected publicly in PR 5b.
+    /// Used by helper tests that exercise `parse_chat_step` directly
+    /// rather than the full `adapt(&def)` path.
     fn chat_step_def(yaml: &str) -> StepDef {
         let file = write_tmp(yaml);
         let def = parser::parse_file(file.path()).unwrap();
@@ -1694,13 +1691,9 @@ scopes:
     }
 
     #[test]
-    fn chat_kind_still_rejected_by_adapt_step() {
-        // Invariant test for checklist item #1: PR 5b must NOT wire
-        // parse_chat_step into the public dispatcher. A chat step that
-        // flows through `adapt(&def)` has to come back as
-        // UnsupportedStepType until the rig-core runtime lands in 5c.
+    fn chat_kind_accepted_by_adapt_step() {
         let yaml = r#"
-name: chat-still-rejected
+name: chat-accepted
 steps:
   - name: ask
     type: chat
@@ -1710,9 +1703,42 @@ steps:
 "#;
         let file = write_tmp(yaml);
         let def = parser::parse_file(file.path()).unwrap();
+        let plan = adapt(&def).unwrap();
+        let step = &plan.steps[0];
+        assert_eq!(step.name, "ask");
+        assert_eq!(step.kind, stepyard_harness::StepKind::Chat);
+    }
+
+    #[test]
+    fn chat_rejected_inside_scope_body_for_now() {
+        // Mirrors `agent_rejected_inside_scope_body_for_now`: scoped
+        // chat dispatch is deferred because the engine's chat-session
+        // map only commits on a non-scoped chat completion (see
+        // `engine.rs:1837`). Surfacing chat in a scope body here would
+        // stage turns the progress scan never drains, so the adapter
+        // pins top-level-only semantics with `ScopedStepUnsupported`.
+        let yaml = r#"
+name: chat-in-scope
+steps:
+  - name: run
+    type: call
+    scope: body
+scopes:
+  body:
+    steps:
+      - name: inner
+        type: chat
+        prompt: "hi"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
         let err = adapt(&def).unwrap_err();
         assert!(
-            matches!(err, AdapterError::UnsupportedStepType { .. }),
+            matches!(
+                err,
+                AdapterError::ScopedStepUnsupported { ref inner_name, .. }
+                    if inner_name == "inner"
+            ),
             "got {err:?}"
         );
     }
