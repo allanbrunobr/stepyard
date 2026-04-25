@@ -1484,10 +1484,9 @@ impl Engine {
             }
         };
 
-        // Adapter will enforce `prompt: Some(_)` for chat in commit
-        // 3 (`src/cli/harness_adapter.rs`). In-process callers that
-        // bypass the adapter still get a typed StepFailed rather
-        // than a panic.
+        // `parse_chat_step` enforces `prompt: Some(_)` for chat going
+        // through the adapter. In-process callers that bypass the
+        // adapter still get a typed StepFailed rather than a panic.
         let Some(prompt_template) = step.prompt.as_deref() else {
             let error = crate::chat_exec::ChatExecError::MissingPrompt {
                 step: step.name.clone(),
@@ -1586,10 +1585,11 @@ impl Engine {
             }
         };
 
-        // Client injection. Commit 2 surfaces the absent-client case
-        // as a typed StepFailed so an in-process caller sees a
-        // structured error; commit 3 wires the production default
-        // and flips the adapter to accept chat steps.
+        // Client injection. The adapter accepts chat steps as of
+        // PR 5c commit 3, but the production default `chat_client`
+        // wiring is deferred to commit 3b — until then a CLI run of
+        // `type: chat` surfaces a typed StepFailed here rather than
+        // an `UnsupportedStepType` from the adapter.
         let Some(client) = self.config.chat_client.clone() else {
             let error = crate::chat_exec::ChatExecError::NoClientConfigured {
                 step: step.name.clone(),
