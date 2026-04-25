@@ -506,6 +506,26 @@ fn event_roundtrip_through_serde_json() {
 }
 
 #[test]
+fn workflow_cancelled_roundtrip_through_serde_json() {
+    let ts = chrono::Utc.with_ymd_and_hms(2026, 4, 13, 12, 0, 0).unwrap();
+    let original = Event::WorkflowCancelled {
+        duration_ms: 750,
+        timestamp: ts,
+    };
+    let s = serde_json::to_string(&original).unwrap();
+    // Tag follows the snake_case rename rule: `workflow_cancelled`.
+    assert!(
+        s.contains("\"event\":\"workflow_cancelled\""),
+        "serialized form must carry the workflow_cancelled tag, got {s}"
+    );
+    let back: Event = serde_json::from_str(&s).unwrap();
+    match back {
+        Event::WorkflowCancelled { duration_ms, .. } => assert_eq!(duration_ms, 750),
+        other => panic!("unexpected variant: {other:?}"),
+    }
+}
+
+#[test]
 fn engine_error_display_messages_are_stable() {
     assert_eq!(
         EngineError::InvalidWorkflow("missing field x".into()).to_string(),
