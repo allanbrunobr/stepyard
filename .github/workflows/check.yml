@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   check:
-    name: Build, test, clippy
+    name: Build, test, clippy, audits
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -45,3 +45,32 @@ jobs:
 
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Round 3 Story 5 — architecture §G-gates.
+      #
+      # `scripts/audit-patterns.sh` runs the ripgrep-based gates:
+      #   G1 env-value leak         (blocking)
+      #   G2 secret field via %      (blocking)
+      #   G3 shell-string joining    (blocking)
+      #   G5 Other(...) outside classifier (warning-only, exits 0 with WARN lines)
+      #
+      # `cargo xtask audit-emit-before-io` runs the G4 syn AST walker as a
+      # warning-first baseline. It exits 0 today; `continue-on-error: true`
+      # is the belt-and-braces guarantee that even if the xtask learns to
+      # exit non-zero on findings later, CI behavior doesn't silently flip.
+      # When we graduate G4 to blocking, drop `continue-on-error` in the
+      # same PR — that surfaces the flip in the diff.
+      - name: Ensure ripgrep is installed
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
+          rg --version
+
+      - name: Pattern audits (G1/G2/G3 blocking, G5 warning-only)
+        run: scripts/audit-patterns.sh
+
+      - name: Emit-before-IO audit (G4 warning-first baseline)
+        run: cargo xtask audit-emit-before-io
+        continue-on-error: true
