@@ -1,0 +1,15 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Workspace task runner — G4 emit-before-IO audit and future scaffolding helpers."
+
+[dependencies]
+# `full` pulls in `Block`, `ImplItem`, etc. needed to walk function bodies.
+# `visit` provides the `Visit` trait default traversal used by the AST walker.
+syn = { version = "2", features = ["full", "visit"] }
+# `span-locations` is required for `proc_macro2::Span::start()` to return real
+# line/column numbers on a file parsed via `syn::parse_file`. Without it,
+# `.start()` returns a dummy LineColumn and every finding would report line 0.
+proc-macro2 = { version = "1", features = ["span-locations"] }

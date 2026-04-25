@@ -1,0 +1,11 @@
+# Workspace-level cargo aliases.
+#
+# `cargo xtask …` runs the `xtask` binary defined at `xtask/src/main.rs`.
+# The alias is how the Round 3 Story 5 audit pipeline invokes the G4 walker
+# — `cargo xtask audit-emit-before-io` works from the workspace root (or any
+# subdirectory, since cargo walks up to find the workspace manifest).
+#
+# Keep this alias aligned with xtask's subcommand set; see the match arm in
+# `xtask/src/main.rs::main`.
+[alias]
+xtask = "run --quiet --package xtask --"
