@@ -1723,6 +1723,20 @@ impl Engine {
 
     pub(crate) async fn finalise_cancel(&mut self) -> Result<(), EngineError> {
         if self.session.status() == SessionStatus::Running {
+            // Emit-before-IO (G4): record the cancel decision in the session
+            // log *before* tearing down the sandbox, so a crash during
+            // `destroy_by_session` cannot leave a session whose final state
+            // is unrecoverable from the log alone. Mirrors `finalise_success`
+            // shape — same duration_ms / timestamp computation.
+            let duration_ms = self
+                .started_at
+                .map(|t| t.elapsed().as_millis() as u64)
+                .unwrap_or(0);
+            self.emit(Event::WorkflowCancelled {
+                duration_ms,
+                timestamp: Utc::now(),
+            })
+            .await?;
             // Tear down the sandbox by session UUID — cattle, no regrets.
             // Backends like Docker cannot map a bare SandboxId to the
             // container they created, so the trait teardown contract is

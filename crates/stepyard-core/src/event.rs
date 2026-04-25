@@ -30,6 +30,15 @@ pub enum Event {
         duration_ms: u64,
         timestamp: DateTime<Utc>,
     },
+    /// A workflow execution was cancelled (status = `cancelled`). Emitted by
+    /// `finalise_cancel` before sandbox teardown so the persisted log records
+    /// the cancel decision *before* any IO that could fail. Mirrors
+    /// [`Self::WorkflowCompleted`] in shape so subscribers can treat both as
+    /// terminal lifecycle markers.
+    WorkflowCancelled {
+        duration_ms: u64,
+        timestamp: DateTime<Utc>,
+    },
     /// A step started executing.
     StepStarted {
         step_name: String,
