@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use stepyard_core::duration as core_duration;
+use stepyard_core::env as core_env;
 use stepyard_core::EngineError;
 
 /// Every step kind the harness can represent.
@@ -282,9 +283,42 @@ impl Workflow {
     pub fn try_from_yaml(yaml: &str) -> Result<Self, EngineError> {
         let de = serde_yaml::Deserializer::from_str(yaml);
         match serde_path_to_error::deserialize::<_, Workflow>(de) {
-            Ok(wf) => Ok(wf),
+            Ok(wf) => {
+                wf.validate()?;
+                Ok(wf)
+            }
             Err(err) => Err(map_path_error(err)),
         }
+    }
+
+    /// Boundary check that every env entry — workflow-level, per-step,
+    /// and per-scope-step — satisfies the Round 3 Story 3 grammars
+    /// pinned in [`stepyard_core::env`]. Returns the first offender as
+    /// [`EngineError::InvalidWorkflowField`] with a serde-style path
+    /// pointing at the bad entry, or `Ok(())` when every entry passes.
+    ///
+    /// Called automatically by [`Workflow::try_from_yaml`]. Programmatic
+    /// callers (e.g. the CLI's v1→v2 adapter) MUST invoke this before
+    /// handing the workflow to [`crate::Engine`] — `Workflow::new` and
+    /// the `pub` field setters do NOT auto-validate so tests can build
+    /// invalid workflows for negative-path coverage.
+    pub fn validate(&self) -> Result<(), EngineError> {
+        core_env::validate_env_map("env", &self.env)?;
+        for (idx, step) in self.steps.iter().enumerate() {
+            core_env::validate_env_map(&format!("steps[{idx}].env"), &step.env)?;
+        }
+        let mut scope_names: Vec<&String> = self.scopes.keys().collect();
+        scope_names.sort();
+        for name in scope_names {
+            let scope = &self.scopes[name];
+            for (idx, step) in scope.steps.iter().enumerate() {
+                core_env::validate_env_map(
+                    &format!("scopes.{name}.steps[{idx}].env"),
+                    &step.env,
+                )?;
+            }
+        }
+        Ok(())
     }
 }
 
