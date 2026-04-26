@@ -476,11 +476,16 @@ impl Engine {
         // the user turn + assistant turn + terminal StepCompleted in
         // the atomic order `compute_progress` relies on (engine.rs
         // around the `step_type == "chat"` drain). Commit 2 of PR 5c
-        // is happy-path only; commit 4 folds this branch into a
-        // cancel/signal/timeout select like cmd and agent. PR 5c of
-        // Task #31.
+        // ships happy-path; commit 4 wraps the provider call in the
+        // same `tokio::select!` race cmd and agent run, so
+        // `step_index` is threaded through here for the
+        // `EngineError::StepFailed{step_index, ...}` shape on the
+        // signal/timeout arms. PR 5c of Task #31.
         if matches!(step.kind, StepKind::Chat) {
-            return self.run_chat_step(step, &progress, start).await;
+            let step_index = progress.completed_steps as u32;
+            return self
+                .run_chat_step(step, &progress, start, step_index)
+                .await;
         }
 
         // Kinds other than Cmd/Gate/Call/Repeat/Map/Template/Script/Agent/Chat
@@ -1445,17 +1450,25 @@ impl Engine {
     ///
     /// # Cancellation contract
     ///
-    /// Commit 2 is happy-path only. The cancel / signal /
-    /// step-timeout / shutdown-broadcast race the cmd and agent
-    /// paths run (via `tokio::select!`) is deliberately deferred
-    /// to commit 4's hardening pass — mixing it into commit 2
-    /// would drag the provider seam through the same blast
-    /// radius and break the user's sequenced commit plan.
+    /// Commit 4 wraps the provider call in the same
+    /// `tokio::select!` race the cmd and agent paths run, so a
+    /// cancel-token flip, SIGINT/SIGTERM broadcast, or expired
+    /// `step.timeout` wins against a slow `ChatClient::complete`.
+    /// `step_index` is required for the
+    /// `EngineError::StepFailed{step_index, reason}` shape on the
+    /// signal/timeout arms; the `Cancelled` arm returns
+    /// `Ok(StepOutcome::Cancelled)` symmetric to agent. The
+    /// staged user turn at `pending_chat_turns[step_name]` is
+    /// dropped (never promoted) on every non-`Done` arm because
+    /// `compute_progress` only promotes on a terminal
+    /// `StepCompleted{step_type:"chat"}` — atomicity preserved
+    /// without a separate transactional rollback.
     async fn run_chat_step(
         &mut self,
         step: &Step,
         progress: &Progress,
         start: Instant,
+        step_index: u32,
     ) -> Result<StepOutcome, EngineError> {
         let step_type = step_type_label(&step.kind);
 
@@ -1628,8 +1641,144 @@ impl Engine {
         let req =
             crate::chat_exec::build_chat_request(step, rendered_prompt, history, resolved_api_key);
 
-        let exec_result = crate::chat_exec::run_chat_step(step, req, client.as_ref()).await;
+        // Race the provider call against cancel / timeout / shutdown.
+        // Same shape as agent (engine.rs:1252-1373) and cmd's
+        // `execute_cmd_with_select` — keeping this inline rather than
+        // factoring out a generic helper avoids dragging the chat
+        // path through the cmd/agent refactor blast radius. The
+        // chat seam at `chat_exec::run_chat_step` is itself pure
+        // `.await`; cancellation works because the future's drop
+        // glue cancels the underlying `tokio::time::sleep` /
+        // `reqwest` future cooperatively (advisor watchout: any
+        // chat client that uses `std::thread::sleep` or otherwise
+        // blocks the runtime thread will defeat this).
+        let cancel_token = self.cancel.clone();
+        let signal_slot = self.config.shutdown_signal.clone();
+        let step_timeout = step.timeout;
+        let selection = {
+            let exec_fut = crate::chat_exec::run_chat_step(step, req, client.as_ref());
+            let cancel_fut = async {
+                while !cancel_token.is_cancelled() {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            };
+            let timeout_fut = async {
+                match step_timeout {
+                    Some(d) => tokio::time::sleep(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let shutdown_rx = &mut self.shutdown_rx;
+            let shutdown_fut = shutdown_rx.recv();
+            tokio::pin!(exec_fut);
+            tokio::pin!(cancel_fut);
+            tokio::pin!(timeout_fut);
+            tokio::pin!(shutdown_fut);
+            tokio::select! {
+                r = &mut exec_fut => StepSelection::Done(r),
+                _ = &mut cancel_fut => StepSelection::Cancelled,
+                _ = &mut timeout_fut => StepSelection::TimedOut,
+                _ = &mut shutdown_fut => StepSelection::Signal(
+                    signal_slot
+                        .get()
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".into()),
+                ),
+            }
+        };
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        // Signal arm. D5 emit-before-IO ordering: `signal_received`
+        // then `step_failed`, then flip the session into its
+        // terminal status via `finalise_cancel`. Mirrors agent at
+        // engine.rs:1303-1322. `ChatExecError::SignalReceived`
+        // provides the centralised message format.
+        if let StepSelection::Signal(ref signal) = selection {
+            let signal = signal.clone();
+            let error = crate::chat_exec::ChatExecError::SignalReceived {
+                step: step.name.clone(),
+                signal: signal.clone(),
+            }
+            .to_string();
+            self.emit(Event::SignalReceived {
+                signal: signal.clone(),
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error,
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_cancel().await?;
+            return Err(EngineError::StepFailed {
+                step_index,
+                reason: stepyard_core::TerminationReason::SignalReceived(signal),
+            });
+        }
+
+        // Timeout arm. `step.timeout` is guaranteed `Some` here
+        // because the timeout future used `std::future::pending`
+        // when it was `None`. Mirrors agent at engine.rs:1329-1353.
+        if let StepSelection::TimedOut = selection {
+            let configured_ms = step
+                .timeout
+                .expect("TimedOut requires step.timeout.is_some()")
+                .as_millis() as u64;
+            let error = crate::chat_exec::ChatExecError::Timeout {
+                step: step.name.clone(),
+                configured_ms,
+            }
+            .to_string();
+            self.emit(Event::StepTimeoutFired {
+                step_index,
+                configured_ms,
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: step.name.clone(),
+                step_type: step_type.into(),
+                error,
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            return Err(EngineError::StepFailed {
+                step_index,
+                reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
+            });
+        }
+
+        // Cancel arm. Returns `Ok(StepOutcome::Cancelled)` so the
+        // outer `step` loop terminates cleanly without bubbling an
+        // error — symmetric with cmd / agent.
+        let exec_result = match selection {
+            StepSelection::Done(r) => r,
+            StepSelection::Cancelled => {
+                let error = crate::chat_exec::ChatExecError::Cancelled {
+                    step: step.name.clone(),
+                }
+                .to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error,
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_cancel().await?;
+                return Ok(StepOutcome::Cancelled);
+            }
+            StepSelection::TimedOut => unreachable!("handled above"),
+            StepSelection::Signal(_) => unreachable!("handled above"),
+        };
 
         let output = match exec_result {
             Ok(o) => o,
