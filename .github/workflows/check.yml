@@ -26,6 +26,23 @@ jobs:
         with:
           components: clippy
 
+      # `ubuntu-latest` ships ~14 GiB free; restoring our cargo cache plus
+      # building the workspace `target/` from scratch overflows that. The
+      # runner dies mid-job with "No space left on device" before even
+      # flushing its own logs. `free-disk-space` reclaims ~25 GiB by
+      # removing pre-installed Android SDK / .NET / Haskell / Boost /
+      # Swift tooling we never use here.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
       - name: Cache Cargo registry and build
         uses: actions/cache@v4
         with:
