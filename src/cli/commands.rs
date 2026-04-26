@@ -216,6 +216,12 @@ async fn execute_v2(
         tenant_id: std::env::var("STEPYARD_TENANT").unwrap_or_else(|_| "default".into()),
         shutdown_tx,
         shutdown_signal,
+        // Production chat dispatch (PR 5c commit 3b of #31). The harness'
+        // `Engine::run_chat_step` falls back to a typed `StepFailed`
+        // (`ChatExecError::NoClientConfigured`) when this is `None`; CLI
+        // runs MUST wire the rig-backed default so top-level `type: chat`
+        // workflows actually reach a provider.
+        chat_client: Some(crate::chat_client::default_chat_client()),
         ..HarnessConfig::default()
     };
 
