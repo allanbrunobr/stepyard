@@ -9,6 +9,7 @@
 //! See `minion-engine/ARCHITECTURE.md` § "stepyard-core".
 
 pub mod duration;
+pub mod env;
 mod error;
 mod event;
 mod subscriber;

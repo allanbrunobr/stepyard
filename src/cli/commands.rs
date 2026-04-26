@@ -188,6 +188,13 @@ async fn execute_v2(
 
     let harness_workflow = harness_adapter::adapt(&workflow)
         .map_err(|e| anyhow::anyhow!("cannot run workflow on --engine v2: {e}"))?;
+    // Round 3 Story 3 — env key/value validation at the workflow boundary.
+    // `Workflow::try_from_yaml` runs `validate()` automatically, but the v1→v2
+    // adapter builds the workflow programmatically (`Workflow::new` + field
+    // assignment), bypassing that path. The explicit call here is the
+    // contract every programmatic caller honors before handing the workflow
+    // to the engine.
+    harness_workflow.validate()?;
 
     let pool = connect_pg(args.json).await?;
 
@@ -231,6 +238,13 @@ async fn execute_v2(
     let defaults_path = Path::new(".stepyard/defaults.yaml");
     let env_defaults = crate::config::load_env_defaults(defaults_path)
         .with_context(|| format!("failed to load {}", defaults_path.display()))?;
+    // Round 3 Story 3 — defaults boundary check. The loader itself (Story
+    // 3.3) accepts any well-formed YAML mapping; the env key/value grammar
+    // is enforced here so a bad key in `.stepyard/defaults.yaml` surfaces
+    // as `EngineError::InvalidWorkflowField` with the same constants the
+    // workflow path uses. Path prefix carries the file location so the
+    // operator sees where the offender lives, not just `env.<KEY>`.
+    stepyard_core::env::validate_env_map(".stepyard/defaults.yaml:env", &env_defaults.env)?;
     let harness_defaults = HarnessDefaults::with_env(env_defaults.env);
 
     // PR 2 of Task #31: thread the CLI's `--target` and `--var k=v` into the
