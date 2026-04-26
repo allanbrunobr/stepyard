@@ -5,6 +5,7 @@ use clap::Parser;
 use tokio::sync::broadcast;
 use tracing_subscriber::EnvFilter;
 
+mod chat_client;
 mod claude;
 mod cli;
 mod config;
