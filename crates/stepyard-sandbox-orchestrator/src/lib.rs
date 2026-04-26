@@ -95,3 +95,63 @@ pub trait SandboxLifecycle: Send + Sync {
         self.create(session_id).await
     }
 }
+
+/// Round 3 Story 6 — compile-time `Send` checks for the
+/// [`SandboxLifecycle`] trait-object surface.
+///
+/// The harness shares `Arc<dyn SandboxLifecycle>` across tasks
+/// (Invariante 9). These checks are never invoked; the compiler typechecks
+/// them so that any change which makes a method's returned future `!Send`
+/// (e.g. switching to `#[async_trait(?Send)]`) breaks the build before
+/// the harness can spawn it.
+#[cfg(test)]
+mod send_check {
+    use super::*;
+
+    fn assert_send_future<F: std::future::Future + Send>(_: F) {}
+
+    #[allow(dead_code)]
+    fn create_future_is_send(lifecycle: &dyn SandboxLifecycle, session_id: Uuid) {
+        assert_send_future(lifecycle.create(session_id));
+    }
+
+    #[allow(dead_code)]
+    fn destroy_future_is_send(lifecycle: &dyn SandboxLifecycle, id: &SandboxId) {
+        assert_send_future(lifecycle.destroy(id));
+    }
+
+    #[allow(dead_code)]
+    fn destroy_by_session_future_is_send(
+        lifecycle: &dyn SandboxLifecycle,
+        session_id: Uuid,
+    ) {
+        assert_send_future(lifecycle.destroy_by_session(session_id));
+    }
+
+    #[allow(dead_code)]
+    fn exec_future_is_send(
+        lifecycle: &dyn SandboxLifecycle,
+        id: &SandboxId,
+        cmd: &[String],
+    ) {
+        assert_send_future(lifecycle.exec(id, cmd));
+    }
+
+    #[allow(dead_code)]
+    fn exec_with_env_future_is_send(
+        lifecycle: &dyn SandboxLifecycle,
+        id: &SandboxId,
+        cmd: &[String],
+        env: &HashMap<String, String>,
+    ) {
+        assert_send_future(lifecycle.exec_with_env(id, cmd, env));
+    }
+
+    #[allow(dead_code)]
+    fn reuse_or_create_future_is_send(
+        lifecycle: &dyn SandboxLifecycle,
+        session_id: Uuid,
+    ) {
+        assert_send_future(lifecycle.reuse_or_create(session_id));
+    }
+}

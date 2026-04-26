@@ -219,3 +219,21 @@ mod tests {
         assert_eq!(r.containers_pruned, 0);
     }
 }
+
+/// Round 3 Story 6 — compile-time `Send` check for [`reconcile`].
+///
+/// `reconcile` is the D8 startup phase awaited by `execute_v2` before any
+/// per-session engine spawns. Verifying its future is `Send` keeps it
+/// `tokio::spawn`-safe for any future refactor that runs reconcile on a
+/// dedicated task.
+#[cfg(test)]
+mod send_check {
+    use super::*;
+
+    fn assert_send_future<F: std::future::Future + Send>(_: F) {}
+
+    #[allow(dead_code)]
+    fn reconcile_future_is_send(pg: &PgPool, lifecycle: &DockerLifecycle) {
+        assert_send_future(reconcile(pg, lifecycle));
+    }
+}
