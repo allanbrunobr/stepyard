@@ -171,3 +171,36 @@ mod tests {
         assert_eq!(recorded_env, env);
     }
 }
+
+/// Round 3 Story 6 — compile-time `Send` checks for the [`StepExecutor`]
+/// trait-object surface.
+///
+/// The harness shares `Arc<dyn StepExecutor>` across tasks. If any method's
+/// returned future loses `Send` (e.g. `#[async_trait(?Send)]`, or a
+/// non-async_trait variant whose future captures a `!Send` value), the
+/// build fails here.
+#[cfg(test)]
+mod send_check {
+    use super::*;
+
+    fn assert_send_future<F: std::future::Future + Send>(_: F) {}
+
+    #[allow(dead_code)]
+    fn execute_future_is_send(
+        executor: &dyn StepExecutor,
+        session_id: Uuid,
+        step: &Step,
+    ) {
+        assert_send_future(executor.execute(session_id, step));
+    }
+
+    #[allow(dead_code)]
+    fn execute_with_env_future_is_send(
+        executor: &dyn StepExecutor,
+        session_id: Uuid,
+        step: &Step,
+        env: &HashMap<String, String>,
+    ) {
+        assert_send_future(executor.execute_with_env(session_id, step, env));
+    }
+}

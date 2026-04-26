@@ -2972,3 +2972,56 @@ mod progress_tests {
         }
     }
 }
+
+/// Round 3 Story 6 — compile-time `Send` checks for [`Engine`]'s public
+/// async surface.
+///
+/// The harness drives engines via `tokio::spawn`, which requires the
+/// returned future to be `Send`. The functions in this module are never
+/// invoked at runtime; they exist so the compiler typechecks each
+/// `Engine` async method's future against `F: Future + Send`. A
+/// regression that captures a `!Send` value (e.g. `Rc`, `RefCell`,
+/// non-`Send` field) across an await fails to compile here, blocking
+/// the change before it reaches `tokio::spawn`.
+///
+/// Send-checks only — no `'static` bound, since these futures borrow
+/// `&Engine`/`&mut Engine` for their duration and are spawned onto a
+/// scoped task by the binary.
+#[cfg(test)]
+mod send_check {
+    use super::*;
+
+    fn assert_send_future<F: std::future::Future + Send>(_: F) {}
+
+    #[allow(dead_code)]
+    fn cancel_future_is_send(engine: &Engine) {
+        assert_send_future(engine.cancel());
+    }
+
+    #[allow(dead_code)]
+    fn step_future_is_send(engine: &mut Engine) {
+        assert_send_future(engine.step());
+    }
+
+    #[allow(dead_code)]
+    fn resume_future_is_send(engine: &mut Engine) {
+        assert_send_future(engine.resume());
+    }
+
+    #[allow(dead_code)]
+    fn resume_existing_future_is_send(
+        config: HarnessConfig,
+        pool: &sqlx::PgPool,
+        session_id: SessionId,
+        workflow: Workflow,
+        lifecycle: Arc<dyn SandboxLifecycle>,
+    ) {
+        assert_send_future(Engine::resume_existing(
+            config,
+            pool,
+            session_id,
+            workflow,
+            lifecycle,
+        ));
+    }
+}
