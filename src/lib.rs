@@ -1,3 +1,4 @@
+pub mod chat_client;
 pub mod claude;
 pub mod cli;
 pub mod config;
