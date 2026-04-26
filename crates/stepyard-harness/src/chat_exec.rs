@@ -162,6 +162,28 @@ pub(crate) enum ChatExecError {
     /// The provider call failed.
     #[error(transparent)]
     Client(#[from] ChatClientError),
+
+    /// `step.timeout` elapsed before [`ChatClient::complete`] returned.
+    /// Constructed at the engine's `tokio::select!` race (PR 5c commit
+    /// 4) — the seam at [`run_chat_step`] never sees this; it's the
+    /// engine's source-of-truth for the `step_failed.error` payload so
+    /// every chat-timeout message has identical text.
+    #[error("chat step `{step}` timed out after {configured_ms}ms")]
+    Timeout { step: String, configured_ms: u64 },
+
+    /// The cancel token flipped mid-step (e.g. operator called
+    /// `engine.cancel()`). Same construction site as `Timeout` — the
+    /// engine builds the variant locally so the engine-level event
+    /// payload and any caller-facing error strings agree.
+    #[error("chat step `{step}` cancelled")]
+    Cancelled { step: String },
+
+    /// SIGINT/SIGTERM broadcast fired mid-step. The lowercase signal
+    /// name comes from `HarnessConfig::shutdown_signal` (Story 2.3).
+    /// Constructed at the engine's signal arm — see `Timeout` /
+    /// `Cancelled` for the rationale.
+    #[error("chat step `{step}` received signal: {signal}")]
+    SignalReceived { step: String, signal: String },
 }
 
 /// Failure modes for [`resolve_api_key`].
