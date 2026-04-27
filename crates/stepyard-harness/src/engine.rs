@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use chrono::Utc;
-use stepyard_core::{ChatMessage, Event, StepOutputSnapshot};
+use stepyard_core::{ChatMessage, Event, Signal, StepOutputSnapshot};
 use stepyard_sandbox_orchestrator::SandboxLifecycle;
 use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
 use tokio::sync::broadcast;
@@ -665,7 +665,7 @@ impl Engine {
         if let StepSelection::Signal(ref signal) = selection {
             let signal = signal.clone();
             self.emit(Event::SignalReceived {
-                signal: signal.clone(),
+                signal: Signal::from(signal.clone()),
             })
             .await?;
             self.emit(Event::StepFailed {
@@ -1308,7 +1308,7 @@ impl Engine {
         if let StepSelection::Signal(ref signal) = selection {
             let signal = signal.clone();
             self.emit(Event::SignalReceived {
-                signal: signal.clone(),
+                signal: Signal::from(signal.clone()),
             })
             .await?;
             self.emit(Event::StepFailed {
@@ -1701,7 +1701,7 @@ impl Engine {
             }
             .to_string();
             self.emit(Event::SignalReceived {
-                signal: signal.clone(),
+                signal: Signal::from(signal.clone()),
             })
             .await?;
             self.emit(Event::StepFailed {
