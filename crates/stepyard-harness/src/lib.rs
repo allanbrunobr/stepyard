@@ -32,6 +32,7 @@ mod defaults;
 mod engine;
 mod executor;
 mod gate;
+mod process_group;
 mod render;
 mod scope;
 mod script_exec;

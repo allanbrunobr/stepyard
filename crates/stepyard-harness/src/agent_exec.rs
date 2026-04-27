@@ -303,6 +303,16 @@ fn parse_stream_json_line(line: &str, out: &mut AgentExecOutput) {
 /// a SIGTERM during a long CLI turn would leave the child running past
 /// the session's terminal event.
 ///
+/// Issue #59: `kill_on_drop(true)` only signals the leader. Claude
+/// itself spawns helper processes (MCP servers, tool subprocesses) and
+/// once the leader dies they reparent to PID 1 and survive. To stop
+/// that, the child is also placed in **its own process group** via
+/// `process_group(0)`, and a [`ProcessGroupKillOnDrop`] guard is held
+/// alongside the child. Reverse-declaration drop order means the guard
+/// fires first (`kill(-pgid, SIGKILL)` reaches every descendant in the
+/// group), then Tokio's `Child::Drop` sends `SIGKILL` to the leader
+/// (idempotent if `killpg` already reaped it).
+///
 /// # Exit-code rule (v1 parity)
 ///
 /// ```text
@@ -326,7 +336,8 @@ pub(crate) async fn run_agent_step(
     let argv = build_agent_argv(step, state)?;
     let command = step.agent_command.as_deref().unwrap_or("claude");
 
-    let mut child = Command::new(command)
+    let mut command_builder = Command::new(command);
+    command_builder
         .args(&argv)
         .envs(env)
         .stdin(std::process::Stdio::piped())
@@ -339,12 +350,35 @@ pub(crate) async fn run_agent_step(
         // engine's outer `select!` drops us on cancel/signal/timeout;
         // without this the child would leak past the session's terminal
         // event (Tokio's default is leak-on-drop for spawned processes).
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| AgentExecError::Spawn {
-            command: command.to_string(),
-            error: e.to_string(),
-        })?;
+        .kill_on_drop(true);
+    // Issue #59: place the child in its own process group so the RAII
+    // guard below can `kill(-pgid, SIGKILL)` the leader plus every
+    // descendant Claude forked. cfg(unix) gates this because Tokio's
+    // `Command::process_group` is only compiled on Unix targets.
+    #[cfg(unix)]
+    command_builder.process_group(0);
+    let mut child = command_builder.spawn().map_err(|e| AgentExecError::Spawn {
+        command: command.to_string(),
+        error: e.to_string(),
+    })?;
+
+    // Issue #59: build the kill-group guard immediately after spawn so
+    // the guard's lifetime brackets the same scope as `child`. Reverse
+    // declaration order = reverse drop order: when this future is
+    // dropped (cancel/signal/timeout race), `_kill_group` drops first
+    // and SIGKILLs the whole process group, then Tokio's `Child::Drop`
+    // SIGKILLs the leader directly (idempotent if already reaped).
+    //
+    // `child.id()` is `Some` immediately after `spawn()` returns Ok —
+    // it only goes `None` after `wait()` reaps the child. We capture it
+    // here, before any `await`, so the unwrap is sound.
+    #[cfg(unix)]
+    let _kill_group = {
+        let pid = child
+            .id()
+            .expect("Child::id is Some between spawn and wait") as i32;
+        crate::process_group::ProcessGroupKillOnDrop::new(pid)
+    };
 
     // Feed the rendered prompt to the child and close the write half so
     // the child sees EOF. Dropping `stdin` is required — without it the
@@ -374,12 +408,9 @@ pub(crate) async fn run_agent_step(
         parse_stream_json_line(&line, &mut output);
     }
 
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| AgentExecError::WaitFailed {
-            error: e.to_string(),
-        })?;
+    let status = child.wait().await.map_err(|e| AgentExecError::WaitFailed {
+        error: e.to_string(),
+    })?;
 
     if !status.success() && output.response.is_empty() {
         return Err(AgentExecError::NonZeroExit {
@@ -472,7 +503,10 @@ mod tests {
 
         let mut expected = base_args();
         expected.extend(["--resume".into(), "sid-plan".into()]);
-        assert_eq!(argv, expected, "explicit resume must NOT emit --fork-session");
+        assert_eq!(
+            argv, expected,
+            "explicit resume must NOT emit --fork-session"
+        );
     }
 
     /// Reviewer-requested pin (PR 5a commit 3b): the v2 semantic fix for
@@ -562,7 +596,11 @@ mod tests {
         let step = Step::agent("first", "Hi");
         let (ids, first) = empty_state();
         let argv = build_agent_argv(&step, &state(&ids, first.as_ref())).unwrap();
-        assert_eq!(argv, base_args(), "no capture yet must emit no session args");
+        assert_eq!(
+            argv,
+            base_args(),
+            "no capture yet must emit no session args"
+        );
     }
 
     #[test]

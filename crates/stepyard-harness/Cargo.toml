@@ -41,6 +41,10 @@ tera = "1"
 # `script` step type. Matches the `rhai = "1"` pin in the workspace root so
 # Cargo dedupes against v1 engine's script module (`src/steps/script.rs`).
 rhai = "1"
+# Issue #59 — `process_group` module needs `libc::kill` with a negative PID
+# to deliver SIGKILL to a whole Unix process group (the agent CLI plus any
+# descendants it forked). Tokio's `Child::Drop` only SIGKILLs the leader.
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util", "rt-multi-thread", "macros"] }
