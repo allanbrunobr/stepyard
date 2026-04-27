@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use stepyard_harness::{
-    Engine, EngineError, HarnessConfig, Step, StepExecutor, TerminationReason, Workflow,
+    Engine, EngineError, HarnessConfig, Signal, Step, StepExecutor, TerminationReason, Workflow,
 };
 use stepyard_sandbox_orchestrator::{
     ExecOutput, MockCall, MockLifecycle, SandboxError, SandboxLifecycle,
@@ -137,7 +137,7 @@ async fn shutdown_broadcast_emits_signal_received_destroys_sandbox_and_returns_s
             assert_eq!(step_index, 0);
             match reason {
                 TerminationReason::SignalReceived(signal) => {
-                    assert_eq!(signal, "sigterm");
+                    assert_eq!(signal, Signal::Sigterm);
                 }
                 other => panic!("expected SignalReceived, got {other:?}"),
             }

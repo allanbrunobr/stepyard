@@ -36,7 +36,7 @@ use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
     ChatClient, ChatClientError, ChatCompletionRequest, ChatCompletionResponse, Engine,
-    EngineError, HarnessConfig, Step, StepExecutor, StepOutcome, Workflow,
+    EngineError, HarnessConfig, Signal, Step, StepExecutor, StepOutcome, Workflow,
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionEvent};
@@ -264,7 +264,7 @@ async fn chat_step_shutdown_broadcast_wins_against_slow_provider() {
                 ..
             }) => {
                 assert_eq!(
-                    signal, "sigterm",
+                    signal, Signal::Sigterm,
                     "TerminationReason::SignalReceived must carry the populated signal slot"
                 );
             }
