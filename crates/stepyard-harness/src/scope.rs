@@ -558,10 +558,38 @@ impl Engine {
         // v1 `src/steps/repeat.rs` (`unwrap_or(3)`), preventing unbounded
         // loops in workflows that forget both `max_iterations` and an
         // internal `break` gate.
-        let mut last_output_final: Option<StepOutputSnapshot> = state
-            .last_output_per_iteration
-            .get(&state.next_iteration.saturating_sub(1))
-            .cloned();
+        // Seeding `last_output_final` for the synthetic top-level
+        // `step_completed`. Two paths matter for replay:
+        //
+        // * `state.broke == false` — replay landed mid-loop; the next
+        //   iteration is `state.next_iteration` and the most recent
+        //   completed cmd snap lives at `next_iteration - 1`.
+        //
+        // * `state.broke == true` — replay landed past a gate `break`; the
+        //   container is about to synthesise its top-level output and never
+        //   re-enter the loop. Reach into the BREAK iter's snap (any cmd
+        //   that ran before the break logged it). When the break fired
+        //   before any cmd in the break iter (e.g. body=[gate, ...]), fall
+        //   back to the preceding iter's snap to match non-replay, where
+        //   `IterationOutcome::Break { last_output: None }` leaves
+        //   `last_output_final` at the value the prior `Completed` arm set.
+        let mut last_output_final: Option<StepOutputSnapshot> = if state.broke {
+            let break_iter = state.next_iteration;
+            state
+                .last_output_per_iteration
+                .get(&break_iter)
+                .cloned()
+                .or_else(|| {
+                    break_iter
+                        .checked_sub(1)
+                        .and_then(|prev| state.last_output_per_iteration.get(&prev).cloned())
+                })
+        } else {
+            state
+                .last_output_per_iteration
+                .get(&state.next_iteration.saturating_sub(1))
+                .cloned()
+        };
 
         let max_iter = step.max_iterations.unwrap_or(3);
 
