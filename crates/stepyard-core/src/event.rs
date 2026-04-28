@@ -12,6 +12,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::Signal;
+
 /// Every observable lifecycle event in the engine.
 ///
 /// Variants are stable. New variants may be added in minor versions.
@@ -131,10 +133,12 @@ pub enum Event {
     },
     /// A SIGINT / SIGTERM (or startup reconcile — Story 2.4) interrupted
     /// the engine. Emitted synchronously **before** the sandbox is destroyed
-    /// (D5 emit-before-IO). `signal` is lowercase snake_case: `"sigint"`,
-    /// `"sigterm"`, or `"crash_recovery"`.
+    /// (D5 emit-before-IO). The wire form stays a bare lowercase
+    /// snake_case string (`"sigint"` / `"sigterm"` / `"crash_recovery"`)
+    /// so existing session logs round-trip; [`Signal`] adds typed access
+    /// without changing those bytes.
     SignalReceived {
-        signal: String,
+        signal: Signal,
     },
     /// One turn of an `agent` / `chat` step's conversation was persisted
     /// to the session log. Emitted once per role turn so a post-crash
@@ -306,7 +310,7 @@ mod tests {
     #[test]
     fn signal_received_serializes_with_event_tag_and_snake_case_discriminator() {
         let event = Event::SignalReceived {
-            signal: "sigterm".into(),
+            signal: Signal::Sigterm,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(
@@ -321,13 +325,13 @@ mod tests {
     #[test]
     fn signal_received_roundtrips_through_json() {
         let original = Event::SignalReceived {
-            signal: "sigint".into(),
+            signal: Signal::Sigint,
         };
         let s = serde_json::to_string(&original).unwrap();
         let back: Event = serde_json::from_str(&s).unwrap();
         match back {
             Event::SignalReceived { signal } => {
-                assert_eq!(signal, "sigint");
+                assert_eq!(signal, Signal::Sigint);
             }
             other => panic!("roundtrip produced unexpected variant: {other:?}"),
         }

@@ -483,7 +483,9 @@ impl Engine {
                 IterationOutcome::Signal(signal) => {
                     return Err(EngineError::StepFailed {
                         step_index: container_top_level_index,
-                        reason: stepyard_core::TerminationReason::SignalReceived(signal),
+                        reason: stepyard_core::TerminationReason::SignalReceived(
+                            stepyard_core::Signal::from(signal),
+                        ),
                     });
                 }
                 IterationOutcome::TimedOut { configured_ms } => {
@@ -640,7 +642,9 @@ impl Engine {
                 IterationOutcome::Signal(signal) => {
                     return Err(EngineError::StepFailed {
                         step_index: container_top_level_index,
-                        reason: stepyard_core::TerminationReason::SignalReceived(signal),
+                        reason: stepyard_core::TerminationReason::SignalReceived(
+                            stepyard_core::Signal::from(signal),
+                        ),
                     });
                 }
                 IterationOutcome::TimedOut { configured_ms } => {
@@ -779,7 +783,9 @@ impl Engine {
                 IterationOutcome::Signal(signal) => {
                     return Err(EngineError::StepFailed {
                         step_index: container_top_level_index,
-                        reason: stepyard_core::TerminationReason::SignalReceived(signal),
+                        reason: stepyard_core::TerminationReason::SignalReceived(
+                            stepyard_core::Signal::from(signal),
+                        ),
                     });
                 }
                 IterationOutcome::TimedOut { configured_ms } => {

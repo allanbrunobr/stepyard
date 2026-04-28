@@ -33,7 +33,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use stepyard_core::ChatMessage;
+use stepyard_core::{ChatMessage, Signal};
 
 use crate::workflow::{ChatProvider, ChatTruncation, Step};
 
@@ -183,7 +183,7 @@ pub(crate) enum ChatExecError {
     /// Constructed at the engine's signal arm — see `Timeout` /
     /// `Cancelled` for the rationale.
     #[error("chat step `{step}` received signal: {signal}")]
-    SignalReceived { step: String, signal: String },
+    SignalReceived { step: String, signal: Signal },
 }
 
 /// Failure modes for [`resolve_api_key`].

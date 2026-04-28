@@ -23,7 +23,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
-    Engine, EngineError, HarnessConfig, Step, StepExecutor, StepOutcome, TerminationReason,
+    Engine, EngineError, HarnessConfig, Signal, Step, StepExecutor, StepOutcome, TerminationReason,
     Workflow,
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
@@ -749,7 +749,7 @@ async fn agent_shutdown_broadcast_emits_signal_received_then_step_failed() {
                 assert_eq!(step_index, 0);
                 match reason {
                     TerminationReason::SignalReceived(signal) => {
-                        assert_eq!(signal, "sigterm");
+                        assert_eq!(signal, Signal::Sigterm);
                     }
                     other => panic!("expected SignalReceived, got {other:?}"),
                 }
