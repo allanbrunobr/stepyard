@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use chrono::Utc;
-use stepyard_core::{ChatMessage, Event, StepOutputSnapshot};
+use stepyard_core::{ChatMessage, Event, Signal, StepOutputSnapshot};
 use stepyard_sandbox_orchestrator::SandboxLifecycle;
 use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
 use tokio::sync::broadcast;
@@ -558,7 +558,7 @@ impl Engine {
             CmdOutcome::Cancelled => Ok(StepOutcome::Cancelled),
             CmdOutcome::Signal(signal) => Err(EngineError::StepFailed {
                 step_index,
-                reason: stepyard_core::TerminationReason::SignalReceived(signal),
+                reason: stepyard_core::TerminationReason::SignalReceived(Signal::from(signal)),
             }),
             CmdOutcome::TimedOut { configured_ms } => Err(EngineError::StepFailed {
                 step_index,
@@ -665,7 +665,7 @@ impl Engine {
         if let StepSelection::Signal(ref signal) = selection {
             let signal = signal.clone();
             self.emit(Event::SignalReceived {
-                signal: signal.clone(),
+                signal: Signal::from(signal.clone()),
             })
             .await?;
             self.emit(Event::StepFailed {
@@ -1308,7 +1308,7 @@ impl Engine {
         if let StepSelection::Signal(ref signal) = selection {
             let signal = signal.clone();
             self.emit(Event::SignalReceived {
-                signal: signal.clone(),
+                signal: Signal::from(signal.clone()),
             })
             .await?;
             self.emit(Event::StepFailed {
@@ -1323,7 +1323,7 @@ impl Engine {
             self.finalise_cancel().await?;
             return Err(EngineError::StepFailed {
                 step_index,
-                reason: stepyard_core::TerminationReason::SignalReceived(signal),
+                reason: stepyard_core::TerminationReason::SignalReceived(Signal::from(signal)),
             });
         }
 
@@ -1694,7 +1694,7 @@ impl Engine {
         // engine.rs:1303-1322. `ChatExecError::SignalReceived`
         // provides the centralised message format.
         if let StepSelection::Signal(ref signal) = selection {
-            let signal = signal.clone();
+            let signal = Signal::from(signal.clone());
             let error = crate::chat_exec::ChatExecError::SignalReceived {
                 step: step.name.clone(),
                 signal: signal.clone(),

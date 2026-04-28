@@ -62,4 +62,4 @@ pub use stepyard_core::TerminationReason;
 // history) need these to construct / deserialize
 // [`stepyard_core::Event::ChatMessageAppended`] without pulling the
 // core crate in separately.
-pub use stepyard_core::{ChatMessage, ChatRole};
+pub use stepyard_core::{ChatMessage, ChatRole, Signal};

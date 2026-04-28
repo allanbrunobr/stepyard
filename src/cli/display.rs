@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
+use stepyard_core::Signal;
 
 /// Controls how the CLI renders output
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -103,9 +104,11 @@ pub fn step_timeout_fired(step_index: u32, configured_ms: u64) {
     );
 }
 
-/// Render a `SignalReceived` event (Story 2.3). `signal` is lowercase
-/// snake_case: `"sigint"`, `"sigterm"`, or `"crash_recovery"`.
-pub fn signal_received(signal: &str) {
+/// Render a `SignalReceived` event (Story 2.3). [`Signal`]'s `Display`
+/// produces the lowercase snake_case wire form (`sigint`, `sigterm`,
+/// `crash_recovery`, or any forward-compat name carried by
+/// [`Signal::Other`]).
+pub fn signal_received(signal: &Signal) {
     println!("  {} signal received: {}", "✗".red(), signal);
 }
 

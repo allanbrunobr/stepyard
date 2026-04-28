@@ -29,7 +29,7 @@
 
 use std::collections::HashSet;
 
-use stepyard_core::Event;
+use stepyard_core::{Event, Signal};
 use stepyard_sandbox_orchestrator::{DockerLifecycle, SandboxLifecycle};
 use stepyard_session::{Session, SessionError, SessionId};
 use sqlx::PgPool;
@@ -80,7 +80,7 @@ pub async fn reconcile(
         let session_id: SessionId = (*id).into();
         let mut session = Session::load(pg, session_id).await?;
         let payload = serde_json::to_value(Event::SignalReceived {
-            signal: "crash_recovery".to_string(),
+            signal: Signal::from("crash_recovery"),
         })
         .expect("SignalReceived always serializes as a JSON object");
         session.append(payload).await?;

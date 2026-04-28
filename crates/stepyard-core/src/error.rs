@@ -7,6 +7,8 @@
 
 use thiserror::Error;
 
+use crate::Signal;
+
 /// Errors returned by engine-level APIs.
 #[non_exhaustive]
 #[derive(Debug, Error)]
@@ -85,10 +87,14 @@ pub enum TerminationReason {
     #[error("cancelled")]
     Cancelled,
 
-    /// Process-level signal received (lowercase snake_case: `sigterm`,
-    /// `sigint`, `crash_recovery`).
+    /// Process-level signal received. The typed [`Signal`] payload
+    /// preserves the wire spelling (`sigterm`, `sigint`,
+    /// `crash_recovery`, or any forward-compat name in
+    /// [`Signal::Other`]) — its `Display` impl produces the same
+    /// lowercase snake_case bytes the pre-typed era emitted, so this
+    /// variant's `Display` output is unchanged.
     #[error("signal received: {0}")]
-    SignalReceived(String),
+    SignalReceived(Signal),
 
     /// Catch-all for anything the richer variants don't cover.
     #[error("{0}")]
@@ -114,7 +120,7 @@ mod tests {
         );
         assert_eq!(TerminationReason::Cancelled.to_string(), "cancelled");
         assert_eq!(
-            TerminationReason::SignalReceived("sigterm".into()).to_string(),
+            TerminationReason::SignalReceived(Signal::Sigterm).to_string(),
             "signal received: sigterm"
         );
         assert_eq!(
