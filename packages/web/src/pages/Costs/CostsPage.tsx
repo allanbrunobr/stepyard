@@ -22,7 +22,7 @@ import type {
   CostByWorkflow,
   CostByRepo,
   DailyCost,
-} from "../../../../types";
+} from "../../../../../types";
 
 function toLocalDateStr(d: Date): string {
   const y = d.getFullYear();
