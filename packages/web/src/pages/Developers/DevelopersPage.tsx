@@ -17,7 +17,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { apiFetch } from "../../lib/api-client";
 import { formatUsd, formatNumber } from "../../lib/utils";
-import type { DeveloperRanking } from "../../../../types";
+import type { DeveloperRanking } from "../../../../../types";
 
 function toLocalDateStr(d: Date): string {
   const y = d.getFullYear();
