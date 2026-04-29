@@ -1324,6 +1324,120 @@ async fn map_replay_after_gate_break_does_not_process_remaining_items() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #48 — repeat replay after a gate `break` whose iteration is the
+// LAST one to run must surface the break iter's final cmd snap as the
+// container's synthetic top-level stdout, not the prior iter's snap.
+//
+// Pre-fix, `run_repeat` seeds `last_output_final` from
+// `last_output_per_iteration[next_iteration - 1]`. After rebuild on this
+// log, `next_iteration == break_iteration`, so the seed reaches one
+// iteration BEHIND the break iter. `synthesise_container_output` (no
+// outputs template) then surfaces the prior iter's stdout — wrong.
+//
+// The discriminating assertion is on the container's top-level
+// `step_completed.output.stdout`. A single value distinguishes the two
+// paths; the post-replay execution otherwise produces the same scoped
+// events as non-replay (which is itself pinned by
+// `repeat_breaks_on_scoped_gate_and_top_level_counter_advances_once`).
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn repeat_replay_after_gate_break_at_last_position_surfaces_break_iter_output() {
+    db_test!(pool, {
+        // Iter 0: work runs (stdout "iter_0\n"), stop continues. Iter 1:
+        // work runs (stdout "iter_1\n"), stop fires `break` at the LAST
+        // body position. Cut just after the iter-1 stop break event —
+        // before the container's top-level step_completed lands. Replay
+        // resumes, hits broke=true on rebuild, and synthesises the
+        // container's output. That output's stdout must be "iter_1\n".
+        let wf = workflow_with_scope(
+            "repeat-break-replay",
+            vec![Step::repeat("loop", "body")],
+            "body",
+            vec![
+                Step::cmd("work", "echo iter_{{ scope.index }}"),
+                gate("stop", "{{ scope.index >= 1 }}", "break", "continue"),
+            ],
+            None,
+        );
+
+        let full = capture_full_log(&pool, wf.clone()).await;
+        let boundary = cut_after(&full, |e| {
+            event_kind(e) == Some("step_completed")
+                && event_step_name(e) == Some("stop")
+                && scope_context_of(e).is_some_and(|(_, it, pos)| it == 1 && pos == 1)
+        });
+
+        let seeded = seed_session_with_prefix(&pool, &full[..boundary]).await;
+        let session_id = seeded.id();
+        let mut engine = Engine::with_executor(
+            HarnessConfig::default(),
+            seeded,
+            wf,
+            lifecycle(),
+            echo_executor(),
+        );
+        assert_eq!(
+            engine.resume().await.expect("resume"),
+            StepOutcome::WorkflowCompleted
+        );
+
+        let evs = events(&engine).await;
+
+        // DISCRIMINATOR: container's synthetic stdout must equal the break
+        // iter's last cmd snap. Pre-fix this lands as "iter_0\n".
+        let container_done = evs
+            .iter()
+            .find(|e| {
+                event_kind(e) == Some("step_completed")
+                    && event_step_name(e) == Some("loop")
+                    && scope_context_of(e).is_none()
+            })
+            .expect("repeat container must finalise after break replay");
+        let container_stdout = container_done
+            .payload
+            .get("output")
+            .and_then(|v| v.get("stdout"))
+            .and_then(|v| v.as_str())
+            .expect("synthetic stdout on container step_completed");
+        assert_eq!(
+            container_stdout, "iter_1\n",
+            "replay's synthetic container stdout must equal the break iter's last cmd snap"
+        );
+
+        // Defence-in-depth: replay must not re-execute iter-1 body steps.
+        // Both `work` and `stop` are present in the seeded prefix, so
+        // re-execution would show two `step_started` entries for them.
+        let work_started_iter1 = evs
+            .iter()
+            .filter(|e| {
+                event_kind(e) == Some("step_started")
+                    && event_step_name(e) == Some("work")
+                    && scope_context_of(e).is_some_and(|(_, it, _)| it == 1)
+            })
+            .count();
+        assert_eq!(
+            work_started_iter1, 1,
+            "iter 1 work must not re-start on replay"
+        );
+        let stop_started_iter1 = evs
+            .iter()
+            .filter(|e| {
+                event_kind(e) == Some("step_started")
+                    && event_step_name(e) == Some("stop")
+                    && scope_context_of(e).is_some_and(|(_, it, _)| it == 1)
+            })
+            .count();
+        assert_eq!(
+            stop_started_iter1, 1,
+            "iter 1 stop must not re-start on replay"
+        );
+
+        let reloaded = Session::load(&pool, session_id).await.unwrap();
+        assert_eq!(reloaded.status(), SessionStatus::Completed);
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Failure-attribution tests for scope containers. The scope-body step that
 // raised the failure emits its own scoped `StepFailed`, but the log is the
 // source of truth for post-crash progress reconstruction — so the container
