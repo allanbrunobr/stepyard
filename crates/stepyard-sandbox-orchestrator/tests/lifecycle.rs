@@ -75,6 +75,37 @@ async fn reuse_or_create_is_recorded_separately_from_create() {
     assert!(matches!(calls[1], MockCall::Create { session_id } if session_id == sid));
 }
 
+#[tokio::test]
+async fn mock_destroy_by_session_default_records_destroy_with_session_derived_id() {
+    // MockLifecycle does NOT override destroy_by_session — it relies on the
+    // SandboxLifecycle trait default at lib.rs which converts session_id into
+    // a SandboxId via `From<Uuid>` and delegates to `destroy(&id)`. If a
+    // future refactor changes that default to use SandboxId::new() (random)
+    // or to skip the destroy call entirely, the harness signal/timeout paths
+    // would silently leak containers in production. This test pins the
+    // default's contract so a mutation gets caught here, not in prod.
+    let mock = MockLifecycle::new();
+    let session_id = Uuid::new_v4();
+
+    mock.destroy_by_session(session_id)
+        .await
+        .expect("destroy_by_session");
+
+    let calls = mock.calls().await;
+    let recorded = calls
+        .iter()
+        .find_map(|c| match c {
+            MockCall::Destroy { id } => Some(*id),
+            _ => None,
+        })
+        .expect("Destroy variant recorded via the default impl chain");
+    assert_eq!(
+        *recorded.as_uuid(),
+        session_id,
+        "destroy_by_session default must derive SandboxId from session_id via From<Uuid>"
+    );
+}
+
 // ── Docker tests (require daemon, gated by env var) ───────────────────
 
 fn docker_enabled() -> bool {
