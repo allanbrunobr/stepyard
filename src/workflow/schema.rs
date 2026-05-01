@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
+use stepyard_harness::BranchStrategyYaml;
 
 /// Declared output type for a step — controls how raw output is parsed
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
@@ -32,6 +33,15 @@ pub struct WorkflowDef {
     /// step > workflow > defaults > host `${VAR}`.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Workflow-wide git branch strategy. YAML uses snake_case; the CLI
+    /// override parser accepts kebab-case and maps into the same harness
+    /// strategy model at the command boundary.
+    #[serde(default)]
+    pub branch_strategy: BranchStrategyYaml,
+    #[serde(default)]
+    pub branch_name: Option<String>,
+    #[serde(default)]
+    pub base_branch: Option<String>,
 }
 
 /// Config block with 4 layers

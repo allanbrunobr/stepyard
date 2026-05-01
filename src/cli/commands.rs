@@ -12,6 +12,7 @@ use crate::sandbox::{self, SandboxMode};
 use crate::workflow::parser;
 use crate::workflow::validator;
 
+use super::branch_strategy::{apply_cli_override, parse_cli_branch_strategy, CliBranchStrategy};
 use super::display;
 use super::harness_adapter;
 use super::init_templates;
@@ -83,6 +84,11 @@ pub struct ExecuteArgs {
     /// Override global timeout in seconds
     #[arg(long)]
     pub timeout: Option<u64>,
+
+    /// Override workflow git branch strategy for v2 workspace preparation.
+    /// YAML uses snake_case; the CLI uses kebab-case.
+    #[arg(long, value_name = "head|merge-to-head|named-branch:<name>", value_parser = parse_cli_branch_strategy)]
+    pub branch_strategy: Option<CliBranchStrategy>,
 
     /// GitHub repository (OWNER/REPO) to clone inside the Docker sandbox.
     /// When set, the sandbox clones this repo instead of copying the host CWD.
@@ -184,10 +190,13 @@ async fn execute_v2(
         Defaults as HarnessDefaults, Engine as HarnessEngine, EngineError, HarnessConfig,
         RunContext as HarnessRunContext, StepOutcome, TerminationReason,
     };
-    use stepyard_sandbox_orchestrator::{DockerLifecycle, LocalShellLifecycle, SandboxLifecycle};
+    use stepyard_sandbox_orchestrator::{
+        DockerLifecycle, GitWorktreeManager, LocalShellLifecycle, SandboxLifecycle,
+    };
 
-    let harness_workflow = harness_adapter::adapt(&workflow)
+    let mut harness_workflow = harness_adapter::adapt(&workflow)
         .map_err(|e| anyhow::anyhow!("cannot run workflow on --engine v2: {e}"))?;
+    apply_cli_override(&mut harness_workflow, args.branch_strategy.clone());
     // Round 3 Story 3 — env key/value validation at the workflow boundary.
     // `Workflow::try_from_yaml` runs `validate()` automatically, but the v1→v2
     // adapter builds the workflow programmatically (`Workflow::new` + field
@@ -195,6 +204,7 @@ async fn execute_v2(
     // contract every programmatic caller honors before handing the workflow
     // to the engine.
     harness_workflow.validate()?;
+    let branch_strategy = harness_workflow.resolve_branch_strategy()?;
 
     let pool = connect_pg(args.json).await?;
 
@@ -212,6 +222,7 @@ async fn execute_v2(
     tracing::debug!(?reconcile_report, "startup reconcile report");
 
     let session = open_session_with_pool(&pool, &workflow.name).await?;
+    let session_id = session.id();
 
     let lifecycle: Arc<dyn SandboxLifecycle> = if sandbox_mode == SandboxMode::Disabled {
         Arc::new(LocalShellLifecycle::new())
@@ -261,10 +272,18 @@ async fn execute_v2(
         target: args.target.first().cloned().unwrap_or_default(),
         vars: run_vars,
     };
+    let repo_root = std::env::current_dir().context("failed to resolve current directory")?;
+    let workspace_manager = Arc::new(GitWorktreeManager::new(
+        repo_root.clone(),
+        repo_root.join(".stepyard").join("workspaces"),
+        24,
+    ));
+    let planned_workspace_path = workspace_manager.workspace_path(&session_id);
 
     let mut engine = HarnessEngine::new(config, session, harness_workflow.clone(), lifecycle)
         .with_defaults(harness_defaults)
-        .with_run_context(run_context);
+        .with_run_context(run_context)
+        .with_workspace_manager(workspace_manager, branch_strategy, planned_workspace_path);
 
     // Signal interception lives in `src/signal.rs` (Story 2.2). `main()` races
     // that future against `cli.run(..)` via `tokio::select!`; no per-command
