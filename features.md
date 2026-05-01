@@ -112,7 +112,7 @@
 ## Feature 22: {{KEY}} Template Substitution Preprocessor with YAML-Safe Output
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.3] As a workflow author, I want a stepyard_core::template::substitute(text, &vars) pre-parse pass that replaces every {{KEY}} with the YAML-encoded value via serde_yaml::to_string running BEFORE serde_yaml::from_str, so that one workflow YAML can be parameterized across N projects without YAML structure injection from raw value substitution. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 21
-- Status: pending
+- Status: done
 
 ## Feature 23: CLI --var KEY=VAL Flag + Defaults Source + EngineError::PlaceholderUnresolved Validation
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.4] As a workflow author, I want stepyard run --var KEY=VAL as a multi-value CLI flag and .stepyard/defaults.yaml providing value sources for {{KEY}}, with EngineError::PlaceholderUnresolved failing fast at parse time when any placeholder is missing, so that I can run one workflow across N projects with explicit per-run parameters and clear errors on missing keys. Source: _bmad-output/sandcastle-features/epics.md
