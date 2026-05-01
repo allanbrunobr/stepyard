@@ -10,7 +10,8 @@ use std::time::Instant;
 use chrono::Utc;
 use stepyard_core::{ChatMessage, Event, Signal, StepOutputSnapshot};
 use stepyard_sandbox_orchestrator::{
-    BranchStrategy, SandboxLifecycle, WorkflowOutcome, Workspace, WorkspaceError, WorkspaceManager,
+    BranchStrategy, SandboxError, SandboxLifecycle, WorkflowOutcome, Workspace, WorkspaceError,
+    WorkspaceManager,
 };
 use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
 use tokio::sync::broadcast;
@@ -685,6 +686,10 @@ impl Engine {
                 step_index,
                 reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
             }),
+            CmdOutcome::IdleTimedOut { idle_ms } => Err(EngineError::StepFailed {
+                step_index,
+                reason: stepyard_core::TerminationReason::IdleTimeout { idle_ms },
+            }),
         }
     }
 
@@ -897,6 +902,27 @@ impl Engine {
                 .await?;
                 self.finalise_fail().await?;
                 Ok(CmdOutcome::Failed(error))
+            }
+            Err(SandboxError::IdleTimeout { idle_ms }) => {
+                self.emit(Event::IdleTimeoutFired {
+                    step_index,
+                    idle_threshold_ms: idle_ms,
+                })
+                .await?;
+                let error =
+                    stepyard_core::TerminationReason::IdleTimeout { idle_ms }.to_string();
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: "cmd".into(),
+                    error: error.clone(),
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: true,
+                })
+                .await?;
+                let _ = self.lifecycle.destroy_by_session(session_uuid).await;
+                self.finalise_fail().await?;
+                Ok(CmdOutcome::IdleTimedOut { idle_ms })
             }
             Err(e) => {
                 let error = e.to_string();
@@ -2444,6 +2470,10 @@ pub(crate) enum CmdOutcome {
     /// emitted — the caller only needs to surface the configured
     /// duration via `EngineError::StepFailed { TerminationReason::StepTimeout }`.
     TimedOut { configured_ms: u64 },
+    /// Output-idle timeout fired inside the sandbox backend.
+    /// `IdleTimeoutFired` + `StepFailed` + sandbox destroy +
+    /// `finalise_fail` already emitted.
+    IdleTimedOut { idle_ms: u64 },
 }
 
 /// Overlay `defaults` < `workflow_env` < `step_env` (later layers win) and
