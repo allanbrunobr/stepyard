@@ -148,6 +148,8 @@ pub enum Event {
     /// before the worktree subprocess runs, paired with
     /// [`Self::WorkspacePrepared`] for non-`head` strategies.
     BranchCreated { branch: String, base: String },
+    /// A stale git workspace directory was removed during startup reconcile.
+    WorkspacePruned { path: String, reason: String },
     /// A merge from a session branch back to the target branch is about to
     /// run. Emitted before the `git merge` subprocess.
     MergeAttempted { source: String, target: String },
@@ -181,6 +183,34 @@ pub enum Event {
         content: String,
         timestamp: DateTime<Utc>,
     },
+}
+
+/// Controlled reason strings for [`Event::WorkspacePruned`].
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspacePruneReason {
+    OrphanNoGitEntry,
+    StalePastRetention,
+    GitPruneDangling,
+}
+
+impl WorkspacePruneReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OrphanNoGitEntry => "orphan_no_git_entry",
+            Self::StalePastRetention => "stale_past_retention",
+            Self::GitPruneDangling => "git_prune_dangling",
+        }
+    }
+}
+
+impl Event {
+    pub fn workspace_pruned(path: impl Into<String>, reason: WorkspacePruneReason) -> Self {
+        Self::WorkspacePruned {
+            path: path.into(),
+            reason: reason.as_str().to_string(),
+        }
+    }
 }
 
 /// Frozen exec output attached to [`Event::StepCompleted`] so the harness can
@@ -386,6 +416,39 @@ mod tests {
                 "branch": "feat/test",
                 "base": "HEAD",
             })
+        );
+    }
+
+    #[test]
+    fn workspace_pruned_helper_serializes_controlled_reason() {
+        let event = Event::workspace_pruned(
+            "/repo/.stepyard/workspaces/stepyard-session-1",
+            WorkspacePruneReason::OrphanNoGitEntry,
+        );
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "workspace_pruned",
+                "path": "/repo/.stepyard/workspaces/stepyard-session-1",
+                "reason": "orphan_no_git_entry",
+            })
+        );
+    }
+
+    #[test]
+    fn workspace_prune_reason_wire_strings_are_stable() {
+        assert_eq!(
+            WorkspacePruneReason::OrphanNoGitEntry.as_str(),
+            "orphan_no_git_entry"
+        );
+        assert_eq!(
+            WorkspacePruneReason::StalePastRetention.as_str(),
+            "stale_past_retention"
+        );
+        assert_eq!(
+            WorkspacePruneReason::GitPruneDangling.as_str(),
+            "git_prune_dangling"
         );
     }
 

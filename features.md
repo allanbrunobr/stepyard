@@ -97,7 +97,7 @@
 ## Feature 19: D8 Two-Phase Startup Prune with WorkspacePruned Event and Uncommitted-Changes Preservation
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.5] As a platform operator, I want the workspace pruning slot in startup phase 3 to execute the D8 two-phase protocol (git worktree prune then filesystem walk) skipping worktrees with uncommitted changes and emitting WorkspacePruned per removed dir, so that stale worktrees reclaim without risking loss of uncommitted work. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 18
-- Status: pending
+- Status: done
 
 ## Feature 20: Add IdleTimeoutFired Event + ExecOptions Type + exec_with_options Default-Impl
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.1] As an engine maintainer, I want IdleTimeoutFired added to the event enum, an ExecOptions {env, idle_timeout} struct, and an exec_with_options default-impl on SandboxLifecycle delegating to exec_with_env, so that Story 5.2 can wire real streaming idle detection without breaking the existing exec_with_env signature. Source: _bmad-output/sandcastle-features/epics.md

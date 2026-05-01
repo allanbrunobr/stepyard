@@ -31,4 +31,6 @@
 // name the type directly, so `#[allow(unused_imports)]` keeps the compiler
 // quiet without forcing us to synthesise an artificial use site.
 #[allow(unused_imports)]
-pub use stepyard_harness::startup::{reconcile, ReconcileError, ReconcileReport};
+pub use stepyard_harness::startup::{
+    reconcile, reconcile_with_workspace_manager, ReconcileError, ReconcileReport,
+};

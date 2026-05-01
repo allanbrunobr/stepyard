@@ -7,10 +7,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Output;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use stepyard_session::SessionId;
 use thiserror::Error;
 use tokio::process::Command;
@@ -93,6 +94,39 @@ pub struct PruneReport {
     pub timestamp: DateTime<Utc>,
     pub worktrees_pruned: u32,
     pub worktrees_preserved: u32,
+    pub pruned: Vec<PrunedWorkspace>,
+}
+
+impl PruneReport {
+    pub fn new(
+        timestamp: DateTime<Utc>,
+        worktrees_pruned: u32,
+        worktrees_preserved: u32,
+        pruned: Vec<PrunedWorkspace>,
+    ) -> Self {
+        Self {
+            timestamp,
+            worktrees_pruned,
+            worktrees_preserved,
+            pruned,
+        }
+    }
+}
+
+/// One workspace directory removed by [`WorkspaceManager::prune`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrunedWorkspace {
+    pub path: String,
+    pub reason: String,
+}
+
+impl PrunedWorkspace {
+    pub fn orphan_no_git_entry(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            reason: "orphan_no_git_entry".to_string(),
+        }
+    }
 }
 
 /// Errors raised while managing git worktrees.
@@ -174,12 +208,18 @@ impl GitWorktreeManager {
         op: &'static str,
         args: Vec<OsString>,
     ) -> Result<Output, WorkspaceError> {
+        self.git_output_in(&self.repo_root, op, args).await
+    }
+
+    async fn git_output_in(
+        &self,
+        cwd: &Path,
+        op: &'static str,
+        args: Vec<OsString>,
+    ) -> Result<Output, WorkspaceError> {
         tokio::time::timeout(
             Duration::from_secs(30),
-            Command::new("git")
-                .current_dir(&self.repo_root)
-                .args(args)
-                .output(),
+            Command::new("git").current_dir(cwd).args(args).output(),
         )
         .await
         .map_err(|_| WorkspaceError::GitCommand {
@@ -202,6 +242,36 @@ impl GitWorktreeManager {
             op: op.to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         })
+    }
+
+    async fn listed_worktree_paths(&self) -> Result<HashSet<PathBuf>, WorkspaceError> {
+        let output = self
+            .git_success(
+                "worktree list",
+                vec![
+                    OsString::from("worktree"),
+                    OsString::from("list"),
+                    OsString::from("--porcelain"),
+                ],
+            )
+            .await?;
+        let mut paths = HashSet::new();
+        for path in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.strip_prefix("worktree "))
+            .map(PathBuf::from)
+        {
+            paths.insert(tokio::fs::canonicalize(&path).await.unwrap_or(path));
+        }
+        Ok(paths)
+    }
+
+    fn is_past_retention(&self, modified: SystemTime) -> bool {
+        let retention = Duration::from_secs(self.retention_hours.saturating_mul(60 * 60));
+        let cutoff = SystemTime::now()
+            .checked_sub(retention)
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        modified < cutoff
     }
 }
 
@@ -344,7 +414,109 @@ impl WorkspaceManager for GitWorktreeManager {
     }
 
     async fn prune(&self) -> Result<PruneReport, WorkspaceError> {
-        unimplemented!("Story 4.5")
+        let mut report = PruneReport::new(Utc::now(), 0, 0, Vec::new());
+
+        let prune = self
+            .git_output(
+                "worktree prune",
+                vec![OsString::from("worktree"), OsString::from("prune")],
+            )
+            .await?;
+        if !prune.status.success() {
+            let stderr = String::from_utf8_lossy(&prune.stderr).to_string();
+            if !stderr.contains("nothing to prune") {
+                return Err(WorkspaceError::GitCommand {
+                    op: "worktree prune".to_string(),
+                    stderr,
+                });
+            }
+        }
+
+        let listed = self.listed_worktree_paths().await?;
+        let mut entries = match tokio::fs::read_dir(&self.workspaces_dir).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(report),
+            Err(err) => return Err(err.into()),
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("stepyard-session-") || !entry.file_type().await?.is_dir() {
+                continue;
+            }
+
+            let comparable_path = tokio::fs::canonicalize(&path).await.unwrap_or(path.clone());
+            if listed.contains(&comparable_path) {
+                report.worktrees_preserved += 1;
+                continue;
+            }
+
+            let modified = entry.metadata().await?.modified()?;
+            if !self.is_past_retention(modified) {
+                report.worktrees_preserved += 1;
+                continue;
+            }
+
+            let status = self
+                .git_output_in(
+                    &path,
+                    "worktree status",
+                    vec![OsString::from("status"), OsString::from("--porcelain")],
+                )
+                .await;
+            let status = match status {
+                Ok(output) if output.status.success() => output,
+                Ok(output) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        exit_code = output.status.code().unwrap_or(-1),
+                        stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                        "worktree preserved because git status failed",
+                    );
+                    report.worktrees_preserved += 1;
+                    continue;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "worktree preserved because git status failed",
+                    );
+                    report.worktrees_preserved += 1;
+                    continue;
+                }
+            };
+
+            let status_text = String::from_utf8_lossy(&status.stdout);
+            if !status_text.trim().is_empty() {
+                let uncommitted_files_count = status_text
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count();
+                tracing::warn!(
+                    path = %path.display(),
+                    uncommitted_files_count,
+                    "worktree preserved due to uncommitted changes",
+                );
+                report.worktrees_preserved += 1;
+                continue;
+            }
+
+            tokio::fs::remove_dir_all(&path).await?;
+            let pruned = PrunedWorkspace::orphan_no_git_entry(path.display().to_string());
+            tracing::info!(
+                path = %pruned.path,
+                reason = %pruned.reason,
+                "workspace pruned",
+            );
+            report.worktrees_pruned += 1;
+            report.pruned.push(pruned);
+        }
+
+        Ok(report)
     }
 }
 
@@ -656,5 +828,94 @@ mod tests {
             .await
             .expect("read main readme");
         assert_eq!(readme, "main\n");
+    }
+
+    #[tokio::test]
+    async fn prune_missing_workspaces_dir_is_noop() {
+        let temp = create_temp_repo().await;
+        let repo = temp.path().join("repo");
+        let manager = GitWorktreeManager::new(repo, temp.path().join("missing-workspaces"), 0);
+
+        let report = manager.prune().await.expect("prune");
+
+        assert_eq!(report.worktrees_pruned, 0);
+        assert_eq!(report.worktrees_preserved, 0);
+        assert!(report.pruned.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prune_removes_clean_stale_orphan_workspace_dir() {
+        let temp = create_temp_repo().await;
+        let repo = temp.path().join("repo");
+        let workspaces = temp.path().join("workspaces");
+        tokio::fs::create_dir_all(&workspaces)
+            .await
+            .expect("create workspaces");
+        let orphan = workspaces.join("stepyard-session-orphan");
+        tokio::fs::create_dir(&orphan).await.expect("create orphan");
+        assert!(git(&orphan, &["init", "-b", "main"]).await.status.success());
+
+        let manager = GitWorktreeManager::new(repo, workspaces, 0);
+        let report = manager.prune().await.expect("prune");
+
+        assert_eq!(report.worktrees_pruned, 1);
+        assert_eq!(report.worktrees_preserved, 0);
+        assert_eq!(
+            report.pruned,
+            vec![PrunedWorkspace::orphan_no_git_entry(
+                orphan.display().to_string()
+            )]
+        );
+        assert!(!orphan.exists(), "clean stale orphan is removed");
+    }
+
+    #[tokio::test]
+    async fn prune_preserves_orphan_workspace_with_uncommitted_changes() {
+        let temp = create_temp_repo().await;
+        let repo = temp.path().join("repo");
+        let workspaces = temp.path().join("workspaces");
+        tokio::fs::create_dir_all(&workspaces)
+            .await
+            .expect("create workspaces");
+        let orphan = workspaces.join("stepyard-session-dirty");
+        tokio::fs::create_dir(&orphan).await.expect("create orphan");
+        assert!(git(&orphan, &["init", "-b", "main"]).await.status.success());
+        tokio::fs::write(orphan.join("dirty.txt"), "dirty\n")
+            .await
+            .expect("write dirty file");
+
+        let manager = GitWorktreeManager::new(repo, workspaces, 0);
+        let report = manager.prune().await.expect("prune");
+
+        assert_eq!(report.worktrees_pruned, 0);
+        assert_eq!(report.worktrees_preserved, 1);
+        assert!(report.pruned.is_empty());
+        assert!(orphan.exists(), "dirty orphan is preserved");
+    }
+
+    #[tokio::test]
+    async fn prune_preserves_registered_worktree() {
+        let temp = create_temp_repo().await;
+        let repo = temp.path().join("repo");
+        let workspaces = temp.path().join("workspaces");
+        let manager = GitWorktreeManager::new(repo, workspaces, 0);
+        let session_id = SessionId::new();
+
+        let workspace = manager
+            .prepare(
+                &session_id,
+                &BranchStrategy::NamedBranch {
+                    name: "feat/prune-preserve".to_string(),
+                },
+            )
+            .await
+            .expect("prepare registered worktree");
+
+        let report = manager.prune().await.expect("prune");
+
+        assert_eq!(report.worktrees_pruned, 0);
+        assert_eq!(report.worktrees_preserved, 1);
+        assert!(report.pruned.is_empty());
+        assert!(workspace.path.exists(), "registered worktree is preserved");
     }
 }

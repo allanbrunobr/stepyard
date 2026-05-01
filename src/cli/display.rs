@@ -123,6 +123,10 @@ pub fn branch_created(branch: &str, base: &str) {
     println!("  {} branch created: {branch} from {base}", "◆".cyan());
 }
 
+pub fn workspace_pruned(path: &str, reason: &str) {
+    println!("  {} workspace pruned: {path} ({reason})", "◆".cyan());
+}
+
 pub fn merge_attempted(source: &str, target: &str) {
     println!("  {} merge attempted: {source} → {target}", "◆".cyan());
 }

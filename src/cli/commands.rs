@@ -207,6 +207,12 @@ async fn execute_v2(
     let branch_strategy = harness_workflow.resolve_branch_strategy()?;
 
     let pool = connect_pg(args.json).await?;
+    let repo_root = std::env::current_dir().context("failed to resolve current directory")?;
+    let workspace_manager = Arc::new(GitWorktreeManager::new(
+        repo_root.clone(),
+        repo_root.join(".stepyard").join("workspaces"),
+        24,
+    ));
 
     // D8 startup reconcile (Story 2.4). Runs unconditionally before any
     // engine is constructed. Uses a dedicated `DockerLifecycle::default()`
@@ -216,7 +222,11 @@ async fn execute_v2(
     // `tracing::warn!` and Phase 1 (PG session cleanup) still runs.
     let reconcile_lifecycle = DockerLifecycle::default();
     let reconcile_report: crate::startup::ReconcileReport =
-        crate::startup::reconcile(&pool, &reconcile_lifecycle)
+        crate::startup::reconcile_with_workspace_manager(
+            &pool,
+            &reconcile_lifecycle,
+            Some(workspace_manager.as_ref()),
+        )
             .await
             .context("startup reconcile failed")?;
     tracing::debug!(?reconcile_report, "startup reconcile report");
@@ -272,12 +282,6 @@ async fn execute_v2(
         target: args.target.first().cloned().unwrap_or_default(),
         vars: run_vars,
     };
-    let repo_root = std::env::current_dir().context("failed to resolve current directory")?;
-    let workspace_manager = Arc::new(GitWorktreeManager::new(
-        repo_root.clone(),
-        repo_root.join(".stepyard").join("workspaces"),
-        24,
-    ));
     let planned_workspace_path = workspace_manager.workspace_path(&session_id);
 
     let mut engine = HarnessEngine::new(config, session, harness_workflow.clone(), lifecycle)

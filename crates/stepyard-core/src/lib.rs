@@ -17,7 +17,10 @@ mod subscriber;
 mod workflow;
 
 pub use error::{EngineError, TerminationReason};
-pub use event::{ChatMessage, ChatRole, Event, GateOutcome, ScopeContext, StepOutputSnapshot};
+pub use event::{
+    ChatMessage, ChatRole, Event, GateOutcome, ScopeContext, StepOutputSnapshot,
+    WorkspacePruneReason,
+};
 pub use signal::Signal;
 pub use subscriber::EventSubscriber;
 pub use workflow::WorkflowVersion;
