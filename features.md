@@ -77,7 +77,7 @@
 ## Feature 15: Define WorkspaceManager Trait and GitWorktreeManager Skeleton
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.1] As an engine maintainer, I want a WorkspaceManager trait in stepyard-sandbox-orchestrator/src/workspace.rs and a GitWorktreeManager struct with stub method bodies, so that subsequent stories fill in prepare/finalize/prune against a stable trait contract without a new crate. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 9
-- Status: pending
+- Status: done
 
 ## Feature 16: Implement GitWorktreeManager::prepare with WorkspacePrepared + BranchCreated Events
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.2] As a workflow runtime, I want Engine to emit WorkspacePrepared (and BranchCreated when a branch is created) synchronously before invoking GitWorktreeManager::prepare which runs git worktree add via argv-only subprocess, so that every workspace decision is logged before git IO and parallel agents get isolated working trees. Source: _bmad-output/sandcastle-features/epics.md
