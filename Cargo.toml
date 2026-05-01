@@ -92,6 +92,7 @@ tera = "1"
 
 # HTTP client (for events/subscribers and fallback)
 reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+bytes = "1"
 
 # LLM provider abstraction (18+ providers: Anthropic, OpenAI, Ollama, Google, etc.)
 rig-core = "0.32"

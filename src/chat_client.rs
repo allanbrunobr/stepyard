@@ -26,11 +26,17 @@
 //! split.
 
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use rig::client::CompletionClient;
 use rig::completion::{CompletionError, CompletionModel, CompletionResponse};
+use rig::http_client::{
+    self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
+};
 use rig::message::{AssistantContent, Message};
+use rig::wasm_compat::WasmCompatSend;
 
 use stepyard_core::{ChatMessage, ChatRole};
 use stepyard_harness::{
@@ -53,6 +59,156 @@ pub fn default_chat_client() -> Arc<dyn ChatClient> {
 /// dispatched a chat step. Mirrors v1's `call_via_rig` shape.
 #[derive(Debug, Default)]
 pub struct RigChatClient;
+
+const MAX_RATE_LIMIT_RETRIES: usize = 3;
+const RATE_LIMIT_BACKOFFS: [Duration; MAX_RATE_LIMIT_RETRIES] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+
+#[derive(Clone, Debug)]
+struct RetryingHttpClient {
+    inner: reqwest::Client,
+}
+
+impl Default for RetryingHttpClient {
+    fn default() -> Self {
+        Self {
+            inner: reqwest::Client::new(),
+        }
+    }
+}
+
+fn http_instance_error(
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> http_client::Error {
+    http_client::Error::Instance(Box::new(error))
+}
+
+impl HttpClientExt for RetryingHttpClient {
+    fn send<T, U>(
+        &self,
+        req: Request<T>,
+    ) -> impl std::future::Future<Output = http_client::Result<Response<LazyBody<U>>>>
+           + WasmCompatSend
+           + 'static
+    where
+        T: Into<Bytes>,
+        T: WasmCompatSend,
+        U: From<Bytes>,
+        U: WasmCompatSend + 'static,
+    {
+        let (parts, body) = req.into_parts();
+        let method = parts.method;
+        let uri = parts.uri.to_string();
+        let headers = parts.headers;
+        let body = body.into();
+        let client = self.inner.clone();
+
+        async move {
+            for retry_index in 0..=MAX_RATE_LIMIT_RETRIES {
+                let fallback_delay = RATE_LIMIT_BACKOFFS.get(retry_index).copied();
+                let response = client
+                    .request(method.clone(), uri.clone())
+                    .headers(headers.clone())
+                    .body(body.clone())
+                    .send()
+                    .await
+                    .map_err(http_instance_error)?;
+
+                if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    && fallback_delay.is_some()
+                {
+                    let delay = retry_after_delay(response.headers())
+                        .unwrap_or_else(|| fallback_delay.expect("checked is_some"));
+                    let _ = response.text().await;
+                    tracing::warn!(
+                        retry_attempt = retry_index + 1,
+                        max_retries = MAX_RATE_LIMIT_RETRIES,
+                        delay_ms = delay.as_millis() as u64,
+                        "chat provider returned 429; retrying after backoff"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let text = response.text().await.unwrap_or_default();
+                    return Err(http_client::Error::InvalidStatusCodeWithMessage(
+                        status, text,
+                    ));
+                }
+
+                let mut res = Response::builder().status(response.status());
+                if let Some(hs) = res.headers_mut() {
+                    *hs = response.headers().clone();
+                }
+
+                let body: LazyBody<U> = Box::pin(async move {
+                    let bytes = response.bytes().await.map_err(http_instance_error)?;
+                    Ok(U::from(bytes))
+                });
+
+                return res.body(body).map_err(http_client::Error::Protocol);
+            }
+
+            unreachable!("rate-limit retry loop always returns on final attempt")
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn send_multipart<U>(
+        &self,
+        req: Request<MultipartForm>,
+    ) -> impl std::future::Future<Output = http_client::Result<Response<LazyBody<U>>>>
+           + WasmCompatSend
+           + 'static
+    where
+        U: From<Bytes>,
+        U: WasmCompatSend + 'static,
+    {
+        let _ = req;
+        async { Err(unsupported_http_client_path("multipart chat requests")) }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn send_streaming<T>(
+        &self,
+        req: Request<T>,
+    ) -> impl std::future::Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
+    where
+        T: Into<Bytes>,
+    {
+        let _ = req;
+        async { Err(unsupported_http_client_path("streaming chat requests")) }
+    }
+}
+
+fn unsupported_http_client_path(path: &'static str) -> http_client::Error {
+    http_instance_error(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!("RetryingHttpClient only supports non-streaming completion calls, got {path}"),
+    ))
+}
+
+fn retry_after_delay(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| parse_retry_after(raw, SystemTime::now()))
+}
+
+fn parse_retry_after(raw: &str, now: SystemTime) -> Option<Duration> {
+    if let Ok(seconds) = raw.trim().parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+
+    let parsed = chrono::DateTime::parse_from_rfc2822(raw.trim()).ok()?;
+    let target: SystemTime = parsed.with_timezone(&chrono::Utc).into();
+    target.duration_since(now).ok().or(Some(Duration::ZERO))
+}
 
 #[async_trait]
 impl ChatClient for RigChatClient {
@@ -250,7 +406,9 @@ async fn call_provider(
 ) -> Result<ChatCompletionResponse, ChatClientError> {
     match provider {
         ChatProvider::Anthropic => {
-            let mut builder = rig::providers::anthropic::Client::builder().api_key(api_key);
+            let mut builder = rig::providers::anthropic::Client::builder()
+                .api_key(api_key)
+                .http_client(RetryingHttpClient::default());
             if let Some(url) = base_url {
                 builder = builder.base_url(url);
             }
@@ -268,7 +426,9 @@ async fn call_provider(
             )
         }
         ChatProvider::OpenAi => {
-            let mut builder = rig::providers::openai::CompletionsClient::builder().api_key(api_key);
+            let mut builder = rig::providers::openai::CompletionsClient::builder()
+                .api_key(api_key)
+                .http_client(RetryingHttpClient::default());
             if let Some(url) = base_url {
                 builder = builder.base_url(url);
             }
@@ -287,7 +447,8 @@ async fn call_provider(
             let url = base_url.unwrap_or("http://localhost:11434");
             let builder = rig::providers::ollama::Client::builder()
                 .api_key(rig::client::Nothing)
-                .base_url(url);
+                .base_url(url)
+                .http_client(RetryingHttpClient::default());
             let client = builder.build().map_err(|e| provider_failure("ollama", e))?;
             send_completion!(
                 client,
@@ -300,7 +461,9 @@ async fn call_provider(
             )
         }
         ChatProvider::Groq => {
-            let mut builder = rig::providers::groq::Client::builder().api_key(api_key);
+            let mut builder = rig::providers::groq::Client::builder()
+                .api_key(api_key)
+                .http_client(RetryingHttpClient::default());
             if let Some(url) = base_url {
                 builder = builder.base_url(url);
             }
@@ -316,7 +479,9 @@ async fn call_provider(
             )
         }
         ChatProvider::DeepSeek => {
-            let mut builder = rig::providers::deepseek::Client::builder().api_key(api_key);
+            let mut builder = rig::providers::deepseek::Client::builder()
+                .api_key(api_key)
+                .http_client(RetryingHttpClient::default());
             if let Some(url) = base_url {
                 builder = builder.base_url(url);
             }
@@ -334,6 +499,10 @@ async fn call_provider(
             )
         }
         ChatProvider::Gemini => {
+            // Rig's Gemini completion model is not generic over the
+            // HTTP backend in 0.32, so it cannot use RetryingHttpClient
+            // without reimplementing the provider. Other providers in
+            // this adapter use the retrying backend below.
             let mut builder = rig::providers::gemini::Client::builder().api_key(api_key);
             if let Some(url) = base_url {
                 builder = builder.base_url(url);
@@ -350,7 +519,9 @@ async fn call_provider(
             )
         }
         ChatProvider::Cohere => {
-            let mut builder = rig::providers::cohere::Client::builder().api_key(api_key);
+            let mut builder = rig::providers::cohere::Client::builder()
+                .api_key(api_key)
+                .http_client(RetryingHttpClient::default());
             if let Some(url) = base_url {
                 builder = builder.base_url(url);
             }
@@ -366,7 +537,9 @@ async fn call_provider(
             )
         }
         ChatProvider::Perplexity => {
-            let mut builder = rig::providers::perplexity::Client::builder().api_key(api_key);
+            let mut builder = rig::providers::perplexity::Client::builder()
+                .api_key(api_key)
+                .http_client(RetryingHttpClient::default());
             if let Some(url) = base_url {
                 builder = builder.base_url(url);
             }
@@ -384,7 +557,9 @@ async fn call_provider(
             )
         }
         ChatProvider::Xai => {
-            let mut builder = rig::providers::xai::Client::builder().api_key(api_key);
+            let mut builder = rig::providers::xai::Client::builder()
+                .api_key(api_key)
+                .http_client(RetryingHttpClient::default());
             if let Some(url) = base_url {
                 builder = builder.base_url(url);
             }
@@ -400,7 +575,9 @@ async fn call_provider(
             )
         }
         ChatProvider::Mistral => {
-            let mut builder = rig::providers::mistral::Client::builder().api_key(api_key);
+            let mut builder = rig::providers::mistral::Client::builder()
+                .api_key(api_key)
+                .http_client(RetryingHttpClient::default());
             if let Some(url) = base_url {
                 builder = builder.base_url(url);
             }
@@ -429,7 +606,8 @@ async fn call_provider(
             })?;
             let builder = rig::providers::openai::CompletionsClient::builder()
                 .api_key(api_key)
-                .base_url(url);
+                .base_url(url)
+                .http_client(RetryingHttpClient::default());
             let client = builder
                 .build()
                 .map_err(|e| provider_failure("openai_compatible", e))?;
@@ -596,5 +774,100 @@ mod tests {
             ..HarnessConfig::default()
         };
         assert!(cfg.chat_client.is_some());
+    }
+
+    #[test]
+    fn retry_after_seconds_header_parses() {
+        let delay = parse_retry_after("3", SystemTime::UNIX_EPOCH).expect("delay");
+        assert_eq!(delay, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn retry_after_http_date_header_parses_relative_delay() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(784_111_777);
+        let delay = parse_retry_after("Sun, 06 Nov 1994 08:49:40 GMT", now).expect("delay");
+        assert_eq!(delay, Duration::from_secs(3));
+    }
+
+    #[test]
+    fn retry_after_past_http_date_is_zero_delay() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(784_111_780);
+        let delay = parse_retry_after("Sun, 06 Nov 1994 08:49:37 GMT", now).expect("delay");
+        assert_eq!(delay, Duration::ZERO);
+    }
+
+    #[test]
+    fn retry_after_invalid_header_is_ignored() {
+        assert_eq!(parse_retry_after("soon", SystemTime::UNIX_EPOCH), None);
+    }
+
+    #[test]
+    fn rate_limit_backoff_schedule_is_one_two_four_seconds() {
+        assert_eq!(
+            RATE_LIMIT_BACKOFFS,
+            [
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                Duration::from_secs(4)
+            ]
+        );
+        assert_eq!(MAX_RATE_LIMIT_RETRIES, 3);
+    }
+
+    #[tokio::test]
+    async fn retrying_http_client_retries_429_then_returns_success() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_server = hits.clone();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf).await.expect("read");
+                let hit = hits_for_server.fetch_add(1, Ordering::SeqCst);
+                let response = if hit == 0 {
+                    concat!(
+                        "HTTP/1.1 429 Too Many Requests\r\n",
+                        "Retry-After: 0\r\n",
+                        "Content-Length: 7\r\n",
+                        "Connection: close\r\n",
+                        "\r\n",
+                        "limited"
+                    )
+                } else {
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "Content-Length: 2\r\n",
+                        "Connection: close\r\n",
+                        "\r\n",
+                        "ok"
+                    )
+                };
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write response");
+            }
+        });
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("http://{addr}/chat"))
+            .body(Bytes::from_static(b"{}"))
+            .expect("request");
+        let res: Response<LazyBody<Bytes>> = RetryingHttpClient::default()
+            .send(req)
+            .await
+            .expect("retry then success");
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        let body = res.into_body().await.expect("body");
+        assert_eq!(&body[..], b"ok");
+        server.await.expect("server task");
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
     }
 }
