@@ -91,6 +91,10 @@ pub enum SandboxError {
     #[error("exec failure: {0}")]
     ExecFailed(String),
 
+    /// The command produced no stdout within the configured idle threshold.
+    #[error("sandbox idle for {idle_ms}ms — terminated by orchestrator")]
+    IdleTimeout { idle_ms: u64 },
+
     /// Catch-all for invariants the orchestrator detects at runtime.
     #[error("invalid state: {0}")]
     InvalidState(String),

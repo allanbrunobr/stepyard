@@ -102,7 +102,7 @@
 ## Feature 20: Add IdleTimeoutFired Event + ExecOptions Type + exec_with_options Default-Impl
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.1] As an engine maintainer, I want IdleTimeoutFired added to the event enum, an ExecOptions {env, idle_timeout} struct, and an exec_with_options default-impl on SandboxLifecycle delegating to exec_with_env, so that Story 5.2 can wire real streaming idle detection without breaking the existing exec_with_env signature. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 14
-- Status: pending
+- Status: done
 
 ## Feature 21: Implement DockerLifecycle::exec_with_options Streaming and Engine Wiring for IdleTimeoutFired
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.2] As a workflow author, I want the engine to detect when an agent stops producing stdout for idle_timeout ms, synchronously emit IdleTimeoutFired, then destroy the container and return StepFailed { reason: IdleTimeout }, so that idle agents terminate deterministically without indefinite resource consumption. Source: _bmad-output/sandcastle-features/epics.md

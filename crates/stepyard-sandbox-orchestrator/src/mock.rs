@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::sandbox::{ExecFn, ExecOutput, Sandbox, SandboxError, SandboxId, SandboxState};
-use crate::SandboxLifecycle;
+use crate::{ExecOptions, SandboxLifecycle};
 
 /// One recorded interaction with the mock backend.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +33,14 @@ pub enum MockCall {
         id: SandboxId,
         cmd: Vec<String>,
         env: HashMap<String, String>,
+    },
+    /// Structured record of `exec_with_options`: the full options struct is
+    /// captured so tests can assert that fields like `idle_timeout` were not
+    /// silently dropped.
+    ExecWithOptions {
+        id: SandboxId,
+        cmd: Vec<String>,
+        opts: ExecOptions,
     },
     ReuseOrCreate {
         session_id: Uuid,
@@ -130,6 +138,24 @@ impl SandboxLifecycle for MockLifecycle {
         })
     }
 
+    async fn exec_with_options(
+        &self,
+        id: &SandboxId,
+        cmd: &[String],
+        opts: &ExecOptions,
+    ) -> Result<ExecOutput, SandboxError> {
+        self.calls.lock().await.push(MockCall::ExecWithOptions {
+            id: *id,
+            cmd: cmd.to_vec(),
+            opts: opts.clone(),
+        });
+        Ok(ExecOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+        })
+    }
+
     async fn reuse_or_create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
         self.calls
             .lock()
@@ -201,5 +227,36 @@ mod tests {
         assert_eq!(rec_id, id);
         assert_eq!(rec_cmd, cmd);
         assert_eq!(rec_env, env);
+    }
+
+    #[tokio::test]
+    async fn exec_with_options_records_full_options() {
+        let mock = MockLifecycle::new();
+        let id = SandboxId::new();
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), "BAR".to_string());
+        let opts = ExecOptions {
+            env,
+            idle_timeout: Some(std::time::Duration::from_secs(30)),
+        };
+        let cmd = vec!["echo".to_string(), "hello".to_string()];
+
+        mock.exec_with_options(&id, &cmd, &opts)
+            .await
+            .expect("exec_with_options");
+
+        let calls = mock.calls().await;
+        let recorded = calls
+            .iter()
+            .find_map(|c| match c {
+                MockCall::ExecWithOptions { id, cmd, opts } => {
+                    Some((*id, cmd.clone(), opts.clone()))
+                }
+                _ => None,
+            })
+            .expect("ExecWithOptions variant recorded");
+        assert_eq!(recorded.0, id);
+        assert_eq!(recorded.1, cmd);
+        assert_eq!(recorded.2, opts);
     }
 }

@@ -1002,6 +1002,7 @@ async fn nested_container_inside_scope_fails_on_outer_container() {
             kind: StepKind::Call,
             command: String::new(),
             timeout: None,
+            idle_timeout: None,
             env: HashMap::new(),
             condition: None,
             on_pass: None,
