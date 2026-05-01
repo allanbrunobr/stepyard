@@ -147,6 +147,13 @@ pub enum Event {
     SignalReceived {
         signal: Signal,
     },
+    /// A workflow-level completion signal matched an agent stdout line.
+    ///
+    /// The payload records the configured signal literal, not the matched
+    /// stdout line, because stdout can contain user data or secrets. This is
+    /// intentionally an additional event beyond the original D5 count: Epic 5
+    /// introduced completion-signal control flow after that list was written.
+    CompletionSignaled { step_index: u32, signal: String },
     /// A git workspace was selected and will be prepared for this session.
     /// Emitted before the worktree subprocess runs so replay can reconstruct
     /// the workspace decision even if git IO fails or the process crashes.
@@ -427,6 +434,23 @@ mod tests {
             }
             other => panic!("roundtrip produced unexpected variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn completion_signaled_serializes_with_event_tag_and_payload() {
+        let event = Event::CompletionSignaled {
+            step_index: 2,
+            signal: "TASK_COMPLETE".into(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "completion_signaled",
+                "step_index": 2,
+                "signal": "TASK_COMPLETE",
+            })
+        );
     }
 
     #[test]

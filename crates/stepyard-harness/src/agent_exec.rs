@@ -235,6 +235,10 @@ pub(crate) struct AgentExecOutput {
     pub output_tokens: Option<u64>,
     /// `result.cost_usd`.
     pub cost_usd: Option<f64>,
+    /// True when the workflow-level completion signal matched a raw stdout
+    /// line. The engine turns this into `Event::CompletionSignaled` and a
+    /// successful workflow terminal state.
+    pub completion_signaled: bool,
 }
 
 /// Parse one `stream-json` line from the Claude CLI into [`AgentExecOutput`].
@@ -332,6 +336,7 @@ pub(crate) async fn run_agent_step(
     rendered_prompt: &str,
     state: &AgentSessionState<'_>,
     env: &HashMap<String, String>,
+    completion_signal: Option<&str>,
 ) -> Result<AgentExecOutput, AgentExecError> {
     let argv = build_agent_argv(step, state)?;
     let command = step.agent_command.as_deref().unwrap_or("claude");
@@ -406,6 +411,13 @@ pub(crate) async fn run_agent_step(
     let mut output = AgentExecOutput::default();
     while let Ok(Some(line)) = lines.next_line().await {
         parse_stream_json_line(&line, &mut output);
+        if completion_signal
+            .map(|signal| line.contains(signal))
+            .unwrap_or(false)
+        {
+            output.completion_signaled = true;
+            return Ok(output);
+        }
     }
 
     let status = child.wait().await.map_err(|e| AgentExecError::WaitFailed {
