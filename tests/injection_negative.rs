@@ -30,9 +30,11 @@
 //! every `exec_with_env` future is wrapped in `timeout(DOCKER_TIMEOUT, …)`.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use assert_cmd::Command as AssertCommand;
 use stepyard_sandbox_orchestrator::{DockerLifecycle, SandboxId, SandboxLifecycle};
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -198,21 +200,54 @@ async fn negative_control_user_owned_sh_c_expansion() {
     teardown(&container).await;
 }
 
-/// Epic 5 placeholder — CLI template substitution (`{{KEY}}`).
-///
-/// When Epic 5 Story 5.x lands `stepyard run --var KEY=VALUE`, replace the
-/// body with the test described in Story 3.5 AC4:
-///
-/// * `stepyard run --var MSG='$(rm -rf /)'` against a workflow with
-///   `command: ["echo", "{{MSG}}"]`
-/// * assert stdout is literally `$(rm -rf /)\n`
-/// * assert host filesystem is untouched
-///
-/// Kept `#[ignore]` (not `panic!`) so `cargo test --ignored` passes
-/// trivially while the feature is unshipped — the label is the hook
-/// implementers grep for.
-#[tokio::test]
-#[ignore = "Epic 5 — CLI template substitution not yet implemented"]
-async fn epic_5_cli_var_substitution_positive_control_placeholder() {
-    // Intentionally empty. See doc-comment above.
+/// CLI template substitution (`{{KEY}}`) must not execute shell-looking
+/// payloads during YAML pre-processing. This drives the real clap/loader path
+/// with `--dry-run` so no DB, Docker, or child process is required; the dry-run
+/// preview must show the payload verbatim and the host marker must not exist.
+#[test]
+fn cli_var_substitution_positive_control_host_filesystem_untouched() {
+    let marker = format!("/tmp/minion-cli-var-pwned-{}", Uuid::new_v4());
+    let _ = std::fs::remove_file(&marker);
+    assert!(
+        !PathBuf::from(&marker).exists(),
+        "pre-condition: marker must not exist before the test runs"
+    );
+
+    let mut workflow = tempfile::NamedTempFile::new().expect("temp workflow");
+    write!(
+        workflow,
+        "name: cli-var-negative\nsteps:\n  - name: echo\n    type: cmd\n    run: echo {{{{MSG}}}}\n"
+    )
+    .expect("write workflow");
+
+    let payload = format!("$(touch {marker})");
+    let output = AssertCommand::cargo_bin("stepyard")
+        .expect("stepyard binary")
+        .timeout(Duration::from_secs(10))
+        .args([
+            "execute",
+            "--dry-run",
+            "--no-sandbox",
+            "--var",
+            &format!("MSG={payload}"),
+            workflow.path().to_str().expect("utf8 temp path"),
+        ])
+        .output()
+        .expect("run stepyard dry-run");
+
+    assert!(
+        output.status.success(),
+        "dry-run failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&payload),
+        "dry-run preview must contain payload verbatim, stdout:\n{stdout}"
+    );
+    assert!(
+        !PathBuf::from(&marker).exists(),
+        "CLI template substitution executed shell-looking payload on host"
+    );
 }

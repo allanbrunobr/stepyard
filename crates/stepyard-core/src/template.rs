@@ -13,7 +13,7 @@ const DEFAULT_FOUND_AT: &str = "<workflow-yaml>";
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum TemplateError {
-    #[error("placeholder `{key}` unresolved at {found_at}")]
+    #[error("placeholder {{{{{key}}}}} unresolved at {found_at}")]
     Unresolved { key: String, found_at: String },
 
     #[error("invalid placeholder `{token}` at byte {position}")]
@@ -34,6 +34,18 @@ pub enum TemplateError {
 pub fn substitute(
     text: &str,
     vars: &HashMap<String, String>,
+) -> Result<String, TemplateError> {
+    substitute_with_source(text, vars, DEFAULT_FOUND_AT)
+}
+
+/// Substitute every `{{KEY}}` token, reporting unresolved placeholders at
+/// `source_name:line:column`. This is the CLI/workflow-loader entry point:
+/// it keeps the pure substitution contract while giving operators a useful
+/// location in the raw YAML file before deserialization happens.
+pub fn substitute_with_source(
+    text: &str,
+    vars: &HashMap<String, String>,
+    source_name: &str,
 ) -> Result<String, TemplateError> {
     let mut out = String::with_capacity(text.len());
     let mut cursor = 0;
@@ -59,7 +71,7 @@ pub fn substitute(
 
         let value = vars.get(key).ok_or_else(|| TemplateError::Unresolved {
             key: key.to_string(),
-            found_at: DEFAULT_FOUND_AT.to_string(),
+            found_at: location_for(text, open, source_name),
         })?;
         out.push_str(&yaml_scalar(value)?);
         cursor = close + 2;
@@ -67,6 +79,62 @@ pub fn substitute(
 
     out.push_str(&text[cursor..]);
     Ok(out)
+}
+
+/// Substitute only strict workflow vars (`{{KEY}}`) and leave other template
+/// syntaxes untouched. The CLI loader uses this compatibility mode because
+/// Stepyard workflows already contain runtime-rendered expressions such as
+/// `{{ vars.ITEM }}` and `{{ steps.build.stdout }}`; those are not Story 5.4
+/// workflow-load placeholders and must survive until the normal renderer runs.
+pub fn substitute_workflow_vars(
+    text: &str,
+    vars: &HashMap<String, String>,
+    source_name: &str,
+) -> Result<String, TemplateError> {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+
+    while let Some(open_rel) = text[cursor..].find("{{") {
+        let open = cursor + open_rel;
+        out.push_str(&text[cursor..open]);
+        let key_start = open + 2;
+        let Some(close_rel) = text[key_start..].find("}}") else {
+            out.push_str(&text[open..]);
+            return Ok(out);
+        };
+        let close = key_start + close_rel;
+        let token_end = close + 2;
+        let key = &text[key_start..close];
+        if !is_valid_key(key) {
+            out.push_str(&text[open..token_end]);
+            cursor = token_end;
+            continue;
+        }
+
+        let value = vars.get(key).ok_or_else(|| TemplateError::Unresolved {
+            key: key.to_string(),
+            found_at: location_for(text, open, source_name),
+        })?;
+        out.push_str(&yaml_scalar(value)?);
+        cursor = token_end;
+    }
+
+    out.push_str(&text[cursor..]);
+    Ok(out)
+}
+
+fn location_for(text: &str, byte_index: usize, source_name: &str) -> String {
+    let mut line = 1usize;
+    let mut col = 1usize;
+    for ch in text[..byte_index].chars() {
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    format!("{source_name}:{line}:{col}")
 }
 
 fn yaml_scalar(value: &str) -> Result<String, TemplateError> {
@@ -108,10 +176,37 @@ mod tests {
         match err {
             TemplateError::Unresolved { key, found_at } => {
                 assert_eq!(key, "MISSING");
-                assert_eq!(found_at, DEFAULT_FOUND_AT);
+                assert_eq!(found_at, "<workflow-yaml>:1:7");
             }
             other => panic!("expected Unresolved, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn missing_key_reports_source_line_and_column() {
+        let err = substitute_with_source("name: ok\ncmd: {{MISSING}}\n", &HashMap::new(), "wf.yaml")
+            .unwrap_err();
+        match err {
+            TemplateError::Unresolved { key, found_at } => {
+                assert_eq!(key, "MISSING");
+                assert_eq!(found_at, "wf.yaml:2:6");
+            }
+            other => panic!("expected Unresolved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn workflow_vars_mode_preserves_runtime_template_expressions() {
+        let got = substitute_workflow_vars(
+            "cmd: echo {{ vars.MSG }} && echo {{MSG}} && echo {{ steps.one.stdout }}",
+            &vars(&[("MSG", "hello")]),
+            "wf.yaml",
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            "cmd: echo {{ vars.MSG }} && echo hello && echo {{ steps.one.stdout }}"
+        );
     }
 
     #[test]
