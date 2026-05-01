@@ -283,6 +283,15 @@ impl EventSubscriber for DashboardSubscriber {
                 // explicitly so `non_exhaustive_omitted_patterns` fires if a
                 // future variant is forgotten.
             }
+            Event::WorkspacePrepared { .. } => {
+                // Workspace lifecycle is an audit-log concern for now. The
+                // dashboard's step payload is still driven by StepStarted /
+                // StepCompleted / StepFailed, so there is no state to mutate.
+            }
+            Event::BranchCreated { .. } => {
+                // Branch creation pairs with WorkspacePrepared and does not
+                // affect the dashboard step summary yet.
+            }
             // Sandbox events — not needed for dashboard payload
             _ => {}
         }
