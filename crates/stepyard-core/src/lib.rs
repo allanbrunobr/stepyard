@@ -14,6 +14,7 @@ mod error;
 mod event;
 pub mod signal;
 mod subscriber;
+pub mod template;
 mod workflow;
 
 pub use error::{EngineError, TerminationReason};
