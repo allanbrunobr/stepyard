@@ -430,10 +430,16 @@ impl Engine {
                 .await;
         }
 
-        // Container dispatch (call/repeat/map): the scope runner owns the
-        // whole lifecycle — iteration bodies, scoped event emission, and
+        // Container dispatch (call/repeat/map/parallel): the scope runner owns
+        // the whole lifecycle — iteration bodies, scoped event emission, and
         // the terminal container StepCompleted/StepFailed. PR 3 of #31.
-        if matches!(step.kind, StepKind::Call | StepKind::Repeat | StepKind::Map) {
+        // Parallel reuses the same dispatch (PR 6 of #31): the adapter
+        // synthesises a hidden scope from v1's inline `steps:` list, so the
+        // harness sees parallel as just another scope-bodied container.
+        if matches!(
+            step.kind,
+            StepKind::Call | StepKind::Repeat | StepKind::Map | StepKind::Parallel
+        ) {
             return self.run_container_step(step, start).await;
         }
 
@@ -1930,6 +1936,13 @@ impl Engine {
     /// without holding per-container memory on the engine.
     pub(crate) fn session_handle(&self) -> &Session {
         &self.session
+    }
+
+    /// Cloned executor handle. The scope runner spawns parallel sub-tasks
+    /// into a `JoinSet` (PR 6 of #31) and so cannot borrow `self`; each
+    /// task gets an `Arc` clone instead.
+    pub(crate) fn executor(&self) -> Arc<dyn StepExecutor> {
+        self.executor.clone()
     }
 }
 

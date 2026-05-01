@@ -642,6 +642,19 @@ impl Step {
         step
     }
 
+    /// Constructor for a [`StepKind::Parallel`] step — runs every step in
+    /// `scope` concurrently and returns when all sub-steps finish (or the
+    /// first sub-step error aborts the rest, v1 parity). The adapter
+    /// synthesises a hidden scope from v1's inline `steps:` list (PR 6 of
+    /// Task #31), so this constructor takes the same `scope:` reference
+    /// shape as [`Self::call`] / [`Self::repeat`] / [`Self::map`] and
+    /// keeps the v2 data model uniform across container kinds.
+    pub fn parallel(name: impl Into<String>, scope: impl Into<String>) -> Self {
+        let mut step = Step::empty(name, StepKind::Parallel);
+        step.scope = Some(scope.into());
+        step
+    }
+
     /// Constructor for a [`StepKind::Template`] step — renders the
     /// `{prompts_dir}/{prompt or name}.md.tera` file against the current
     /// render context. PR 4 of Task #31.
