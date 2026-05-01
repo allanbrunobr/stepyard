@@ -7,7 +7,10 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Output;
+use std::time::Duration;
 use stepyard_session::SessionId;
 use thiserror::Error;
 use tokio::process::Command;
@@ -51,6 +54,7 @@ impl BranchStrategy {
 pub struct Workspace {
     pub path: PathBuf,
     pub branch: Option<String>,
+    pub merge_target: Option<String>,
     pub session_id: SessionId,
 }
 
@@ -68,8 +72,18 @@ pub enum WorkflowOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FinalizeReport {
     pub timestamp: DateTime<Utc>,
-    pub branches_merged: u32,
-    pub conflicts: u32,
+    pub merged: bool,
+    pub conflicts: Vec<String>,
+}
+
+impl FinalizeReport {
+    pub fn new(timestamp: DateTime<Utc>, merged: bool, conflicts: Vec<String>) -> Self {
+        Self {
+            timestamp,
+            merged,
+            conflicts,
+        }
+    }
 }
 
 /// Summary of work performed by stale workspace pruning.
@@ -154,6 +168,41 @@ impl GitWorktreeManager {
         self.workspaces_dir
             .join(format!("stepyard-session-{session_id}"))
     }
+
+    async fn git_output(
+        &self,
+        op: &'static str,
+        args: Vec<OsString>,
+    ) -> Result<Output, WorkspaceError> {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            Command::new("git")
+                .current_dir(&self.repo_root)
+                .args(args)
+                .output(),
+        )
+        .await
+        .map_err(|_| WorkspaceError::GitCommand {
+            op: op.to_string(),
+            stderr: "timed out after 30s".to_string(),
+        })?
+        .map_err(WorkspaceError::from)
+    }
+
+    async fn git_success(
+        &self,
+        op: &'static str,
+        args: Vec<OsString>,
+    ) -> Result<Output, WorkspaceError> {
+        let output = self.git_output(op, args).await?;
+        if output.status.success() {
+            return Ok(output);
+        }
+        Err(WorkspaceError::GitCommand {
+            op: op.to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        })
+    }
 }
 
 #[async_trait]
@@ -173,36 +222,125 @@ impl WorkspaceManager for GitWorktreeManager {
         }
 
         let (branch, base) = strategy.branch_and_base(session_id);
-        let mut command = Command::new("git");
-        command
-            .current_dir(&self.repo_root)
-            .args(["worktree", "add"]);
+        let mut args = vec![OsString::from("worktree"), OsString::from("add")];
         if let Some(branch_name) = &branch {
-            command.args(["-b", branch_name]);
+            args.push(OsString::from("-b"));
+            args.push(OsString::from(branch_name));
         }
-        command.arg(&path).arg(&base);
-
-        let output = command.output().await?;
-        if !output.status.success() {
-            return Err(WorkspaceError::GitCommand {
-                op: "worktree add".to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
-        }
+        args.push(path.clone().into_os_string());
+        args.push(OsString::from(&base));
+        self.git_success("worktree add", args).await?;
 
         Ok(Workspace {
             path,
             branch,
+            merge_target: match strategy {
+                BranchStrategy::MergeToHead { target } => Some(target.clone()),
+                _ => None,
+            },
             session_id: *session_id,
         })
     }
 
     async fn finalize(
         &self,
-        _workspace: &Workspace,
-        _outcome: WorkflowOutcome,
+        workspace: &Workspace,
+        outcome: WorkflowOutcome,
     ) -> Result<FinalizeReport, WorkspaceError> {
-        unimplemented!("Story 4.4")
+        let Some(target) = workspace.merge_target.as_ref() else {
+            return Ok(FinalizeReport {
+                timestamp: Utc::now(),
+                merged: false,
+                conflicts: Vec::new(),
+            });
+        };
+        let Some(source) = workspace.branch.as_ref() else {
+            return Ok(FinalizeReport {
+                timestamp: Utc::now(),
+                merged: false,
+                conflicts: Vec::new(),
+            });
+        };
+        if outcome != WorkflowOutcome::Success {
+            return Ok(FinalizeReport {
+                timestamp: Utc::now(),
+                merged: false,
+                conflicts: Vec::new(),
+            });
+        }
+
+        self.git_success(
+            "checkout merge target",
+            vec![OsString::from("checkout"), OsString::from(target)],
+        )
+        .await
+        .map_err(|err| match err {
+            WorkspaceError::GitCommand { .. } => WorkspaceError::TargetBranchNotFound {
+                target: target.clone(),
+            },
+            other => other,
+        })?;
+
+        let merge = self
+            .git_output(
+                "merge",
+                vec![
+                    OsString::from("merge"),
+                    OsString::from("--no-ff"),
+                    OsString::from(source),
+                ],
+            )
+            .await?;
+        if merge.status.success() {
+            self.git_success(
+                "worktree remove",
+                vec![
+                    OsString::from("worktree"),
+                    OsString::from("remove"),
+                    OsString::from("--force"),
+                    workspace.path.clone().into_os_string(),
+                ],
+            )
+            .await?;
+            self.git_success(
+                "branch delete",
+                vec![
+                    OsString::from("branch"),
+                    OsString::from("-d"),
+                    OsString::from(source),
+                ],
+            )
+            .await?;
+            return Ok(FinalizeReport {
+                timestamp: Utc::now(),
+                merged: true,
+                conflicts: Vec::new(),
+            });
+        }
+
+        let files_output = self
+            .git_success(
+                "conflict files",
+                vec![
+                    OsString::from("diff"),
+                    OsString::from("--name-only"),
+                    OsString::from("--diff-filter=U"),
+                ],
+            )
+            .await?;
+        let files: Vec<String> = String::from_utf8_lossy(&files_output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+        let _ = self
+            .git_output(
+                "merge abort",
+                vec![OsString::from("merge"), OsString::from("--abort")],
+            )
+            .await;
+        Err(WorkspaceError::MergeConflict { files })
     }
 
     async fn prune(&self) -> Result<PruneReport, WorkspaceError> {
@@ -275,6 +413,7 @@ mod tests {
         let workspace = Workspace {
             path: PathBuf::from("/repo/.stepyard/workspaces/example"),
             branch: None,
+            merge_target: None,
             session_id,
         };
 
@@ -298,27 +437,19 @@ mod tests {
         let repo = temp.path().join("repo");
         tokio::fs::create_dir(&repo).await.expect("create repo dir");
 
-        let init = git(&repo, &["init"]).await;
+        let init = git(&repo, &["init", "-b", "main"]).await;
         assert!(init.status.success(), "git init: {init:?}");
+        let name = git(&repo, &["config", "user.name", "Stepyard Test"]).await;
+        assert!(name.status.success(), "git config name: {name:?}");
+        let email = git(&repo, &["config", "user.email", "stepyard@example.invalid"]).await;
+        assert!(email.status.success(), "git config email: {email:?}");
 
         tokio::fs::write(repo.join("README.md"), "hello\n")
             .await
             .expect("write readme");
         let add = git(&repo, &["add", "README.md"]).await;
         assert!(add.status.success(), "git add: {add:?}");
-        let commit = git(
-            &repo,
-            &[
-                "-c",
-                "user.name=Stepyard Test",
-                "-c",
-                "user.email=stepyard@example.invalid",
-                "commit",
-                "-m",
-                "init",
-            ],
-        )
-        .await;
+        let commit = git(&repo, &["commit", "-m", "init"]).await;
         assert!(commit.status.success(), "git commit: {commit:?}");
 
         temp
@@ -383,5 +514,147 @@ mod tests {
             .expect_err("second prepare should fail");
 
         assert!(matches!(err, WorkspaceError::WorktreeExists { .. }));
+    }
+
+    #[tokio::test]
+    async fn prepare_merge_to_head_records_merge_target() {
+        let temp = create_temp_repo().await;
+        let repo = temp.path().join("repo");
+        let workspaces = temp.path().join("workspaces");
+        let manager = GitWorktreeManager::new(repo, workspaces, 24);
+        let session_id = SessionId::new();
+
+        let workspace = manager
+            .prepare(
+                &session_id,
+                &BranchStrategy::MergeToHead {
+                    target: "main".to_string(),
+                },
+            )
+            .await
+            .expect("prepare worktree");
+
+        assert_eq!(
+            workspace.branch.as_deref(),
+            Some(format!("stepyard/session-{}", session_id.as_uuid()).as_str())
+        );
+        assert_eq!(workspace.merge_target.as_deref(), Some("main"));
+    }
+
+    #[tokio::test]
+    async fn finalize_merge_to_head_clean_merge_removes_temp_branch_and_worktree() {
+        let temp = create_temp_repo().await;
+        let repo = temp.path().join("repo");
+        let workspaces = temp.path().join("workspaces");
+        let manager = GitWorktreeManager::new(repo.clone(), workspaces, 24);
+        let session_id = SessionId::new();
+
+        let workspace = manager
+            .prepare(
+                &session_id,
+                &BranchStrategy::MergeToHead {
+                    target: "main".to_string(),
+                },
+            )
+            .await
+            .expect("prepare worktree");
+
+        tokio::fs::write(workspace.path.join("feature.txt"), "feature\n")
+            .await
+            .expect("write feature");
+        assert!(git(&workspace.path, &["add", "feature.txt"])
+            .await
+            .status
+            .success());
+        assert!(git(&workspace.path, &["commit", "-m", "feature"])
+            .await
+            .status
+            .success());
+
+        let report = manager
+            .finalize(&workspace, WorkflowOutcome::Success)
+            .await
+            .expect("clean finalize");
+        assert!(report.merged);
+        assert!(report.conflicts.is_empty());
+        assert!(
+            !workspace.path.exists(),
+            "worktree removed after clean merge"
+        );
+        assert!(
+            repo.join("feature.txt").exists(),
+            "main received merged file"
+        );
+        let branch = workspace.branch.as_deref().unwrap();
+        let listed = git(&repo, &["branch", "--list", branch]).await;
+        assert!(listed.status.success());
+        assert!(
+            String::from_utf8_lossy(&listed.stdout).trim().is_empty(),
+            "temp branch removed after clean merge"
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_merge_to_head_conflict_preserves_branch_and_worktree() {
+        let temp = create_temp_repo().await;
+        let repo = temp.path().join("repo");
+        let workspaces = temp.path().join("workspaces");
+        let manager = GitWorktreeManager::new(repo.clone(), workspaces, 24);
+        let session_id = SessionId::new();
+
+        let workspace = manager
+            .prepare(
+                &session_id,
+                &BranchStrategy::MergeToHead {
+                    target: "main".to_string(),
+                },
+            )
+            .await
+            .expect("prepare worktree");
+
+        tokio::fs::write(workspace.path.join("README.md"), "branch\n")
+            .await
+            .expect("write branch readme");
+        assert!(git(&workspace.path, &["add", "README.md"])
+            .await
+            .status
+            .success());
+        assert!(git(&workspace.path, &["commit", "-m", "branch change"])
+            .await
+            .status
+            .success());
+
+        tokio::fs::write(repo.join("README.md"), "main\n")
+            .await
+            .expect("write main readme");
+        assert!(git(&repo, &["add", "README.md"]).await.status.success());
+        assert!(git(&repo, &["commit", "-m", "main change"])
+            .await
+            .status
+            .success());
+
+        let err = manager
+            .finalize(&workspace, WorkflowOutcome::Success)
+            .await
+            .expect_err("conflict should fail finalize");
+        assert!(matches!(
+            err,
+            WorkspaceError::MergeConflict { ref files } if files == &vec!["README.md".to_string()]
+        ));
+        assert!(workspace.path.exists(), "conflicted worktree is preserved");
+        let branch = workspace.branch.as_deref().unwrap();
+        let listed = git(&repo, &["branch", "--list", branch]).await;
+        assert!(listed.status.success());
+        assert!(
+            !String::from_utf8_lossy(&listed.stdout).trim().is_empty(),
+            "conflicted temp branch is preserved"
+        );
+        let status = git(&repo, &["status", "--porcelain"]).await;
+        assert!(status.status.success());
+        assert_eq!(String::from_utf8_lossy(&status.stdout).trim(), "");
+        let readme = tokio::fs::read_to_string(repo.join("README.md"))
+            .await
+            .expect("read main readme");
+        assert_eq!(readme, "main\n");
     }
 }

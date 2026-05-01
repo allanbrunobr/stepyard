@@ -292,6 +292,12 @@ impl EventSubscriber for DashboardSubscriber {
                 // Branch creation pairs with WorkspacePrepared and does not
                 // affect the dashboard step summary yet.
             }
+            Event::MergeAttempted { .. } => {
+                // Workspace merge lifecycle is audit-log-only for now.
+            }
+            Event::MergeConflict { .. } => {
+                // Merge conflicts do not alter the step summary payload here.
+            }
             // Sandbox events — not needed for dashboard payload
             _ => {}
         }
