@@ -346,6 +346,7 @@ async fn gate_missing_condition_is_structured_step_failure() {
             kind: stepyard_harness::StepKind::Gate,
             command: String::new(),
             timeout: None,
+            idle_timeout: None,
             env: HashMap::new(),
             condition: None,
             on_pass: None,

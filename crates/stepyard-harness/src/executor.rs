@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use stepyard_sandbox_orchestrator::{ExecOutput, SandboxError, SandboxId, SandboxLifecycle};
+use stepyard_sandbox_orchestrator::{
+    ExecOptions, ExecOutput, SandboxError, SandboxId, SandboxLifecycle,
+};
 use uuid::Uuid;
 
 use crate::workflow::Step;
@@ -72,10 +74,16 @@ impl StepExecutor for SandboxStepExecutor {
         let _sandbox = self.lifecycle.reuse_or_create(session_id).await?;
         let sandbox_id = SandboxId::from(session_id);
         // D7/NFR-argv: step.command is wrapped as `sh -c <command>` argv.
-        // The env pairs flow through `--env K=V` argv elements in
-        // lifecycle.exec_with_env — never concatenated into a shell string.
+        // The env pairs flow through structured ExecOptions — never
+        // concatenated into a shell string.
         let argv = vec!["sh".to_string(), "-c".to_string(), step.command.clone()];
-        self.lifecycle.exec_with_env(&sandbox_id, &argv, env).await
+        let opts = ExecOptions {
+            env: env.clone(),
+            idle_timeout: step.idle_timeout,
+        };
+        self.lifecycle
+            .exec_with_options(&sandbox_id, &argv, &opts)
+            .await
     }
 }
 
@@ -143,9 +151,10 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_step_executor_threads_env_through_lifecycle() {
-        // SandboxStepExecutor uses lifecycle.exec_with_env, which for
-        // MockLifecycle records the exact env map. If SandboxStepExecutor
-        // ever drops env silently, MockCall::ExecWithEnv.env will diverge.
+        // SandboxStepExecutor uses lifecycle.exec_with_options, which for
+        // MockLifecycle records the exact options. If SandboxStepExecutor
+        // ever drops env silently, MockCall::ExecWithOptions.opts.env will
+        // diverge.
         use stepyard_sandbox_orchestrator::MockCall;
 
         let lifecycle: Arc<MockLifecycle> = Arc::new(MockLifecycle::new());
@@ -153,7 +162,8 @@ mod tests {
 
         let mut env = HashMap::new();
         env.insert("KEY".to_string(), "value".to_string());
-        let step = Step::cmd("s".to_string(), "true".to_string());
+        let step = Step::cmd("s".to_string(), "true".to_string())
+            .with_idle_timeout(std::time::Duration::from_secs(30));
 
         executor
             .execute_with_env(Uuid::new_v4(), &step, &env)
@@ -164,11 +174,15 @@ mod tests {
         let recorded_env = calls
             .iter()
             .find_map(|c| match c {
-                MockCall::ExecWithEnv { env, .. } => Some(env.clone()),
+                MockCall::ExecWithOptions { opts, .. } => Some(opts.clone()),
                 _ => None,
             })
-            .expect("ExecWithEnv recorded");
-        assert_eq!(recorded_env, env);
+            .expect("ExecWithOptions recorded");
+        assert_eq!(recorded_env.env, env);
+        assert_eq!(
+            recorded_env.idle_timeout,
+            Some(std::time::Duration::from_secs(30))
+        );
     }
 }
 

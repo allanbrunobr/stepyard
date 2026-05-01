@@ -42,7 +42,21 @@ pub use workspace::{
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::time::Duration;
 use uuid::Uuid;
+
+/// Structured execution options for sandbox backends.
+///
+/// Story 5.1 adds this as a non-breaking extension point: existing
+/// implementations can inherit [`SandboxLifecycle::exec_with_options`]'s
+/// default delegation to [`SandboxLifecycle::exec_with_env`], while migrated
+/// backends can inspect `idle_timeout` when Story 5.2 wires real streaming
+/// idle detection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExecOptions {
+    pub env: HashMap<String, String>,
+    pub idle_timeout: Option<Duration>,
+}
 
 /// The contract every sandbox backend implements.
 ///
@@ -92,6 +106,19 @@ pub trait SandboxLifecycle: Send + Sync {
         cmd: &[String],
         env: &HashMap<String, String>,
     ) -> Result<ExecOutput, SandboxError>;
+
+    /// Execute `cmd` with structured execution options. The default impl
+    /// preserves current backend behavior by delegating to `exec_with_env`
+    /// and ignoring `idle_timeout`; Story 5.2 backends override this to
+    /// enforce output-idle detection.
+    async fn exec_with_options(
+        &self,
+        id: &SandboxId,
+        cmd: &[String],
+        opts: &ExecOptions,
+    ) -> Result<ExecOutput, SandboxError> {
+        self.exec_with_env(id, cmd, &opts.env).await
+    }
 
     /// Return the live sandbox for this session if one already exists,
     /// otherwise create a new one. The default impl just calls `create` —
@@ -153,10 +180,85 @@ mod send_check {
     }
 
     #[allow(dead_code)]
+    fn exec_with_options_future_is_send(
+        lifecycle: &dyn SandboxLifecycle,
+        id: &SandboxId,
+        cmd: &[String],
+        opts: &ExecOptions,
+    ) {
+        assert_send_future(lifecycle.exec_with_options(id, cmd, opts));
+    }
+
+    #[allow(dead_code)]
     fn reuse_or_create_future_is_send(
         lifecycle: &dyn SandboxLifecycle,
         session_id: Uuid,
     ) {
         assert_send_future(lifecycle.reuse_or_create(session_id));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[derive(Default)]
+    struct EnvOnlyLifecycle {
+        recorded_env: Arc<Mutex<Option<HashMap<String, String>>>>,
+    }
+
+    #[async_trait]
+    impl SandboxLifecycle for EnvOnlyLifecycle {
+        async fn create(&self, _session_id: Uuid) -> Result<Sandbox, SandboxError> {
+            Err(SandboxError::CreateFailed("not used".into()))
+        }
+
+        async fn destroy(&self, _id: &SandboxId) -> Result<(), SandboxError> {
+            Ok(())
+        }
+
+        async fn exec(
+            &self,
+            _id: &SandboxId,
+            _cmd: &[String],
+        ) -> Result<ExecOutput, SandboxError> {
+            Err(SandboxError::ExecFailed("not used".into()))
+        }
+
+        async fn exec_with_env(
+            &self,
+            _id: &SandboxId,
+            _cmd: &[String],
+            env: &HashMap<String, String>,
+        ) -> Result<ExecOutput, SandboxError> {
+            *self.recorded_env.lock().await = Some(env.clone());
+            Ok(ExecOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn exec_with_options_default_impl_delegates_to_exec_with_env() {
+        let lifecycle = EnvOnlyLifecycle::default();
+        let id = SandboxId::new();
+        let cmd = vec!["true".to_string()];
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        let opts = ExecOptions {
+            env: env.clone(),
+            idle_timeout: Some(Duration::from_secs(30)),
+        };
+
+        lifecycle
+            .exec_with_options(&id, &cmd, &opts)
+            .await
+            .expect("default exec_with_options");
+
+        assert_eq!(*lifecycle.recorded_env.lock().await, Some(env));
     }
 }
