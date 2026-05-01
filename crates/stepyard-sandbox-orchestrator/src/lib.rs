@@ -29,11 +29,16 @@ mod docker_errors;
 mod local;
 pub mod mock;
 mod sandbox;
+mod workspace;
 
 pub use docker::{DockerLifecycle, DockerLifecycleConfig};
 pub use local::LocalShellLifecycle;
 pub use mock::{MockCall, MockLifecycle};
 pub use sandbox::{ExecOutput, Sandbox, SandboxError, SandboxId};
+pub use workspace::{
+    BranchStrategy, FinalizeReport, GitWorktreeManager, PruneReport, WorkflowOutcome, Workspace,
+    WorkspaceError, WorkspaceManager,
+};
 
 use async_trait::async_trait;
 use std::collections::HashMap;
