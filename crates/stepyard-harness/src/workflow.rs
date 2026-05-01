@@ -11,10 +11,8 @@
 //! (`chat_provider` / `max_tokens` / `temperature` / `api_key_env` /
 //! `base_url` / `chat_session` / `truncation`), with the rig-core
 //! runtime landing in a follow-up PR. **Executable kinds today:**
-//! `cmd`, `gate`, `call`, `repeat`, `map`, `template`, `script`,
-//! `agent`. Remaining kinds (`chat` / `parallel`) still round-trip
-//! through serde but are rejected by the CLI adapter
-//! (`src/cli/harness_adapter.rs`).
+//! `cmd`, `gate`, `call`, `repeat`, `map`, `parallel`, `template`,
+//! `script`, `agent`, and `chat`.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -28,11 +26,8 @@ use stepyard_core::EngineError;
 ///
 /// Executable today: [`StepKind::Cmd`], [`StepKind::Gate`], [`StepKind::Call`],
 /// [`StepKind::Repeat`], [`StepKind::Map`], [`StepKind::Template`],
-/// [`StepKind::Script`], [`StepKind::Agent`]. The remaining variants
-/// (`Chat` / `Parallel`) round-trip through serde but are rejected at
-/// the CLI adapter boundary until follow-up PRs wire each executor
-/// (the chat-step data model landed in PR 5b of Task #31 — runtime
-/// arrives in a follow-up).
+/// [`StepKind::Script`], [`StepKind::Agent`], [`StepKind::Chat`], and
+/// [`StepKind::Parallel`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StepKind {
@@ -243,10 +238,9 @@ pub struct Workflow {
     /// `env:` field (NFR18, NFR22).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
-    /// Named step groups referenced by repeat/map/call kinds. The harness
-    /// stores and round-trips them; execution wires up in a follow-up PR
-    /// of the v2 migration. `#[serde(default)]` keeps existing cmd-only
-    /// YAML without a `scopes:` block parseable.
+    /// Named step groups referenced by repeat/map/call/parallel kinds.
+    /// `#[serde(default)]` keeps existing cmd-only YAML without a
+    /// `scopes:` block parseable.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub scopes: HashMap<String, Scope>,
     /// Directory where `template` steps look up `<name>.md.tera` files.
@@ -312,10 +306,7 @@ impl Workflow {
         for name in scope_names {
             let scope = &self.scopes[name];
             for (idx, step) in scope.steps.iter().enumerate() {
-                core_env::validate_env_map(
-                    &format!("scopes.{name}.steps[{idx}].env"),
-                    &step.env,
-                )?;
+                core_env::validate_env_map(&format!("scopes.{name}.steps[{idx}].env"), &step.env)?;
             }
         }
         Ok(())
@@ -382,8 +373,9 @@ pub struct Scope {
 }
 
 /// One step in a workflow. Executable kinds are dispatched by
-/// `crates/stepyard-harness/src/engine.rs`; unsupported kinds still
-/// round-trip through serde but are rejected by the CLI adapter.
+/// `crates/stepyard-harness/src/engine.rs`; placement rules such as
+/// "containers cannot nest inside scope bodies" are enforced by the CLI
+/// adapter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Step {
     pub name: String,

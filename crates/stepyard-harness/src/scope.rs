@@ -40,10 +40,11 @@
 //! `vars`; iteration carry lives on `scope.value` (v1 parity).
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use chrono::Utc;
-use stepyard_core::{Event, ScopeContext, StepOutputSnapshot};
-use stepyard_sandbox_orchestrator::{ExecOutput, SandboxError};
+use stepyard_core::{Event, ScopeContext, Signal, StepOutputSnapshot};
+use stepyard_sandbox_orchestrator::ExecOutput;
 use tokio::task::JoinSet;
 
 use crate::engine::{CmdOutcome, Engine, EngineError, StepOutcome};
@@ -104,6 +105,43 @@ enum BodyStep {
     TimedOut { configured_ms: u64 },
 }
 
+enum ParallelTask {
+    Cmd {
+        pos: u32,
+        name: String,
+        step: Step,
+        env: HashMap<String, String>,
+    },
+    Agent {
+        pos: u32,
+        name: String,
+        step: Step,
+        prompt: String,
+        env: HashMap<String, String>,
+        agent_session_ids: HashMap<String, String>,
+        first_agent_session_id: Option<String>,
+    },
+    Chat {
+        pos: u32,
+        name: String,
+        step: Step,
+        req: crate::chat_exec::ChatCompletionRequest,
+        client: Arc<dyn crate::chat_exec::ChatClient>,
+        session: String,
+        user_content: String,
+    },
+}
+
+enum ParallelTaskOutput {
+    Cmd(ExecOutput),
+    Agent(crate::agent_exec::AgentExecOutput),
+    Chat {
+        session: String,
+        user_content: String,
+        output: crate::chat_exec::ChatExecOutput,
+    },
+}
+
 /// Result of running one full iteration of a scope body.
 #[derive(Debug)]
 enum IterationOutcome {
@@ -111,10 +149,14 @@ enum IterationOutcome {
     /// fired `skip`. `last_output` is the most recent cmd snapshot the
     /// body produced (used by `call` / `repeat` as fallback when no
     /// `outputs:` override is set).
-    Completed { last_output: Option<StepOutputSnapshot> },
+    Completed {
+        last_output: Option<StepOutputSnapshot>,
+    },
     /// A gate fired `break` — the containing loop must exit. Carries
     /// the last-output-so-far for the synthetic container stdout.
-    Break { last_output: Option<StepOutputSnapshot> },
+    Break {
+        last_output: Option<StepOutputSnapshot>,
+    },
     /// Body step failed / cancelled / signalled / timed out. Terminal
     /// events + finalisation already emitted; surfaces to the caller
     /// so it can propagate the right outcome without emitting anything
@@ -122,7 +164,9 @@ enum IterationOutcome {
     Failed(String),
     Cancelled,
     Signal(String),
-    TimedOut { configured_ms: u64 },
+    TimedOut {
+        configured_ms: u64,
+    },
 }
 
 /// State reconstructed from the session log for a single container
@@ -166,7 +210,11 @@ impl ContainerReplayState {
     /// `scope_context.container == container_name`. `scope_len` is the
     /// number of body steps — used to decide whether an iteration has
     /// fully completed (all positions saw a `step_completed`).
-    async fn rebuild(engine: &Engine, container_name: &str, scope_len: u32) -> Result<Self, EngineError> {
+    async fn rebuild(
+        engine: &Engine,
+        container_name: &str,
+        scope_len: u32,
+    ) -> Result<Self, EngineError> {
         let events = engine
             .session_handle()
             .replay()
@@ -215,7 +263,9 @@ impl ContainerReplayState {
             let iteration = iteration as u32;
             let position = position as u32;
 
-            let seen = iteration_positions.entry(iteration).or_insert_with(|| vec![false; scope_len as usize]);
+            let seen = iteration_positions
+                .entry(iteration)
+                .or_insert_with(|| vec![false; scope_len as usize]);
             if let Some(slot) = seen.get_mut(position as usize) {
                 *slot = true;
             }
@@ -505,27 +555,26 @@ impl Engine {
         // means 0..=p complete" invariant doesn't hold here.
         let already_completed = parallel_completed_positions(self, &container_name).await?;
 
-        // Render commands (and resolve env) for non-completed positions
-        // serially — the render step is cheap and avoids needing the
-        // `&self` borrow inside the spawned futures.
+        // Render/resolve every non-completed sub-step serially — this work
+        // is cheap and avoids borrowing `&self` inside spawned futures.
         let top_outs = top_level_outputs(self).await?;
-        let mut to_run: Vec<(u32, Step, HashMap<String, String>)> = Vec::new();
+        let progress = self.progress_from_log().await?;
+        let mut to_run: Vec<ParallelTask> = Vec::new();
         for (pos, sub) in scope_def.steps.iter().enumerate() {
             let pos = pos as u32;
             if already_completed.contains(&pos) {
                 continue;
             }
-            // Defence-in-depth: parallel sub-steps in v2 are restricted
-            // to `cmd` until #80 wires agent/chat into scope bodies. The
-            // adapter enforces the same rule at the YAML boundary; this
-            // catch is for defence against engineered Workflow values.
-            if !matches!(sub.kind, StepKind::Cmd) {
+            // Defence-in-depth: #80 wires cmd/agent/chat into parallel.
+            // Other non-container kinds stay rejected until their
+            // parallel semantics are explicitly implemented.
+            if !matches!(sub.kind, StepKind::Cmd | StepKind::Agent | StepKind::Chat) {
                 return self
                     .emit_container_failure(
                         step,
                         start,
                         format!(
-                            "parallel sub-step `{}` has unsupported kind `{}` (only `cmd` is supported in v2)",
+                            "parallel sub-step `{}` has unsupported kind `{}` (allowed: cmd, agent, chat)",
                             sub.name, sub.kind
                         ),
                     )
@@ -549,43 +598,222 @@ impl Engine {
                 vars: &self.run_context().vars,
                 scope: None,
             };
-            let rendered = match render(&sub.command, &ctx) {
-                Ok(s) => s,
-                Err(e) => {
-                    return self
-                        .emit_container_failure(
-                            step,
-                            start,
-                            format!("render parallel sub-step `{}`: {e}", sub.name),
-                        )
-                        .await;
+            match sub.kind {
+                StepKind::Cmd => {
+                    let rendered = match render(&sub.command, &ctx) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return self
+                                .emit_container_failure(
+                                    step,
+                                    start,
+                                    format!("render parallel sub-step `{}`: {e}", sub.name),
+                                )
+                                .await;
+                        }
+                    };
+                    let mut rendered_step = sub.clone();
+                    rendered_step.command = rendered;
+                    to_run.push(ParallelTask::Cmd {
+                        pos,
+                        name: sub.name.clone(),
+                        step: rendered_step,
+                        env: resolved_env,
+                    });
                 }
-            };
-            let mut rendered_step = sub.clone();
-            rendered_step.command = rendered;
-            to_run.push((pos, rendered_step, resolved_env));
+                StepKind::Agent => {
+                    let Some(prompt_template) = sub.prompt.as_deref() else {
+                        return self
+                            .emit_container_failure(
+                                step,
+                                start,
+                                format!(
+                                    "agent step `{}` has no prompt — the adapter should have rejected this at load time",
+                                    sub.name
+                                ),
+                            )
+                            .await;
+                    };
+                    let prompt = match render(prompt_template, &ctx) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return self
+                                .emit_container_failure(
+                                    step,
+                                    start,
+                                    format!("agent prompt render failed: {e}"),
+                                )
+                                .await;
+                        }
+                    };
+                    to_run.push(ParallelTask::Agent {
+                        pos,
+                        name: sub.name.clone(),
+                        step: sub.clone(),
+                        prompt,
+                        env: resolved_env,
+                        agent_session_ids: progress.agent_session_ids.clone(),
+                        first_agent_session_id: progress.first_agent_session_id.clone(),
+                    });
+                }
+                StepKind::Chat => {
+                    let Some(prompt_template) = sub.prompt.as_deref() else {
+                        return self
+                            .emit_container_failure(
+                                step,
+                                start,
+                                format!(
+                                    "chat step `{}` has no prompt — the adapter should have rejected this at load time",
+                                    sub.name
+                                ),
+                            )
+                            .await;
+                    };
+                    let prompt = match render(prompt_template, &ctx) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return self
+                                .emit_container_failure(
+                                    step,
+                                    start,
+                                    format!("chat prompt render failed: {e}"),
+                                )
+                                .await;
+                        }
+                    };
+                    let session = sub.chat_session.clone().unwrap_or_else(|| sub.name.clone());
+                    let history = progress
+                        .chat_sessions
+                        .get(&session)
+                        .cloned()
+                        .unwrap_or_default();
+                    let resolved_api_key = match crate::chat_exec::resolve_api_key(
+                        &sub.name,
+                        sub.api_key_env.as_deref(),
+                        &resolved_env,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return self
+                                .emit_container_failure(
+                                    step,
+                                    start,
+                                    format!(
+                                        "resolve chat api key for parallel sub-step `{}`: {e}",
+                                        sub.name
+                                    ),
+                                )
+                                .await;
+                        }
+                    };
+                    let Some(client) = self.chat_client() else {
+                        return self
+                            .emit_container_failure(
+                                step,
+                                start,
+                                crate::chat_exec::ChatExecError::NoClientConfigured {
+                                    step: sub.name.clone(),
+                                }
+                                .to_string(),
+                            )
+                            .await;
+                    };
+                    let req = crate::chat_exec::build_chat_request(
+                        sub,
+                        prompt.clone(),
+                        history,
+                        resolved_api_key,
+                    );
+                    to_run.push(ParallelTask::Chat {
+                        pos,
+                        name: sub.name.clone(),
+                        step: sub.clone(),
+                        req,
+                        client,
+                        session,
+                        user_content: prompt,
+                    });
+                }
+                _ => unreachable!("unsupported kind handled above"),
+            }
         }
 
-        // Spawn one task per non-completed sub-step. Cloned executor
+        // Spawn one task per non-completed sub-step. Cloned executor/client
         // handles let each task own its own `Arc` so the futures don't
-        // borrow `self`.
+        // borrow `self`. Control-plane select arms for per-task
+        // cancel/signal/timeout remain a separate parallel-hardening PR.
         let session_uuid = *self.session().id().as_uuid();
-        let mut joinset: JoinSet<(u32, String, Result<ExecOutput, SandboxError>)> = JoinSet::new();
-        for (pos, sub_step, env) in to_run {
-            let executor = self.executor();
-            let name = sub_step.name.clone();
-            joinset.spawn(async move {
-                let res = executor.execute_with_env(session_uuid, &sub_step, &env).await;
-                (pos, name, res)
-            });
+        let mut joinset: JoinSet<(u32, String, StepKind, Result<ParallelTaskOutput, String>)> =
+            JoinSet::new();
+        for task in to_run {
+            match task {
+                ParallelTask::Cmd {
+                    pos,
+                    name,
+                    step,
+                    env,
+                } => {
+                    let executor = self.executor();
+                    joinset.spawn(async move {
+                        let res = executor
+                            .execute_with_env(session_uuid, &step, &env)
+                            .await
+                            .map(ParallelTaskOutput::Cmd)
+                            .map_err(|e| e.to_string());
+                        (pos, name, StepKind::Cmd, res)
+                    });
+                }
+                ParallelTask::Agent {
+                    pos,
+                    name,
+                    step,
+                    prompt,
+                    env,
+                    agent_session_ids,
+                    first_agent_session_id,
+                } => {
+                    joinset.spawn(async move {
+                        let state = crate::agent_exec::AgentSessionState {
+                            agent_session_ids: &agent_session_ids,
+                            first_agent_session_id: first_agent_session_id.as_deref(),
+                        };
+                        let res = crate::agent_exec::run_agent_step(&step, &prompt, &state, &env)
+                            .await
+                            .map(ParallelTaskOutput::Agent)
+                            .map_err(|e| e.to_string());
+                        (pos, name, StepKind::Agent, res)
+                    });
+                }
+                ParallelTask::Chat {
+                    pos,
+                    name,
+                    step,
+                    req,
+                    client,
+                    session,
+                    user_content,
+                } => {
+                    joinset.spawn(async move {
+                        let res = crate::chat_exec::run_chat_step(&step, req, client.as_ref())
+                            .await
+                            .map(|output| ParallelTaskOutput::Chat {
+                                session,
+                                user_content,
+                                output,
+                            })
+                            .map_err(|e| e.to_string());
+                        (pos, name, StepKind::Chat, res)
+                    });
+                }
+            }
         }
 
         // Drain. First non-zero exit / executor error wins; subsequent
         // tasks are aborted but we still drain to surface JoinErrors.
-        let mut completions: Vec<(u32, String, ExecOutput)> = Vec::new();
+        let mut completions: Vec<(u32, String, StepKind, ParallelTaskOutput)> = Vec::new();
         let mut error_msg: Option<String> = None;
         while let Some(joined) = joinset.join_next().await {
-            let (pos, name, res) = match joined {
+            let (pos, name, kind, res) = match joined {
                 Ok(t) => t,
                 Err(je) if je.is_cancelled() => {
                     // Aborted via `joinset.abort_all()` after another
@@ -602,14 +830,16 @@ impl Engine {
             };
             match res {
                 Ok(out) => {
-                    if out.exit_code != 0 && error_msg.is_none() {
-                        error_msg = Some(format!(
-                            "parallel sub-step `{name}` failed with exit_code={}",
-                            out.exit_code
-                        ));
-                        joinset.abort_all();
+                    if let ParallelTaskOutput::Cmd(ref cmd_out) = out {
+                        if cmd_out.exit_code != 0 && error_msg.is_none() {
+                            error_msg = Some(format!(
+                                "parallel sub-step `{name}` failed with exit_code={}",
+                                cmd_out.exit_code
+                            ));
+                            joinset.abort_all();
+                        }
                     }
-                    completions.push((pos, name, out));
+                    completions.push((pos, name, kind, out));
                 }
                 Err(e) => {
                     if error_msg.is_none() {
@@ -623,8 +853,9 @@ impl Engine {
         // Emit scoped events for every completion in **definition** order
         // (position-sorted). v1 parity: a downstream replay walking
         // `step_completed` events sees deterministic ordering.
-        completions.sort_by_key(|(pos, _, _)| *pos);
-        for (pos, name, out) in &completions {
+        completions.sort_by_key(|(pos, _, _, _)| *pos);
+        let mut completion_snaps: Vec<(u32, StepOutputSnapshot)> = Vec::new();
+        for (pos, name, kind, out) in &completions {
             let scope_ctx = ScopeContext {
                 container: container_name.clone(),
                 iteration: 0,
@@ -632,42 +863,114 @@ impl Engine {
             };
             self.emit(Event::StepStarted {
                 step_name: name.clone(),
-                step_type: "cmd".into(),
+                step_type: step_type_label(kind).into(),
                 timestamp: Utc::now(),
                 scope_context: Some(scope_ctx.clone()),
             })
             .await?;
-            let snap = StepOutputSnapshot {
-                stdout: out.stdout.clone(),
-                stderr: out.stderr.clone(),
-                exit_code: out.exit_code,
-            };
-            if out.exit_code == 0 {
-                self.emit(Event::StepCompleted {
-                    step_name: name.clone(),
-                    step_type: "cmd".into(),
-                    duration_ms: 0,
-                    timestamp: Utc::now(),
-                    input_tokens: None,
-                    output_tokens: None,
-                    cost_usd: None,
-                    sandboxed: true,
-                    output: Some(snap),
-                    scope_context: Some(scope_ctx),
-                    gate_outcome: None,
-                    agent_session_id: None,
-                })
-                .await?;
-            } else {
-                self.emit(Event::StepFailed {
-                    step_name: name.clone(),
-                    step_type: "cmd".into(),
-                    error: format!("exit_code={}", out.exit_code),
-                    duration_ms: 0,
-                    timestamp: Utc::now(),
-                    sandboxed: true,
-                })
-                .await?;
+
+            match out {
+                ParallelTaskOutput::Cmd(cmd_out) => {
+                    let snap = StepOutputSnapshot {
+                        stdout: cmd_out.stdout.clone(),
+                        stderr: cmd_out.stderr.clone(),
+                        exit_code: cmd_out.exit_code,
+                    };
+                    if cmd_out.exit_code == 0 {
+                        completion_snaps.push((*pos, snap.clone()));
+                        self.emit(Event::StepCompleted {
+                            step_name: name.clone(),
+                            step_type: "cmd".into(),
+                            duration_ms: 0,
+                            timestamp: Utc::now(),
+                            input_tokens: None,
+                            output_tokens: None,
+                            cost_usd: None,
+                            sandboxed: true,
+                            output: Some(snap),
+                            scope_context: Some(scope_ctx),
+                            gate_outcome: None,
+                            agent_session_id: None,
+                        })
+                        .await?;
+                    } else {
+                        self.emit(Event::StepFailed {
+                            step_name: name.clone(),
+                            step_type: "cmd".into(),
+                            error: format!("exit_code={}", cmd_out.exit_code),
+                            duration_ms: 0,
+                            timestamp: Utc::now(),
+                            sandboxed: true,
+                        })
+                        .await?;
+                    }
+                }
+                ParallelTaskOutput::Agent(agent_out) => {
+                    let snap = StepOutputSnapshot {
+                        stdout: agent_out.response.clone(),
+                        stderr: String::new(),
+                        exit_code: 0,
+                    };
+                    completion_snaps.push((*pos, snap.clone()));
+                    self.emit(Event::StepCompleted {
+                        step_name: name.clone(),
+                        step_type: "agent".into(),
+                        duration_ms: 0,
+                        timestamp: Utc::now(),
+                        input_tokens: agent_out.input_tokens,
+                        output_tokens: agent_out.output_tokens,
+                        cost_usd: agent_out.cost_usd,
+                        sandboxed: false,
+                        output: Some(snap),
+                        scope_context: Some(scope_ctx),
+                        gate_outcome: None,
+                        agent_session_id: agent_out.session_id.clone(),
+                    })
+                    .await?;
+                }
+                ParallelTaskOutput::Chat {
+                    session,
+                    user_content,
+                    output,
+                } => {
+                    self.emit(Event::ChatMessageAppended {
+                        step_name: name.clone(),
+                        session: session.clone(),
+                        role: stepyard_core::ChatRole::User,
+                        content: user_content.clone(),
+                        timestamp: Utc::now(),
+                    })
+                    .await?;
+                    self.emit(Event::ChatMessageAppended {
+                        step_name: name.clone(),
+                        session: session.clone(),
+                        role: stepyard_core::ChatRole::Assistant,
+                        content: output.response.clone(),
+                        timestamp: Utc::now(),
+                    })
+                    .await?;
+                    let snap = StepOutputSnapshot {
+                        stdout: output.response.clone(),
+                        stderr: String::new(),
+                        exit_code: 0,
+                    };
+                    completion_snaps.push((*pos, snap.clone()));
+                    self.emit(Event::StepCompleted {
+                        step_name: name.clone(),
+                        step_type: "chat".into(),
+                        duration_ms: 0,
+                        timestamp: Utc::now(),
+                        input_tokens: output.input_tokens,
+                        output_tokens: output.output_tokens,
+                        cost_usd: output.cost_usd,
+                        sandboxed: false,
+                        output: Some(snap),
+                        scope_context: Some(scope_ctx),
+                        gate_outcome: None,
+                        agent_session_id: None,
+                    })
+                    .await?;
+                }
             }
         }
 
@@ -680,17 +983,12 @@ impl Engine {
         // replay path (no fresh completions because everything ran in a
         // prior session): walk the log via `recover_logged_output`.
         let last_pos = scope_len - 1;
-        let last_output = if let Some((_, _, out)) =
-            completions.iter().find(|(p, _, _)| *p == last_pos)
-        {
-            Some(StepOutputSnapshot {
-                stdout: out.stdout.clone(),
-                stderr: out.stderr.clone(),
-                exit_code: out.exit_code,
-            })
-        } else {
-            recover_logged_output(self, &container_name, 0, last_pos).await?
-        };
+        let last_output =
+            if let Some((_, snap)) = completion_snaps.iter().find(|(p, _)| *p == last_pos) {
+                Some(snap.clone())
+            } else {
+                recover_logged_output(self, &container_name, 0, last_pos).await?
+            };
 
         let synthetic = self
             .synthesise_container_output(
@@ -707,7 +1005,11 @@ impl Engine {
     /// Execute a `call` — run `scope` exactly once. A scope-body gate's
     /// `break` ends the scope body early; it does **not** fail the
     /// container (v1 parity: `src/steps/call.rs`).
-    async fn run_call(&mut self, step: &Step, start: std::time::Instant) -> Result<StepOutcome, EngineError> {
+    async fn run_call(
+        &mut self,
+        step: &Step,
+        start: std::time::Instant,
+    ) -> Result<StepOutcome, EngineError> {
         let container_name = step.name.clone();
         // Top-level step index of the container. Used to attribute
         // `EngineError::StepFailed { step_index, .. }` correctly when a
@@ -743,7 +1045,10 @@ impl Engine {
         // `call` is a single pass. If iteration 0 is already past,
         // jump straight to the container's terminal emit.
         let last_output = if state.next_iteration == 0 && !state.broke {
-            let seed = step.initial_value.clone().unwrap_or(serde_json::Value::Null);
+            let seed = step
+                .initial_value
+                .clone()
+                .unwrap_or(serde_json::Value::Null);
             match self
                 .run_scope_body(step, &scope_def.steps, 0, seed, state.last_completed)
                 .await?
@@ -803,7 +1108,11 @@ impl Engine {
     /// `break`, the cancel token flips, or `max_iterations` fires. A
     /// repeat that exhausts its cap without a break completes
     /// successfully with a warning (v1 parity: `src/steps/repeat.rs`).
-    async fn run_repeat(&mut self, step: &Step, start: std::time::Instant) -> Result<StepOutcome, EngineError> {
+    async fn run_repeat(
+        &mut self,
+        step: &Step,
+        start: std::time::Instant,
+    ) -> Result<StepOutcome, EngineError> {
         let container_name = step.name.clone();
         // Top-level step index of the container. Used to attribute
         // `EngineError::StepFailed { step_index, .. }` correctly when a
@@ -816,7 +1125,11 @@ impl Engine {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => {
                 return self
-                    .emit_container_failure(step, start, "repeat step missing `scope:` field".into())
+                    .emit_container_failure(
+                        step,
+                        start,
+                        "repeat step missing `scope:` field".into(),
+                    )
                     .await;
             }
         };
@@ -877,9 +1190,7 @@ impl Engine {
 
         while !state.broke {
             if self.is_cancelled() {
-                return self
-                    .emit_container_cancel(step, start)
-                    .await;
+                return self.emit_container_cancel(step, start).await;
             }
             if state.next_iteration as usize >= max_iter {
                 tracing::warn!(
@@ -897,7 +1208,9 @@ impl Engine {
             //   still sees it as a `value:`). v1 `repeat.rs` passes the
             //   prior iteration's last_output forward as scope.value.
             let scope_value = if state.next_iteration == 0 {
-                step.initial_value.clone().unwrap_or(serde_json::Value::Null)
+                step.initial_value
+                    .clone()
+                    .unwrap_or(serde_json::Value::Null)
             } else {
                 state
                     .last_output_per_iteration
@@ -929,7 +1242,8 @@ impl Engine {
                         last_output_final = Some(snap.clone());
                     }
                     state.next_iteration += 1;
-                    state.last_completed = Some((iteration_start_index, scope_len.saturating_sub(1)));
+                    state.last_completed =
+                        Some((iteration_start_index, scope_len.saturating_sub(1)));
                 }
                 IterationOutcome::Break { last_output } => {
                     if let Some(ref snap) = last_output {
@@ -982,7 +1296,11 @@ impl Engine {
     /// per item sequentially (even when `parallel:` is set). v1 parity:
     /// `src/steps/map.rs`. The synthetic container stdout is a JSON
     /// array of per-item last-cmd stdout.
-    async fn run_map(&mut self, step: &Step, start: std::time::Instant) -> Result<StepOutcome, EngineError> {
+    async fn run_map(
+        &mut self,
+        step: &Step,
+        start: std::time::Instant,
+    ) -> Result<StepOutcome, EngineError> {
         let container_name = step.name.clone();
         // Top-level step index of the container. Used to attribute
         // `EngineError::StepFailed { step_index, .. }` correctly when a
@@ -1067,14 +1385,18 @@ impl Engine {
             {
                 IterationOutcome::Completed { last_output } => {
                     if let Some(snap) = last_output {
-                        state.last_output_per_iteration.insert(iteration_index, snap);
+                        state
+                            .last_output_per_iteration
+                            .insert(iteration_index, snap);
                     }
                     state.next_iteration += 1;
                     state.last_completed = Some((iteration_index, scope_len.saturating_sub(1)));
                 }
                 IterationOutcome::Break { last_output } => {
                     if let Some(snap) = last_output {
-                        state.last_output_per_iteration.insert(iteration_index, snap);
+                        state
+                            .last_output_per_iteration
+                            .insert(iteration_index, snap);
                     }
                     state.broke = true;
                 }
@@ -1173,7 +1495,9 @@ impl Engine {
                 // Replay past this position — pull its output from the
                 // log so subsequent templates see it.
                 if matches!(body_step.kind, StepKind::Cmd) {
-                    if let Some(snap) = recover_logged_output(self, &container_name, iteration, position).await? {
+                    if let Some(snap) =
+                        recover_logged_output(self, &container_name, iteration, position).await?
+                    {
                         last_output = Some(snap);
                     }
                 }
@@ -1231,12 +1555,7 @@ impl Engine {
             };
 
             match self
-                .run_scope_body_step(
-                    container,
-                    body_step,
-                    &scope_ctx,
-                    &scope_value,
-                )
+                .run_scope_body_step(container, body_step, &scope_ctx, &scope_value)
                 .await?
             {
                 BodyStep::Continue(snap) => {
@@ -1271,12 +1590,26 @@ impl Engine {
         scope_value: &serde_json::Value,
     ) -> Result<BodyStep, EngineError> {
         match &body_step.kind {
-            StepKind::Cmd => self.run_scope_body_cmd(container, body_step, scope_ctx, scope_value).await,
-            StepKind::Gate => self.run_scope_body_gate(body_step, scope_ctx, scope_value).await,
+            StepKind::Cmd => {
+                self.run_scope_body_cmd(container, body_step, scope_ctx, scope_value)
+                    .await
+            }
+            StepKind::Gate => {
+                self.run_scope_body_gate(body_step, scope_ctx, scope_value)
+                    .await
+            }
+            StepKind::Agent => {
+                self.run_scope_body_agent(container, body_step, scope_ctx, scope_value)
+                    .await
+            }
+            StepKind::Chat => {
+                self.run_scope_body_chat(container, body_step, scope_ctx, scope_value)
+                    .await
+            }
             // Nested containers already handled one frame up. Other
-            // kinds (agent/chat/script/template/parallel) are rejected
-            // by the adapter; a test-constructed Step lands here and
-            // falls to StepFailed on the body step.
+            // kinds (script/template/parallel) are rejected by the
+            // adapter; a test-constructed Step lands here and falls to
+            // StepFailed on the body step.
             other => {
                 let err = format!(
                     "step type `{other}` not yet supported inside scope bodies in v2 engine"
@@ -1396,6 +1729,423 @@ impl Engine {
         }
     }
 
+    /// Scope-body agent — same runtime as the top-level agent dispatcher,
+    /// but prompt rendering sees the in-iteration `steps.*` map and emitted
+    /// `StepCompleted` carries `scope_context`.
+    async fn run_scope_body_agent(
+        &mut self,
+        container: &Step,
+        body_step: &Step,
+        scope_ctx: &ScopeContext,
+        scope_value: &serde_json::Value,
+    ) -> Result<BodyStep, EngineError> {
+        self.emit_scope_started(body_step, scope_ctx).await?;
+
+        let step_type = step_type_label(&body_step.kind);
+        let start = std::time::Instant::now();
+        let resolved_env = match self.prepare_step(body_step) {
+            Ok(e) => e,
+            Err(e) => {
+                return self
+                    .emit_scope_body_failure(body_step, start, e.to_string())
+                    .await
+            }
+        };
+        let rendered_prompt =
+            match render_scope_prompt(self, body_step, scope_ctx, scope_value).await? {
+                Ok(s) => s,
+                Err(e) => {
+                    return self
+                        .emit_scope_body_failure(
+                            body_step,
+                            start,
+                            format!("agent prompt render failed: {e}"),
+                        )
+                        .await;
+                }
+            };
+
+        let progress = self.progress_from_log().await?;
+        let state = crate::agent_exec::AgentSessionState {
+            agent_session_ids: &progress.agent_session_ids,
+            first_agent_session_id: progress.first_agent_session_id.as_deref(),
+        };
+        let container_top_level_index = top_level_position_of(self, &scope_ctx.container).await?;
+
+        let cancel_token = self.cancel_token();
+        let signal_slot = self.shutdown_signal();
+        let step_timeout = body_step.timeout;
+        let selection: crate::engine::StepSelection<
+            Result<crate::agent_exec::AgentExecOutput, crate::agent_exec::AgentExecError>,
+        > = {
+            let exec_fut = crate::agent_exec::run_agent_step(
+                body_step,
+                &rendered_prompt,
+                &state,
+                &resolved_env,
+            );
+            let cancel_fut = async {
+                while !cancel_token.is_cancelled() {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            };
+            let timeout_fut = async {
+                match step_timeout {
+                    Some(d) => tokio::time::sleep(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let shutdown_rx = self.shutdown_rx_mut();
+            let shutdown_fut = shutdown_rx.recv();
+            tokio::pin!(exec_fut);
+            tokio::pin!(cancel_fut);
+            tokio::pin!(timeout_fut);
+            tokio::pin!(shutdown_fut);
+            tokio::select! {
+                r = &mut exec_fut => crate::engine::StepSelection::Done(r),
+                _ = &mut cancel_fut => crate::engine::StepSelection::Cancelled,
+                _ = &mut timeout_fut => crate::engine::StepSelection::TimedOut,
+                _ = &mut shutdown_fut => crate::engine::StepSelection::Signal(
+                    signal_slot
+                        .get()
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".into()),
+                ),
+            }
+        };
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        if let crate::engine::StepSelection::Signal(ref signal) = selection {
+            let signal = signal.clone();
+            self.emit(Event::SignalReceived {
+                signal: Signal::from(signal.clone()),
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: body_step.name.clone(),
+                step_type: step_type.into(),
+                error: format!("Signal: {signal}"),
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_cancel().await?;
+            let _ = container;
+            let _ = container_top_level_index;
+            return Ok(BodyStep::Signal(signal));
+        }
+
+        if let crate::engine::StepSelection::TimedOut = selection {
+            let configured_ms = body_step
+                .timeout
+                .expect("TimedOut requires step.timeout.is_some()")
+                .as_millis() as u64;
+            self.emit(Event::StepTimeoutFired {
+                step_index: container_top_level_index,
+                configured_ms,
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: body_step.name.clone(),
+                step_type: step_type.into(),
+                error: format!("step timed out after {configured_ms}ms"),
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            let _ = container;
+            return Ok(BodyStep::TimedOut { configured_ms });
+        }
+
+        let exec_result = match selection {
+            crate::engine::StepSelection::Done(r) => r,
+            crate::engine::StepSelection::Cancelled => {
+                self.emit(Event::StepFailed {
+                    step_name: body_step.name.clone(),
+                    step_type: step_type.into(),
+                    error: "Cancelled".into(),
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_cancel().await?;
+                let _ = container;
+                return Ok(BodyStep::Cancelled);
+            }
+            crate::engine::StepSelection::TimedOut => unreachable!("handled above"),
+            crate::engine::StepSelection::Signal(_) => unreachable!("handled above"),
+        };
+
+        let output = match exec_result {
+            Ok(o) => o,
+            Err(e) => {
+                return self
+                    .emit_scope_body_failure(body_step, start, e.to_string())
+                    .await
+            }
+        };
+        let snapshot = StepOutputSnapshot {
+            stdout: output.response,
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        self.emit(Event::StepCompleted {
+            step_name: body_step.name.clone(),
+            step_type: step_type.into(),
+            duration_ms,
+            timestamp: Utc::now(),
+            input_tokens: output.input_tokens,
+            output_tokens: output.output_tokens,
+            cost_usd: output.cost_usd,
+            sandboxed: false,
+            output: Some(snapshot.clone()),
+            scope_context: Some(scope_ctx.clone()),
+            gate_outcome: None,
+            agent_session_id: output.session_id,
+        })
+        .await?;
+        let _ = container;
+        Ok(BodyStep::Continue(Some(snapshot)))
+    }
+
+    /// Scope-body chat — same provider seam as the top-level chat dispatcher,
+    /// but prompt rendering sees the in-iteration scope context and terminal
+    /// completion is scoped.
+    async fn run_scope_body_chat(
+        &mut self,
+        container: &Step,
+        body_step: &Step,
+        scope_ctx: &ScopeContext,
+        scope_value: &serde_json::Value,
+    ) -> Result<BodyStep, EngineError> {
+        self.emit_scope_started(body_step, scope_ctx).await?;
+
+        let step_type = step_type_label(&body_step.kind);
+        let start = std::time::Instant::now();
+        let resolved_env = match self.prepare_step(body_step) {
+            Ok(e) => e,
+            Err(e) => {
+                return self
+                    .emit_scope_body_failure(body_step, start, e.to_string())
+                    .await
+            }
+        };
+        let rendered_prompt =
+            match render_scope_prompt(self, body_step, scope_ctx, scope_value).await? {
+                Ok(s) => s,
+                Err(e) => {
+                    return self
+                        .emit_scope_body_failure(
+                            body_step,
+                            start,
+                            format!("chat prompt render failed: {e}"),
+                        )
+                        .await;
+                }
+            };
+        let session_bucket = body_step
+            .chat_session
+            .clone()
+            .unwrap_or_else(|| body_step.name.clone());
+        let progress = self.progress_from_log().await?;
+        let history = progress
+            .chat_sessions
+            .get(&session_bucket)
+            .cloned()
+            .unwrap_or_default();
+        let resolved_api_key = match crate::chat_exec::resolve_api_key(
+            &body_step.name,
+            body_step.api_key_env.as_deref(),
+            &resolved_env,
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                return self
+                    .emit_scope_body_failure(body_step, start, e.to_string())
+                    .await
+            }
+        };
+        let Some(client) = self.chat_client() else {
+            let error = crate::chat_exec::ChatExecError::NoClientConfigured {
+                step: body_step.name.clone(),
+            }
+            .to_string();
+            return self.emit_scope_body_failure(body_step, start, error).await;
+        };
+
+        self.emit(Event::ChatMessageAppended {
+            step_name: body_step.name.clone(),
+            session: session_bucket.clone(),
+            role: stepyard_core::ChatRole::User,
+            content: rendered_prompt.clone(),
+            timestamp: Utc::now(),
+        })
+        .await?;
+        let req = crate::chat_exec::build_chat_request(
+            body_step,
+            rendered_prompt,
+            history,
+            resolved_api_key,
+        );
+
+        let cancel_token = self.cancel_token();
+        let signal_slot = self.shutdown_signal();
+        let step_timeout = body_step.timeout;
+        let selection: crate::engine::StepSelection<
+            Result<crate::chat_exec::ChatExecOutput, crate::chat_exec::ChatExecError>,
+        > = {
+            let exec_fut = crate::chat_exec::run_chat_step(body_step, req, client.as_ref());
+            let cancel_fut = async {
+                while !cancel_token.is_cancelled() {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            };
+            let timeout_fut = async {
+                match step_timeout {
+                    Some(d) => tokio::time::sleep(d).await,
+                    None => std::future::pending::<()>().await,
+                }
+            };
+            let shutdown_rx = self.shutdown_rx_mut();
+            let shutdown_fut = shutdown_rx.recv();
+            tokio::pin!(exec_fut);
+            tokio::pin!(cancel_fut);
+            tokio::pin!(timeout_fut);
+            tokio::pin!(shutdown_fut);
+            tokio::select! {
+                r = &mut exec_fut => crate::engine::StepSelection::Done(r),
+                _ = &mut cancel_fut => crate::engine::StepSelection::Cancelled,
+                _ = &mut timeout_fut => crate::engine::StepSelection::TimedOut,
+                _ = &mut shutdown_fut => crate::engine::StepSelection::Signal(
+                    signal_slot
+                        .get()
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".into()),
+                ),
+            }
+        };
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        if let crate::engine::StepSelection::Signal(ref signal) = selection {
+            let signal_name = signal.clone();
+            let signal = Signal::from(signal_name.clone());
+            let error = crate::chat_exec::ChatExecError::SignalReceived {
+                step: body_step.name.clone(),
+                signal: signal.clone(),
+            }
+            .to_string();
+            self.emit(Event::SignalReceived { signal }).await?;
+            self.emit(Event::StepFailed {
+                step_name: body_step.name.clone(),
+                step_type: step_type.into(),
+                error,
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_cancel().await?;
+            let _ = container;
+            return Ok(BodyStep::Signal(signal_name));
+        }
+
+        if let crate::engine::StepSelection::TimedOut = selection {
+            let configured_ms = body_step
+                .timeout
+                .expect("TimedOut requires step.timeout.is_some()")
+                .as_millis() as u64;
+            let error = crate::chat_exec::ChatExecError::Timeout {
+                step: body_step.name.clone(),
+                configured_ms,
+            }
+            .to_string();
+            self.emit(Event::StepTimeoutFired {
+                step_index: top_level_position_of(self, &scope_ctx.container).await?,
+                configured_ms,
+            })
+            .await?;
+            self.emit(Event::StepFailed {
+                step_name: body_step.name.clone(),
+                step_type: step_type.into(),
+                error,
+                duration_ms,
+                timestamp: Utc::now(),
+                sandboxed: false,
+            })
+            .await?;
+            self.finalise_fail().await?;
+            let _ = container;
+            return Ok(BodyStep::TimedOut { configured_ms });
+        }
+
+        let exec_result = match selection {
+            crate::engine::StepSelection::Done(r) => r,
+            crate::engine::StepSelection::Cancelled => {
+                let error = crate::chat_exec::ChatExecError::Cancelled {
+                    step: body_step.name.clone(),
+                }
+                .to_string();
+                self.emit(Event::StepFailed {
+                    step_name: body_step.name.clone(),
+                    step_type: step_type.into(),
+                    error,
+                    duration_ms,
+                    timestamp: Utc::now(),
+                    sandboxed: false,
+                })
+                .await?;
+                self.finalise_cancel().await?;
+                let _ = container;
+                return Ok(BodyStep::Cancelled);
+            }
+            crate::engine::StepSelection::TimedOut => unreachable!("handled above"),
+            crate::engine::StepSelection::Signal(_) => unreachable!("handled above"),
+        };
+
+        let output = match exec_result {
+            Ok(o) => o,
+            Err(e) => {
+                return self
+                    .emit_scope_body_failure(body_step, start, e.to_string())
+                    .await
+            }
+        };
+        self.emit(Event::ChatMessageAppended {
+            step_name: body_step.name.clone(),
+            session: session_bucket,
+            role: stepyard_core::ChatRole::Assistant,
+            content: output.response.clone(),
+            timestamp: Utc::now(),
+        })
+        .await?;
+        let snapshot = StepOutputSnapshot {
+            stdout: output.response,
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        self.emit(Event::StepCompleted {
+            step_name: body_step.name.clone(),
+            step_type: step_type.into(),
+            duration_ms,
+            timestamp: Utc::now(),
+            input_tokens: output.input_tokens,
+            output_tokens: output.output_tokens,
+            cost_usd: output.cost_usd,
+            sandboxed: false,
+            output: Some(snapshot.clone()),
+            scope_context: Some(scope_ctx.clone()),
+            gate_outcome: None,
+            agent_session_id: None,
+        })
+        .await?;
+        let _ = container;
+        Ok(BodyStep::Continue(Some(snapshot)))
+    }
+
     /// Scope-body gate — pure template eval, no sandbox. Accepts the
     /// wider `skip`/`break` action vocabulary (top-level gate does
     /// not; see [`GateAction::parse_scoped`]).
@@ -1410,17 +2160,31 @@ impl Engine {
         let start = std::time::Instant::now();
         let on_pass = match GateAction::parse_scoped(body_step.on_pass.as_deref()) {
             Ok(a) => a,
-            Err(e) => return self.emit_scope_gate_failure(body_step, start, e.to_string()).await,
+            Err(e) => {
+                return self
+                    .emit_scope_gate_failure(body_step, start, e.to_string())
+                    .await
+            }
         };
         let on_fail = match GateAction::parse_scoped(body_step.on_fail.as_deref()) {
             Ok(a) => a,
-            Err(e) => return self.emit_scope_gate_failure(body_step, start, e.to_string()).await,
+            Err(e) => {
+                return self
+                    .emit_scope_gate_failure(body_step, start, e.to_string())
+                    .await
+            }
         };
-        let Some(condition) = body_step.condition.as_deref().filter(|c| !c.trim().is_empty()) else {
+        let Some(condition) = body_step
+            .condition
+            .as_deref()
+            .filter(|c| !c.trim().is_empty())
+        else {
             let err = GateError::MissingCondition {
                 step: body_step.name.clone(),
             };
-            return self.emit_scope_gate_failure(body_step, start, err.to_string()).await;
+            return self
+                .emit_scope_gate_failure(body_step, start, err.to_string())
+                .await;
         };
 
         let in_scope = in_iteration_outputs(
@@ -1441,11 +2205,19 @@ impl Engine {
         };
         let rendered = match render(condition, &ctx) {
             Ok(s) => s,
-            Err(e) => return self.emit_scope_gate_failure(body_step, start, e.to_string()).await,
+            Err(e) => {
+                return self
+                    .emit_scope_gate_failure(body_step, start, e.to_string())
+                    .await
+            }
         };
         let passed = match evaluate_bool(&body_step.name, &rendered) {
             Ok(b) => b,
-            Err(e) => return self.emit_scope_gate_failure(body_step, start, e.to_string()).await,
+            Err(e) => {
+                return self
+                    .emit_scope_gate_failure(body_step, start, e.to_string())
+                    .await
+            }
         };
 
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -1525,7 +2297,11 @@ impl Engine {
         }
     }
 
-    async fn emit_scope_started(&mut self, body_step: &Step, scope_ctx: &ScopeContext) -> Result<(), EngineError> {
+    async fn emit_scope_started(
+        &mut self,
+        body_step: &Step,
+        scope_ctx: &ScopeContext,
+    ) -> Result<(), EngineError> {
         self.emit(Event::StepStarted {
             step_name: body_step.name.clone(),
             step_type: step_type_label(&body_step.kind).into(),
@@ -1545,6 +2321,26 @@ impl Engine {
         self.emit(Event::StepFailed {
             step_name: body_step.name.clone(),
             step_type: "gate".into(),
+            error: error.clone(),
+            duration_ms,
+            timestamp: Utc::now(),
+            sandboxed: false,
+        })
+        .await?;
+        self.finalise_fail().await?;
+        Ok(BodyStep::Failed(error))
+    }
+
+    async fn emit_scope_body_failure(
+        &mut self,
+        body_step: &Step,
+        start: std::time::Instant,
+        error: String,
+    ) -> Result<BodyStep, EngineError> {
+        let duration_ms = start.elapsed().as_millis() as u64;
+        self.emit(Event::StepFailed {
+            step_name: body_step.name.clone(),
+            step_type: step_type_label(&body_step.kind).into(),
             error: error.clone(),
             duration_ms,
             timestamp: Utc::now(),
@@ -1674,7 +2470,9 @@ impl Engine {
 /// Rebuild the top-level cross-step outputs map from the session log.
 /// Mirrors the filter applied by [`Engine::progress_from_log`]: only
 /// completions with a `null`/absent `scope_context` feed this map.
-async fn top_level_outputs(engine: &Engine) -> Result<HashMap<String, StepOutputSnapshot>, EngineError> {
+async fn top_level_outputs(
+    engine: &Engine,
+) -> Result<HashMap<String, StepOutputSnapshot>, EngineError> {
     let events = engine
         .session_handle()
         .replay()
@@ -1722,9 +2520,43 @@ async fn top_level_position_of(engine: &Engine, container_name: &str) -> Result<
         .iter()
         .position(|s| s.name == container_name)
         .map(|p| p as u32)
-        .ok_or_else(|| EngineError::InvalidState(format!(
-            "scope runner cannot locate container `{container_name}` in workflow.steps"
-        )))
+        .ok_or_else(|| {
+            EngineError::InvalidState(format!(
+                "scope runner cannot locate container `{container_name}` in workflow.steps"
+            ))
+        })
+}
+
+async fn render_scope_prompt(
+    engine: &Engine,
+    body_step: &Step,
+    scope_ctx: &ScopeContext,
+    scope_value: &serde_json::Value,
+) -> Result<Result<String, String>, EngineError> {
+    let Some(prompt_template) = body_step.prompt.as_deref() else {
+        return Ok(Err(format!(
+            "{} step `{}` has no prompt — the adapter should have rejected this at load time",
+            step_type_label(&body_step.kind),
+            body_step.name
+        )));
+    };
+    let in_scope = in_iteration_outputs(
+        engine,
+        &scope_ctx.container,
+        scope_ctx.iteration,
+        scope_ctx.position,
+    )
+    .await?;
+    let ctx = RenderContext {
+        steps: &in_scope,
+        target: &engine.run_context().target,
+        vars: &engine.run_context().vars,
+        scope: Some(ScopeView {
+            value: scope_value.clone(),
+            index: scope_ctx.iteration,
+        }),
+    };
+    Ok(render(prompt_template, &ctx).map_err(|e| e.to_string()))
 }
 
 /// Replay-skip set for parallel: every position with a logged
