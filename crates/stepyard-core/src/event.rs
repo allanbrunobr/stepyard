@@ -140,6 +140,14 @@ pub enum Event {
     SignalReceived {
         signal: Signal,
     },
+    /// A git workspace was selected and will be prepared for this session.
+    /// Emitted before the worktree subprocess runs so replay can reconstruct
+    /// the workspace decision even if git IO fails or the process crashes.
+    WorkspacePrepared { path: String, strategy: String },
+    /// A branch will be created as part of workspace preparation. Emitted
+    /// before the worktree subprocess runs, paired with
+    /// [`Self::WorkspacePrepared`] for non-`head` strategies.
+    BranchCreated { branch: String, base: String },
     /// One turn of an `agent` / `chat` step's conversation was persisted
     /// to the session log. Emitted once per role turn so a post-crash
     /// replay can reconstruct the full `chat_sessions` map from the log
@@ -335,6 +343,40 @@ mod tests {
             }
             other => panic!("roundtrip produced unexpected variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn workspace_prepared_serializes_with_event_tag_and_payload() {
+        let event = Event::WorkspacePrepared {
+            path: "/tmp/worktree".into(),
+            strategy: "named_branch".into(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "workspace_prepared",
+                "path": "/tmp/worktree",
+                "strategy": "named_branch",
+            })
+        );
+    }
+
+    #[test]
+    fn branch_created_serializes_with_event_tag_and_payload() {
+        let event = Event::BranchCreated {
+            branch: "feat/test".into(),
+            base: "HEAD".into(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "branch_created",
+                "branch": "feat/test",
+                "base": "HEAD",
+            })
+        );
     }
 
     fn chat_timestamp() -> DateTime<Utc> {

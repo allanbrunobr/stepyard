@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use stepyard_session::SessionId;
 use thiserror::Error;
+use tokio::process::Command;
 
 /// Strategy for choosing which branch backs a prepared worktree.
 #[non_exhaustive]
@@ -24,8 +25,28 @@ pub enum BranchStrategy {
     NamedBranch { name: String },
 }
 
+impl BranchStrategy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Head => "head",
+            Self::MergeToHead { .. } => "merge_to_head",
+            Self::NamedBranch { .. } => "named_branch",
+        }
+    }
+
+    fn branch_and_base(&self, session_id: &SessionId) -> (Option<String>, String) {
+        match self {
+            Self::Head => (None, "HEAD".to_string()),
+            Self::MergeToHead { target } => (
+                Some(format!("stepyard/session-{}", session_id.as_uuid())),
+                target.clone(),
+            ),
+            Self::NamedBranch { name } => (Some(name.clone()), "HEAD".to_string()),
+        }
+    }
+}
+
 /// Prepared workspace metadata passed from `prepare` to `finalize`.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workspace {
     pub path: PathBuf,
@@ -128,16 +149,52 @@ impl GitWorktreeManager {
     pub fn retention_hours(&self) -> u64 {
         self.retention_hours
     }
+
+    pub fn workspace_path(&self, session_id: &SessionId) -> PathBuf {
+        self.workspaces_dir
+            .join(format!("stepyard-session-{session_id}"))
+    }
 }
 
 #[async_trait]
 impl WorkspaceManager for GitWorktreeManager {
     async fn prepare(
         &self,
-        _session_id: &SessionId,
-        _strategy: &BranchStrategy,
+        session_id: &SessionId,
+        strategy: &BranchStrategy,
     ) -> Result<Workspace, WorkspaceError> {
-        unimplemented!("Story 4.2")
+        let path = self.workspace_path(session_id);
+        if path.exists() {
+            return Err(WorkspaceError::WorktreeExists { path });
+        }
+
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let (branch, base) = strategy.branch_and_base(session_id);
+        let mut command = Command::new("git");
+        command
+            .current_dir(&self.repo_root)
+            .args(["worktree", "add"]);
+        if let Some(branch_name) = &branch {
+            command.args(["-b", branch_name]);
+        }
+        command.arg(&path).arg(&base);
+
+        let output = command.output().await?;
+        if !output.status.success() {
+            return Err(WorkspaceError::GitCommand {
+                op: "worktree add".to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
+        }
+
+        Ok(Workspace {
+            path,
+            branch,
+            session_id: *session_id,
+        })
     }
 
     async fn finalize(
@@ -188,6 +245,25 @@ mod tests {
     }
 
     #[test]
+    fn branch_strategy_reports_wire_strings() {
+        assert_eq!(BranchStrategy::Head.as_str(), "head");
+        assert_eq!(
+            BranchStrategy::MergeToHead {
+                target: "main".to_string()
+            }
+            .as_str(),
+            "merge_to_head"
+        );
+        assert_eq!(
+            BranchStrategy::NamedBranch {
+                name: "feat/test".to_string()
+            }
+            .as_str(),
+            "named_branch"
+        );
+    }
+
+    #[test]
     fn workspace_manager_trait_object_methods_are_reachable() {
         let manager: Arc<dyn WorkspaceManager> = Arc::new(GitWorktreeManager::new(
             PathBuf::from("/repo"),
@@ -205,5 +281,107 @@ mod tests {
         assert_send_future(manager.prepare(&session_id, &strategy));
         assert_send_future(manager.finalize(&workspace, WorkflowOutcome::Success));
         assert_send_future(manager.prune());
+    }
+
+    async fn git(cwd: &Path, args: &[&str]) -> std::process::Output {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Command::new("git").current_dir(cwd).args(args).output(),
+        )
+        .await
+        .expect("git command timed out")
+        .expect("git command started")
+    }
+
+    async fn create_temp_repo() -> tempfile::TempDir {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repo = temp.path().join("repo");
+        tokio::fs::create_dir(&repo).await.expect("create repo dir");
+
+        let init = git(&repo, &["init"]).await;
+        assert!(init.status.success(), "git init: {init:?}");
+
+        tokio::fs::write(repo.join("README.md"), "hello\n")
+            .await
+            .expect("write readme");
+        let add = git(&repo, &["add", "README.md"]).await;
+        assert!(add.status.success(), "git add: {add:?}");
+        let commit = git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Stepyard Test",
+                "-c",
+                "user.email=stepyard@example.invalid",
+                "commit",
+                "-m",
+                "init",
+            ],
+        )
+        .await;
+        assert!(commit.status.success(), "git commit: {commit:?}");
+
+        temp
+    }
+
+    #[tokio::test]
+    async fn prepare_named_branch_creates_git_worktree() {
+        let temp = create_temp_repo().await;
+        let repo = temp.path().join("repo");
+        let workspaces = temp.path().join("workspaces");
+        let manager = GitWorktreeManager::new(repo, workspaces.clone(), 24);
+        let session_id = SessionId::new();
+
+        let workspace = manager
+            .prepare(
+                &session_id,
+                &BranchStrategy::NamedBranch {
+                    name: "feat/test".to_string(),
+                },
+            )
+            .await
+            .expect("prepare worktree");
+
+        assert_eq!(
+            workspace.path,
+            workspaces.join(format!("stepyard-session-{session_id}"))
+        );
+        assert!(workspace.path.exists(), "worktree path exists");
+        assert_eq!(workspace.branch.as_deref(), Some("feat/test"));
+
+        let branch = git(&workspace.path, &["branch", "--show-current"]).await;
+        assert!(branch.status.success(), "git branch: {branch:?}");
+        assert_eq!(String::from_utf8_lossy(&branch.stdout).trim(), "feat/test");
+    }
+
+    #[tokio::test]
+    async fn prepare_existing_worktree_path_returns_typed_error() {
+        let temp = create_temp_repo().await;
+        let repo = temp.path().join("repo");
+        let workspaces = temp.path().join("workspaces");
+        let manager = GitWorktreeManager::new(repo, workspaces, 24);
+        let session_id = SessionId::new();
+
+        manager
+            .prepare(
+                &session_id,
+                &BranchStrategy::NamedBranch {
+                    name: "feat/test".to_string(),
+                },
+            )
+            .await
+            .expect("first prepare");
+
+        let err = manager
+            .prepare(
+                &session_id,
+                &BranchStrategy::NamedBranch {
+                    name: "feat/test-again".to_string(),
+                },
+            )
+            .await
+            .expect_err("second prepare should fail");
+
+        assert!(matches!(err, WorkspaceError::WorktreeExists { .. }));
     }
 }

@@ -82,7 +82,7 @@
 ## Feature 16: Implement GitWorktreeManager::prepare with WorkspacePrepared + BranchCreated Events
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.2] As a workflow runtime, I want Engine to emit WorkspacePrepared (and BranchCreated when a branch is created) synchronously before invoking GitWorktreeManager::prepare which runs git worktree add via argv-only subprocess, so that every workspace decision is logged before git IO and parallel agents get isolated working trees. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 15
-- Status: pending
+- Status: done
 
 ## Feature 17: Workflow branch_strategy: YAML Schema and CLI Override
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.3] As a workflow author, I want a top-level branch_strategy: YAML field (head|merge_to_head|named_branch) with required sibling branch_name: when named_branch plus a --branch-strategy CLI override, so that I can declare how agent commits land in the repo without hardcoding per-workflow branching logic. Source: _bmad-output/sandcastle-features/epics.md

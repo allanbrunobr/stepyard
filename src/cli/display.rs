@@ -112,6 +112,17 @@ pub fn signal_received(signal: &Signal) {
     println!("  {} signal received: {}", "✗".red(), signal);
 }
 
+pub fn workspace_prepared(path: &str, strategy: &str) {
+    println!(
+        "  {} workspace prepared at {path} (strategy: {strategy})",
+        "◆".cyan()
+    );
+}
+
+pub fn branch_created(branch: &str, base: &str) {
+    println!("  {} branch created: {branch} from {base}", "◆".cyan());
+}
+
 /// Display a map item position, e.g. "Item 2/5: filename.rs"
 pub fn map_item(current: usize, total: usize, name: &str) {
     println!(

@@ -2,13 +2,16 @@
 //! [`SandboxLifecycle`].
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use chrono::Utc;
 use stepyard_core::{ChatMessage, Event, Signal, StepOutputSnapshot};
-use stepyard_sandbox_orchestrator::SandboxLifecycle;
+use stepyard_sandbox_orchestrator::{
+    BranchStrategy, SandboxLifecycle, WorkspaceError, WorkspaceManager,
+};
 use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
 use tokio::sync::broadcast;
 
@@ -163,6 +166,9 @@ pub enum EngineError {
     #[error("sandbox error: {0}")]
     Sandbox(#[from] stepyard_sandbox_orchestrator::SandboxError),
 
+    #[error("workspace error: {0}")]
+    Workspace(#[from] WorkspaceError),
+
     #[error("invalid state: {0}")]
     InvalidState(String),
 
@@ -226,6 +232,12 @@ pub struct Engine {
     /// Per-run inputs exposed to the gate/cmd renderer (PR 2 of Task #31).
     /// Attached via [`Engine::with_run_context`]; empty by default.
     run_context: RunContext,
+    /// Optional git workspace manager. Disabled by default until the CLI/YAML
+    /// branch-strategy story wires a concrete manager into production paths.
+    workspace_manager: Option<Arc<dyn WorkspaceManager>>,
+    workspace_strategy: BranchStrategy,
+    workspace_path: Option<PathBuf>,
+    workspace_prepared: bool,
 }
 
 impl Engine {
@@ -263,6 +275,10 @@ impl Engine {
             started_at: None,
             defaults: Defaults::default(),
             run_context: RunContext::default(),
+            workspace_manager: None,
+            workspace_strategy: BranchStrategy::Head,
+            workspace_path: None,
+            workspace_prepared: false,
         }
     }
 
@@ -280,6 +296,68 @@ impl Engine {
     pub fn with_run_context(mut self, run_context: RunContext) -> Self {
         self.run_context = run_context;
         self
+    }
+
+    /// Attach a workspace manager for Epic 4 worktree preparation. Production
+    /// CLI wiring arrives with the branch-strategy story; tests and future
+    /// callers can use this builder to exercise the emit-before-IO contract.
+    pub fn with_workspace_manager(
+        mut self,
+        manager: Arc<dyn WorkspaceManager>,
+        strategy: BranchStrategy,
+        planned_path: PathBuf,
+    ) -> Self {
+        self.workspace_manager = Some(manager);
+        self.workspace_strategy = strategy;
+        self.workspace_path = Some(planned_path);
+        self
+    }
+
+    async fn prepare_workspace_if_configured(&mut self) -> Result<(), EngineError> {
+        if self.workspace_prepared {
+            return Ok(());
+        }
+
+        let Some(manager) = self.workspace_manager.clone() else {
+            return Ok(());
+        };
+
+        let session_id = self.session.id();
+        let path = self.workspace_path.clone().unwrap_or_else(|| {
+            PathBuf::from(format!(
+                ".stepyard/workspaces/stepyard-session-{session_id}"
+            ))
+        });
+        let strategy = self.workspace_strategy.clone();
+
+        self.emit(Event::WorkspacePrepared {
+            path: path.display().to_string(),
+            strategy: strategy.as_str().to_string(),
+        })
+        .await?;
+
+        match &strategy {
+            BranchStrategy::Head => {}
+            BranchStrategy::MergeToHead { target } => {
+                self.emit(Event::BranchCreated {
+                    branch: format!("stepyard/session-{}", session_id.as_uuid()),
+                    base: target.clone(),
+                })
+                .await?;
+            }
+            BranchStrategy::NamedBranch { name } => {
+                self.emit(Event::BranchCreated {
+                    branch: name.clone(),
+                    base: "HEAD".to_string(),
+                })
+                .await?;
+            }
+            _ => {}
+        }
+
+        manager.prepare(&session_id, &strategy).await?;
+        self.workspace_prepared = true;
+        Ok(())
     }
 
     /// Resolve the effective env for `step` by overlaying
@@ -385,6 +463,7 @@ impl Engine {
                 timestamp: Utc::now(),
             })
             .await?;
+            self.prepare_workspace_if_configured().await?;
         }
 
         self.emit(Event::StepStarted {
