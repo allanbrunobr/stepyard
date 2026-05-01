@@ -17,8 +17,8 @@
 //!   ([`AdapterError::NestedScopesNotSupported`]). A later PR that lifts
 //!   this restriction can add a `scope_path` frame without reshaping the
 //!   event log; see `stepyard_core::event::ScopeContext`.
-//! * Scope bodies currently execute only `cmd` and `gate` steps. Other
-//!   non-container kinds are rejected at the adapter boundary until their
+//! * Scope bodies execute `cmd`, `gate`, `agent`, and `chat` steps. Other
+//!   non-container kinds stay rejected at the adapter boundary until their
 //!   scoped replay/render semantics are implemented.
 //! * Gate actions split by position: `break` and `skip` only make sense
 //!   inside a scope body, so a top-level gate that declares them fails
@@ -37,18 +37,18 @@
 //! PR 5a of Task #31 adds `agent` — translates the v1 `config` bag
 //! (`model` / `system_prompt_append` / `permissions` / `resume` /
 //! `fork_session` / `session`) into the typed fields the harness now
-//! exposes on [`stepyard_harness::Step`]. Top-level only; scoped agent
-//! bodies stay rejected by [`AdapterError::ScopedStepUnsupported`] until
-//! a later PR widens scope-body dispatch.
+//! exposes on [`stepyard_harness::Step`]. #80 widens scope-body dispatch
+//! so scoped agent steps adapt through the same helper as top-level agent
+//! steps.
 //!
 //! PR 5b of Task #31 added the chat-step translation helper
 //! ([`parse_chat_step`]) — walks the v1 `config` bag (`provider` /
 //! `model` / `max_tokens` / `temperature` / `api_key_env` / `base_url` /
 //! `session` / `truncation_strategy` family) and produces a typed
 //! [`stepyard_harness::Step`]. PR 5c commit 3 wires the helper into
-//! [`adapt_step`] so top-level `chat` steps reach the v2 dispatcher;
-//! scope-body chat stays rejected via [`AdapterError::ScopedStepUnsupported`]
-//! until the engine's chat-session map gains scope-body semantics.
+//! [`adapt_step`] so chat steps reach the v2 dispatcher. #80 widens
+//! scope-body dispatch so scoped chat steps adapt through the same helper
+//! as top-level chat steps.
 //!
 //! Executors for `call` / `repeat` / `map` landed in the scope-runner commit.
 //! `parallel` is the only v1 kind still rejected outright with
@@ -237,7 +237,7 @@ pub enum AdapterError {
 
     #[error(
         "parallel step `{parent}` sub-step `{inner_name}` has type `{step_type}` \
-         which is not supported in PR 6 of #31 (allowed inside parallel: cmd)"
+         which is not supported in v2 parallel (allowed inside parallel: cmd, agent, chat)"
     )]
     ParallelSubStepUnsupported {
         parent: String,
@@ -514,11 +514,9 @@ fn parse_agent_session(step_name: &str, value: &str) -> Result<AgentSessionMode,
 /// its `truncation_count` / `truncation_first` / `truncation_last` /
 /// `truncation_max_tokens` siblings).
 ///
-/// Wired into [`adapt_step`] in PR 5c commit 3 — top-level `chat`
-/// steps now flow through this helper into the v2 dispatcher. Scope-body
-/// chat is still rejected by [`AdapterError::ScopedStepUnsupported`]
-/// (see [`scope_body_kind_supported`]) because the engine's chat-session
-/// map commits only on a non-scoped chat completion (`engine.rs:1837`).
+/// Wired into [`adapt_step`] in PR 5c commit 3. #80 reuses the same helper
+/// for scope-body and parallel chat steps so the config surface stays
+/// identical across positions.
 fn parse_chat_step(s: &StepDef) -> Result<Step, AdapterError> {
     let prompt = s
         .prompt
@@ -550,9 +548,8 @@ fn parse_chat_step(s: &StepDef) -> Result<Step, AdapterError> {
     };
     step.max_tokens = Some(chat_config_u64(s, "max_tokens")?.unwrap_or(1024));
     step.temperature = Some(chat_config_f64(s, "temperature")?.unwrap_or(0.0));
-    step.timeout = Some(
-        parse_chat_timeout_duration(s)?.unwrap_or_else(|| Duration::from_secs(120)),
-    );
+    step.timeout =
+        Some(parse_chat_timeout_duration(s)?.unwrap_or_else(|| Duration::from_secs(120)));
     step.chat_provider = Some(provider);
     step.base_url = base_url;
     step.chat_session = chat_config_str(s, "session")?.map(String::from);
@@ -800,21 +797,20 @@ fn apply_common_container_fields(step: &mut Step, s: &StepDef) -> Result<(), Ada
 /// the container's terminal output from the LAST sub-step by definition
 /// order (v1 parity).
 ///
-/// PR 6 narrows v1's "any nested step type" to `cmd`-only — agent /
-/// chat dispatch inside scope bodies is task #80 and lands separately.
+/// PR 6 initially narrowed v1's "any nested step type" to `cmd`-only. #80
+/// widens the accepted set to `cmd` / `agent` / `chat`; nested containers
+/// and other non-container kinds remain out of scope.
 fn adapt_parallel(
     s: &StepDef,
     top_level_index: usize,
 ) -> Result<(Step, String, Scope), AdapterError> {
     let synth_name = format!("__parallel_{top_level_index}");
 
-    let raw_steps = s
-        .steps
-        .as_ref()
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| AdapterError::ParallelMissingSteps {
+    let raw_steps = s.steps.as_ref().filter(|v| !v.is_empty()).ok_or_else(|| {
+        AdapterError::ParallelMissingSteps {
             name: s.name.clone(),
-        })?;
+        }
+    })?;
 
     let mut body: Vec<Step> = Vec::with_capacity(raw_steps.len());
     for inner in raw_steps {
@@ -829,21 +825,23 @@ fn adapt_parallel(
                 kind,
             });
         }
-        // PR 6 of #31 / #80 deferral: parallel sub-steps are restricted
-        // to `cmd` until agent/chat dispatch is wired into scope bodies.
-        // Mirrors the harness's defensive `matches!(sub.kind, StepKind::Cmd)`
-        // check so the YAML rejection is symmetric with the runtime one.
-        if !matches!(inner.step_type, StepType::Cmd) {
+        // #80: parallel sub-steps may run cmd/agent/chat. Other
+        // non-container kinds remain rejected until their scope-body
+        // dispatch semantics are explicitly wired.
+        if !matches!(
+            inner.step_type,
+            StepType::Cmd | StepType::Agent | StepType::Chat
+        ) {
             return Err(AdapterError::ParallelSubStepUnsupported {
                 parent: s.name.clone(),
                 inner_name: inner.name.clone(),
                 step_type: inner.step_type.clone(),
             });
         }
-        // Pass an empty scope_names: cmd doesn't reference scopes, and
-        // any non-cmd sub-step has already been rejected above. The
-        // `Scoped` position keeps gate-action validation conservative
-        // for any future widening.
+        // Pass an empty scope_names: accepted sub-steps don't reference
+        // scopes, and nested containers have already been rejected above.
+        // The `Scoped` position keeps validation conservative for any
+        // future widening.
         body.push(adapt_step(inner, &HashSet::new(), StepPosition::Scoped)?);
     }
 
@@ -873,7 +871,10 @@ fn container_kind(step_type: &StepType) -> Option<&'static str> {
 }
 
 fn scope_body_kind_supported(step_type: &StepType) -> bool {
-    matches!(step_type, StepType::Cmd | StepType::Gate)
+    matches!(
+        step_type,
+        StepType::Cmd | StepType::Gate | StepType::Agent | StepType::Chat
+    )
 }
 
 fn require_scope_ref(
@@ -1108,7 +1109,7 @@ steps:
         // is lifted into a hidden scope named `__parallel_<top_level_index>`.
         // The harness sees parallel as just another scope-bodied container.
         let yaml = r#"
-name: adapter-parallel-cmd-only
+name: adapter-parallel-scope-body
 steps:
   - name: fan
     type: parallel
@@ -1139,7 +1140,10 @@ steps:
         assert_eq!(synth.steps.len(), 2);
         assert_eq!(synth.steps[0].name, "a");
         assert_eq!(synth.steps[1].name, "b");
-        assert!(synth.outputs.is_none(), "synth scopes do not carry outputs templates");
+        assert!(
+            synth.outputs.is_none(),
+            "synth scopes do not carry outputs templates"
+        );
     }
 
     #[test]
@@ -1175,11 +1179,9 @@ steps:
     }
 
     #[test]
-    fn rejects_parallel_with_unsupported_sub_step_kind() {
-        // PR 6 narrows parallel sub-steps to `cmd` only. agent/chat
-        // would land via #80 once scope bodies dispatch them.
+    fn parallel_accepts_agent_and_chat_sub_steps() {
         let yaml = r#"
-name: adapter-parallel-rejects-agent
+name: adapter-parallel-agent-chat
 steps:
   - name: fan
     type: parallel
@@ -1187,14 +1189,19 @@ steps:
       - name: ask
         type: agent
         prompt: "hi"
+      - name: reply
+        type: chat
+        prompt: "hello"
+        config:
+          provider: openai
 "#;
         let file = write_tmp(yaml);
         let def = parser::parse_file(file.path()).unwrap();
-        let err = adapt(&def).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("allowed inside parallel: cmd"), "msg={msg}");
-        assert!(msg.contains("ask"), "msg={msg}");
-        assert!(msg.contains("fan"), "msg={msg}");
+        let wf = adapt(&def).expect("agent/chat sub-steps should adapt");
+        let synth = wf.scopes.get("__parallel_0").expect("synth scope");
+        assert_eq!(synth.steps.len(), 2);
+        assert_eq!(synth.steps[0].kind, stepyard_harness::StepKind::Agent);
+        assert_eq!(synth.steps[1].kind, stepyard_harness::StepKind::Chat);
     }
 
     #[test]
@@ -1222,7 +1229,10 @@ scopes:
         let def = parser::parse_file(file.path()).unwrap();
         let err = adapt(&def).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("nested containers are not supported"), "msg={msg}");
+        assert!(
+            msg.contains("nested containers are not supported"),
+            "msg={msg}"
+        );
         assert!(msg.contains("inner"), "msg={msg}");
     }
 
@@ -1279,7 +1289,10 @@ scopes:
         let def = parser::parse_file(file.path()).unwrap();
         let err = adapt(&def).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("nested containers are not supported"), "msg={msg}");
+        assert!(
+            msg.contains("nested containers are not supported"),
+            "msg={msg}"
+        );
         assert!(msg.contains("nested_fan"), "msg={msg}");
         assert!(msg.contains("parallel"), "msg={msg}");
     }
@@ -1923,11 +1936,7 @@ steps:
     }
 
     #[test]
-    fn agent_rejected_inside_scope_body_for_now() {
-        // Scoped agent dispatch lands in a follow-up; for PR 5a we
-        // restrict to top-level so the engine's session-map replay
-        // matches the top-level-only semantics asserted by the
-        // progress scan's `scoped_completion_with_agent_session_id_is_ignored`.
+    fn agent_accepted_inside_scope_body() {
         let yaml = r#"
 name: agent-in-scope
 steps:
@@ -1943,15 +1952,10 @@ scopes:
 "#;
         let file = write_tmp(yaml);
         let def = parser::parse_file(file.path()).unwrap();
-        let err = adapt(&def).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                AdapterError::ScopedStepUnsupported { ref inner_name, .. }
-                    if inner_name == "inner"
-            ),
-            "got {err:?}"
-        );
+        let wf = adapt(&def).expect("scoped agent should adapt");
+        let body = wf.scopes.get("body").expect("body scope");
+        assert_eq!(body.steps[0].name, "inner");
+        assert_eq!(body.steps[0].kind, stepyard_harness::StepKind::Agent);
     }
 
     // ------------------------------------------------------------------
@@ -1990,13 +1994,7 @@ steps:
     }
 
     #[test]
-    fn chat_rejected_inside_scope_body_for_now() {
-        // Mirrors `agent_rejected_inside_scope_body_for_now`: scoped
-        // chat dispatch is deferred because the engine's chat-session
-        // map only commits on a non-scoped chat completion (see
-        // `engine.rs:1837`). Surfacing chat in a scope body here would
-        // stage turns the progress scan never drains, so the adapter
-        // pins top-level-only semantics with `ScopedStepUnsupported`.
+    fn chat_accepted_inside_scope_body() {
         let yaml = r#"
 name: chat-in-scope
 steps:
@@ -2012,15 +2010,10 @@ scopes:
 "#;
         let file = write_tmp(yaml);
         let def = parser::parse_file(file.path()).unwrap();
-        let err = adapt(&def).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                AdapterError::ScopedStepUnsupported { ref inner_name, .. }
-                    if inner_name == "inner"
-            ),
-            "got {err:?}"
-        );
+        let wf = adapt(&def).expect("scoped chat should adapt");
+        let body = wf.scopes.get("body").expect("body scope");
+        assert_eq!(body.steps[0].name, "inner");
+        assert_eq!(body.steps[0].kind, stepyard_harness::StepKind::Chat);
     }
 
     #[test]
