@@ -19,15 +19,18 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
     ChatClient, ChatClientError, ChatCompletionRequest, ChatCompletionResponse, Engine,
-    HarnessConfig, Scope, Step, StepExecutor, StepOutcome, Workflow,
+    EngineError, HarnessConfig, Scope, Step, StepExecutor, StepOutcome, Workflow,
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionEvent};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -94,6 +97,35 @@ fn lifecycle() -> Arc<dyn SandboxLifecycle> {
 
 fn echo_executor() -> Arc<dyn StepExecutor> {
     Arc::new(EchoExecutor)
+}
+
+#[derive(Default, Clone)]
+struct BlockingExecutor;
+
+#[async_trait]
+impl StepExecutor for BlockingExecutor {
+    async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
+        self.execute_with_env(session_id, step, &HashMap::new())
+            .await
+    }
+
+    async fn execute_with_env(
+        &self,
+        _session_id: Uuid,
+        _step: &Step,
+        _env: &HashMap<String, String>,
+    ) -> Result<ExecOutput, SandboxError> {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        Ok(ExecOutput {
+            stdout: "late\n".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        })
+    }
+}
+
+fn blocking_executor() -> Arc<dyn StepExecutor> {
+    Arc::new(BlockingExecutor)
 }
 
 fn fixture_path() -> std::path::PathBuf {
@@ -467,6 +499,189 @@ async fn parallel_with_one_failure_fails_container() {
         assert!(
             err.contains("`b`"),
             "container error should mention failing sub-step `b`; got: {err}"
+        );
+    });
+}
+
+#[tokio::test]
+async fn parallel_cancel_aborts_in_flight_sub_steps() {
+    db_test!(pool, {
+        let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("session");
+        let wf = workflow_with_parallel(
+            "parallel-cancel",
+            "p",
+            "__parallel_0",
+            vec![Step::cmd("slow", "sleep forever")],
+        );
+
+        let mut engine = Engine::with_executor(
+            HarnessConfig::default(),
+            session,
+            wf,
+            lifecycle(),
+            blocking_executor(),
+        );
+        let token = engine.cancel_token();
+        let trigger = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            token.cancel();
+        });
+
+        let outcome = engine.resume().await.expect("cancel returns Ok");
+        trigger.await.expect("trigger task");
+        assert_eq!(outcome, StepOutcome::Cancelled);
+
+        let evs = events(&engine).await;
+        let container_failed = evs
+            .iter()
+            .find(|e| {
+                event_kind(e) == Some("step_failed")
+                    && event_step_name(e) == Some("p")
+                    && scope_context_of(e).is_none()
+            })
+            .expect("container step_failed");
+        assert_eq!(
+            container_failed
+                .payload
+                .get("error")
+                .and_then(|v| v.as_str()),
+            Some("Cancelled")
+        );
+        assert!(
+            evs.iter().all(|e| {
+                !(event_kind(e) == Some("step_completed") && event_step_name(e) == Some("slow"))
+            }),
+            "cancelled in-flight sub-step must not log completion"
+        );
+    });
+}
+
+#[tokio::test]
+async fn parallel_shutdown_aborts_in_flight_sub_steps() {
+    db_test!(pool, {
+        let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("session");
+        let wf = workflow_with_parallel(
+            "parallel-signal",
+            "p",
+            "__parallel_0",
+            vec![Step::cmd("slow", "sleep forever")],
+        );
+        let (tx, _) = broadcast::channel::<()>(16);
+        let shutdown_tx = Arc::new(tx);
+        let shutdown_signal: Arc<OnceLock<String>> = Arc::new(OnceLock::new());
+        let config = HarnessConfig {
+            shutdown_tx: shutdown_tx.clone(),
+            shutdown_signal: shutdown_signal.clone(),
+            ..Default::default()
+        };
+
+        let mut engine =
+            Engine::with_executor(config, session, wf, lifecycle(), blocking_executor());
+        let tx_for_fire = shutdown_tx.clone();
+        let slot_for_fire = shutdown_signal.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = slot_for_fire.set("sigterm".into());
+            let _ = tx_for_fire.send(());
+        });
+
+        let result = engine.resume().await;
+        match result {
+            Err(EngineError::StepFailed {
+                reason: stepyard_core::TerminationReason::SignalReceived(signal),
+                ..
+            }) => assert_eq!(signal, stepyard_core::Signal::Sigterm),
+            other => panic!("expected signal StepFailed, got {other:?}"),
+        }
+
+        let evs = events(&engine).await;
+        assert!(
+            evs.iter().any(|e| event_kind(e) == Some("signal_received")
+                && e.payload.get("signal").and_then(|v| v.as_str()) == Some("sigterm")),
+            "signal_received event must be persisted before cancellation"
+        );
+        let container_failed = evs
+            .iter()
+            .find(|e| {
+                event_kind(e) == Some("step_failed")
+                    && event_step_name(e) == Some("p")
+                    && scope_context_of(e).is_none()
+            })
+            .expect("container step_failed");
+        assert!(
+            container_failed
+                .payload
+                .get("error")
+                .and_then(|v| v.as_str())
+                .is_some_and(|error| error.contains("sigterm")),
+            "container failure should mention the signal"
+        );
+    });
+}
+
+#[tokio::test]
+async fn parallel_sub_step_timeout_fails_container_before_completion() {
+    db_test!(pool, {
+        let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("session");
+        let mut slow = Step::cmd("slow", "sleep forever");
+        slow.timeout = Some(Duration::from_millis(1));
+        let wf = workflow_with_parallel("parallel-timeout", "p", "__parallel_0", vec![slow]);
+
+        let mut engine = Engine::with_executor(
+            HarnessConfig::default(),
+            session,
+            wf,
+            lifecycle(),
+            blocking_executor(),
+        );
+        let result = engine.resume().await;
+        match result {
+            Err(EngineError::StepFailed {
+                reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
+                ..
+            }) => assert_eq!(configured_ms, 1),
+            other => panic!("expected timeout StepFailed, got {other:?}"),
+        }
+
+        let evs = events(&engine).await;
+        let timeout = evs
+            .iter()
+            .find(|e| event_kind(e) == Some("step_timeout_fired"))
+            .expect("step_timeout_fired");
+        assert_eq!(
+            timeout
+                .payload
+                .get("configured_ms")
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+        let container_failed = evs
+            .iter()
+            .find(|e| {
+                event_kind(e) == Some("step_failed")
+                    && event_step_name(e) == Some("p")
+                    && scope_context_of(e).is_none()
+            })
+            .expect("container step_failed");
+        assert!(
+            container_failed
+                .payload
+                .get("error")
+                .and_then(|v| v.as_str())
+                .is_some_and(|error| error.contains("`slow`") && error.contains("timed out")),
+            "container failure should attribute timeout to sub-step"
+        );
+        assert!(
+            evs.iter().all(|e| {
+                !(event_kind(e) == Some("step_completed") && event_step_name(e) == Some("slow"))
+            }),
+            "timed-out sub-step must not log completion"
         );
     });
 }
