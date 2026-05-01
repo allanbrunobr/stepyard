@@ -36,8 +36,8 @@ pub use local::LocalShellLifecycle;
 pub use mock::{MockCall, MockLifecycle};
 pub use sandbox::{ExecOutput, Sandbox, SandboxError, SandboxId};
 pub use workspace::{
-    BranchStrategy, FinalizeReport, GitWorktreeManager, PruneReport, WorkflowOutcome, Workspace,
-    WorkspaceError, WorkspaceManager,
+    BranchStrategy, FinalizeReport, GitWorktreeManager, PruneReport, PrunedWorkspace,
+    WorkflowOutcome, Workspace, WorkspaceError, WorkspaceManager,
 };
 
 use async_trait::async_trait;

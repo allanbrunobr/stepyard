@@ -292,6 +292,9 @@ impl EventSubscriber for DashboardSubscriber {
                 // Branch creation pairs with WorkspacePrepared and does not
                 // affect the dashboard step summary yet.
             }
+            Event::WorkspacePruned { .. } => {
+                // Startup prune is audit-log-only for now.
+            }
             Event::MergeAttempted { .. } => {
                 // Workspace merge lifecycle is audit-log-only for now.
             }
