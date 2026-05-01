@@ -10,7 +10,7 @@
 //! 2. **Container reconciliation.** Every live Docker container named
 //!    `minion-session-<uuid>` whose UUID does NOT correspond to a currently
 //!    `running` session is destroyed (NFR12 — idempotent).
-//! 3. **Worktree pruning.** Stub for Epic 4.
+//! 3. **Worktree pruning.** Startup-only stale worktree cleanup.
 //!
 //! # Emit-before-IO exemption
 //!
@@ -29,10 +29,10 @@
 
 use std::collections::HashSet;
 
-use stepyard_core::{Event, Signal};
-use stepyard_sandbox_orchestrator::{DockerLifecycle, SandboxLifecycle};
-use stepyard_session::{Session, SessionError, SessionId};
 use sqlx::PgPool;
+use stepyard_core::{Event, Signal};
+use stepyard_sandbox_orchestrator::{DockerLifecycle, SandboxLifecycle, WorkspaceManager};
+use stepyard_session::{Session, SessionError, SessionId};
 use tokio::process::Command;
 use uuid::Uuid;
 
@@ -41,6 +41,8 @@ use uuid::Uuid;
 pub struct ReconcileReport {
     pub sessions_reconciled: usize,
     pub containers_pruned: usize,
+    pub worktrees_pruned: usize,
+    pub worktrees_preserved: usize,
 }
 
 /// Errors raised by [`reconcile`].
@@ -62,6 +64,18 @@ pub enum ReconcileError {
 pub async fn reconcile(
     pg: &PgPool,
     lifecycle: &DockerLifecycle,
+) -> Result<ReconcileReport, ReconcileError> {
+    reconcile_with_workspace_manager(pg, lifecycle, None).await
+}
+
+/// Variant of [`reconcile`] used by binaries that have a configured workspace
+/// manager at startup. Keeping [`reconcile`] as the two-argument entry point
+/// preserves the existing test and library API for callers that only need
+/// session/container cleanup.
+pub async fn reconcile_with_workspace_manager(
+    pg: &PgPool,
+    lifecycle: &DockerLifecycle,
+    workspace_manager: Option<&dyn WorkspaceManager>,
 ) -> Result<ReconcileReport, ReconcileError> {
     // Exempt from emit-before-IO rule: runs before any live session exists at startup.
     let mut report = ReconcileReport::default();
@@ -158,11 +172,37 @@ pub async fn reconcile(
     }
 
     // ── Phase 3: worktree pruning ───────────────────────────────────────
-    // TODO(Epic 4): D8 two-phase prune — see Epic 4 Story N.M
+    if let Some(workspace_manager) = workspace_manager {
+        match workspace_manager.prune().await {
+            Ok(prune_report) => {
+                report.worktrees_pruned += prune_report.worktrees_pruned as usize;
+                report.worktrees_preserved += prune_report.worktrees_preserved as usize;
+                for pruned in prune_report.pruned {
+                    let event = Event::WorkspacePruned {
+                        path: pruned.path,
+                        reason: pruned.reason,
+                    };
+                    tracing::info!(
+                        event = %serde_json::to_string(&event)
+                            .expect("WorkspacePruned always serializes"),
+                        "workspace pruned during startup reconcile",
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "workspace prune failed; continuing startup reconcile",
+                );
+            }
+        }
+    }
 
     tracing::info!(
         sessions_reconciled = report.sessions_reconciled,
         containers_pruned = report.containers_pruned,
+        worktrees_pruned = report.worktrees_pruned,
+        worktrees_preserved = report.worktrees_preserved,
         "startup reconcile complete",
     );
     Ok(report)
@@ -217,6 +257,8 @@ mod tests {
         let r = ReconcileReport::default();
         assert_eq!(r.sessions_reconciled, 0);
         assert_eq!(r.containers_pruned, 0);
+        assert_eq!(r.worktrees_pruned, 0);
+        assert_eq!(r.worktrees_preserved, 0);
     }
 }
 
