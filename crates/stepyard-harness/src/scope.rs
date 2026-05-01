@@ -40,6 +40,7 @@
 //! `vars`; iteration carry lives on `scope.value` (v1 parity).
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -67,6 +68,28 @@ fn step_type_label(kind: &StepKind) -> &'static str {
         StepKind::Call => "call",
         StepKind::Template => "template",
         StepKind::Script => "script",
+    }
+}
+
+async fn parallel_task_with_timeout<F>(
+    timeout: Option<std::time::Duration>,
+    fut: F,
+) -> ParallelTaskResult
+where
+    F: Future<Output = Result<ParallelTaskOutput, String>>,
+{
+    match timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, fut).await {
+            Ok(Ok(out)) => ParallelTaskResult::Completed(out),
+            Ok(Err(error)) => ParallelTaskResult::Failed(error),
+            Err(_) => ParallelTaskResult::TimedOut {
+                configured_ms: timeout.as_millis() as u64,
+            },
+        },
+        None => match fut.await {
+            Ok(out) => ParallelTaskResult::Completed(out),
+            Err(error) => ParallelTaskResult::Failed(error),
+        },
     }
 }
 
@@ -140,6 +163,20 @@ enum ParallelTaskOutput {
         user_content: String,
         output: crate::chat_exec::ChatExecOutput,
     },
+}
+
+enum ParallelTaskResult {
+    Completed(ParallelTaskOutput),
+    Failed(String),
+    TimedOut { configured_ms: u64 },
+}
+
+enum ParallelDrain {
+    Completed,
+    Failed(String),
+    TimedOut { name: String, configured_ms: u64 },
+    Cancelled,
+    Signal(String),
 }
 
 /// Result of running one full iteration of a scope body.
@@ -541,8 +578,9 @@ impl Engine {
             return self.emit_container_success(step, start, synthetic).await;
         }
 
-        // Container-level cancel check before spawning. Per-task cancel /
-        // signal / timeout `select!` arms land in PRs covering tests 4–6.
+        let container_top_level_index = top_level_position_of(self, &container_name).await?;
+
+        // Container-level cancel check before spawning.
         if self.is_cancelled() {
             return self.emit_container_cancel(step, start).await;
         }
@@ -740,11 +778,10 @@ impl Engine {
 
         // Spawn one task per non-completed sub-step. Cloned executor/client
         // handles let each task own its own `Arc` so the futures don't
-        // borrow `self`. Control-plane select arms for per-task
-        // cancel/signal/timeout remain a separate parallel-hardening PR.
+        // borrow `self`. Each task owns its own step timeout; the drain
+        // loop below races the whole JoinSet against cancel and shutdown.
         let session_uuid = *self.session().id().as_uuid();
-        let mut joinset: JoinSet<(u32, String, StepKind, Result<ParallelTaskOutput, String>)> =
-            JoinSet::new();
+        let mut joinset: JoinSet<(u32, String, StepKind, ParallelTaskResult)> = JoinSet::new();
         for task in to_run {
             match task {
                 ParallelTask::Cmd {
@@ -754,12 +791,16 @@ impl Engine {
                     env,
                 } => {
                     let executor = self.executor();
+                    let timeout = step.timeout;
                     joinset.spawn(async move {
-                        let res = executor
-                            .execute_with_env(session_uuid, &step, &env)
-                            .await
-                            .map(ParallelTaskOutput::Cmd)
-                            .map_err(|e| e.to_string());
+                        let fut = async {
+                            executor
+                                .execute_with_env(session_uuid, &step, &env)
+                                .await
+                                .map(ParallelTaskOutput::Cmd)
+                                .map_err(|e| e.to_string())
+                        };
+                        let res = parallel_task_with_timeout(timeout, fut).await;
                         (pos, name, StepKind::Cmd, res)
                     });
                 }
@@ -772,15 +813,19 @@ impl Engine {
                     agent_session_ids,
                     first_agent_session_id,
                 } => {
+                    let timeout = step.timeout;
                     joinset.spawn(async move {
                         let state = crate::agent_exec::AgentSessionState {
                             agent_session_ids: &agent_session_ids,
                             first_agent_session_id: first_agent_session_id.as_deref(),
                         };
-                        let res = crate::agent_exec::run_agent_step(&step, &prompt, &state, &env)
-                            .await
-                            .map(ParallelTaskOutput::Agent)
-                            .map_err(|e| e.to_string());
+                        let fut = async {
+                            crate::agent_exec::run_agent_step(&step, &prompt, &state, &env)
+                                .await
+                                .map(ParallelTaskOutput::Agent)
+                                .map_err(|e| e.to_string())
+                        };
+                        let res = parallel_task_with_timeout(timeout, fut).await;
                         (pos, name, StepKind::Agent, res)
                     });
                 }
@@ -793,46 +838,71 @@ impl Engine {
                     session,
                     user_content,
                 } => {
+                    let timeout = step.timeout;
                     joinset.spawn(async move {
-                        let res = crate::chat_exec::run_chat_step(&step, req, client.as_ref())
-                            .await
-                            .map(|output| ParallelTaskOutput::Chat {
-                                session,
-                                user_content,
-                                output,
-                            })
-                            .map_err(|e| e.to_string());
+                        let fut = async {
+                            crate::chat_exec::run_chat_step(&step, req, client.as_ref())
+                                .await
+                                .map(|output| ParallelTaskOutput::Chat {
+                                    session,
+                                    user_content,
+                                    output,
+                                })
+                                .map_err(|e| e.to_string())
+                        };
+                        let res = parallel_task_with_timeout(timeout, fut).await;
                         (pos, name, StepKind::Chat, res)
                     });
                 }
             }
         }
 
-        // Drain. First non-zero exit / executor error wins; subsequent
-        // tasks are aborted but we still drain to surface JoinErrors.
+        // Drain. First non-zero exit / executor error / per-task timeout
+        // wins; cancel and shutdown race the entire JoinSet. Subsequent
+        // tasks are aborted but we still drain the JoinSet so child futures
+        // are dropped and RAII cleanup can run.
         let mut completions: Vec<(u32, String, StepKind, ParallelTaskOutput)> = Vec::new();
-        let mut error_msg: Option<String> = None;
-        while let Some(joined) = joinset.join_next().await {
-            let (pos, name, kind, res) = match joined {
-                Ok(t) => t,
-                Err(je) if je.is_cancelled() => {
-                    // Aborted via `joinset.abort_all()` after another
-                    // sub-step failed — expected, drop silently.
-                    continue;
-                }
-                Err(je) => {
-                    if error_msg.is_none() {
-                        error_msg = Some(format!("parallel sub-step JoinError: {je}"));
-                        joinset.abort_all();
-                    }
-                    continue;
+        let mut terminal = ParallelDrain::Completed;
+        while !joinset.is_empty() {
+            let cancel_token = self.cancel_token();
+            let cancel_fut = async {
+                while !cancel_token.is_cancelled() {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             };
-            match res {
-                Ok(out) => {
+            let signal_slot = self.shutdown_signal();
+            let shutdown_rx = self.shutdown_rx_mut();
+            let shutdown_fut = shutdown_rx.recv();
+            tokio::pin!(cancel_fut);
+            tokio::pin!(shutdown_fut);
+
+            let joined = tokio::select! {
+                joined = joinset.join_next() => joined,
+                _ = &mut cancel_fut => {
+                    terminal = ParallelDrain::Cancelled;
+                    joinset.abort_all();
+                    break;
+                }
+                _ = &mut shutdown_fut => {
+                    terminal = ParallelDrain::Signal(
+                        signal_slot
+                            .get()
+                            .cloned()
+                            .unwrap_or_else(|| "unknown".into()),
+                    );
+                    joinset.abort_all();
+                    break;
+                }
+            };
+
+            let Some(joined) = joined else {
+                break;
+            };
+            match joined {
+                Ok((pos, name, kind, ParallelTaskResult::Completed(out))) => {
                     if let ParallelTaskOutput::Cmd(ref cmd_out) = out {
-                        if cmd_out.exit_code != 0 && error_msg.is_none() {
-                            error_msg = Some(format!(
+                        if cmd_out.exit_code != 0 {
+                            terminal = ParallelDrain::Failed(format!(
                                 "parallel sub-step `{name}` failed with exit_code={}",
                                 cmd_out.exit_code
                             ));
@@ -841,11 +911,36 @@ impl Engine {
                     }
                     completions.push((pos, name, kind, out));
                 }
-                Err(e) => {
-                    if error_msg.is_none() {
-                        error_msg = Some(format!("parallel sub-step `{name}`: {e}"));
-                        joinset.abort_all();
-                    }
+                Ok((_pos, name, _kind, ParallelTaskResult::Failed(error))) => {
+                    terminal =
+                        ParallelDrain::Failed(format!("parallel sub-step `{name}`: {error}"));
+                    joinset.abort_all();
+                }
+                Ok((_pos, name, _kind, ParallelTaskResult::TimedOut { configured_ms })) => {
+                    terminal = ParallelDrain::TimedOut {
+                        name,
+                        configured_ms,
+                    };
+                    joinset.abort_all();
+                }
+                Err(je) if je.is_cancelled() => {
+                    // Aborted via `joinset.abort_all()` after another
+                    // terminal branch won — expected, drop silently.
+                }
+                Err(je) => {
+                    terminal = ParallelDrain::Failed(format!("parallel sub-step JoinError: {je}"));
+                    joinset.abort_all();
+                }
+            }
+            if !matches!(terminal, ParallelDrain::Completed) {
+                break;
+            }
+        }
+
+        if !matches!(terminal, ParallelDrain::Completed) {
+            while let Some(joined) = joinset.join_next().await {
+                if let Ok((pos, name, kind, ParallelTaskResult::Completed(out))) = joined {
+                    completions.push((pos, name, kind, out));
                 }
             }
         }
@@ -974,8 +1069,35 @@ impl Engine {
             }
         }
 
-        if let Some(err) = error_msg {
-            return self.emit_container_failure(step, start, err).await;
+        match terminal {
+            ParallelDrain::Completed => {}
+            ParallelDrain::Failed(err) => {
+                return self.emit_container_failure(step, start, err).await;
+            }
+            ParallelDrain::Cancelled => {
+                return self.emit_container_cancel(step, start).await;
+            }
+            ParallelDrain::Signal(signal) => {
+                self.emit_container_signal(step, start, signal.clone())
+                    .await?;
+                return Err(EngineError::StepFailed {
+                    step_index: container_top_level_index,
+                    reason: stepyard_core::TerminationReason::SignalReceived(
+                        stepyard_core::Signal::from(signal),
+                    ),
+                });
+            }
+            ParallelDrain::TimedOut {
+                name,
+                configured_ms,
+            } => {
+                self.emit_container_timeout(step, start, &name, configured_ms)
+                    .await?;
+                return Err(EngineError::StepFailed {
+                    step_index: container_top_level_index,
+                    reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
+                });
+            }
         }
 
         // Position-specific output synthesis: pull the last DEFINITION
@@ -2420,6 +2542,58 @@ impl Engine {
         .await?;
         self.finalise_cancel().await?;
         Ok(StepOutcome::Cancelled)
+    }
+
+    async fn emit_container_signal(
+        &mut self,
+        step: &Step,
+        start: std::time::Instant,
+        signal: String,
+    ) -> Result<(), EngineError> {
+        let duration_ms = start.elapsed().as_millis() as u64;
+        self.emit(Event::SignalReceived {
+            signal: Signal::from(signal.clone()),
+        })
+        .await?;
+        self.emit(Event::StepFailed {
+            step_name: step.name.clone(),
+            step_type: step_type_label(&step.kind).into(),
+            error: format!("Signal: {signal}"),
+            duration_ms,
+            timestamp: Utc::now(),
+            sandboxed: false,
+        })
+        .await?;
+        self.finalise_cancel().await
+    }
+
+    async fn emit_container_timeout(
+        &mut self,
+        step: &Step,
+        start: std::time::Instant,
+        sub_step_name: &str,
+        configured_ms: u64,
+    ) -> Result<(), EngineError> {
+        let duration_ms = start.elapsed().as_millis() as u64;
+        self.emit(Event::StepTimeoutFired {
+            step_index: top_level_position_of(self, &step.name).await?,
+            configured_ms,
+        })
+        .await?;
+        self.emit(Event::StepFailed {
+            step_name: step.name.clone(),
+            step_type: step_type_label(&step.kind).into(),
+            error: format!("parallel sub-step `{sub_step_name}` timed out after {configured_ms}ms"),
+            duration_ms,
+            timestamp: Utc::now(),
+            sandboxed: false,
+        })
+        .await?;
+        let _ = self
+            .lifecycle()
+            .destroy_by_session(*self.session().id().as_uuid())
+            .await;
+        self.finalise_fail().await
     }
 
     /// Compute the synthetic container stdout. `outputs:` template (step-

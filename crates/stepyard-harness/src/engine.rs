@@ -1938,6 +1938,10 @@ impl Engine {
         self.config.chat_client.clone()
     }
 
+    pub(crate) fn lifecycle(&self) -> Arc<dyn SandboxLifecycle> {
+        self.lifecycle.clone()
+    }
+
     pub(crate) fn shutdown_rx_mut(&mut self) -> &mut broadcast::Receiver<()> {
         &mut self.shutdown_rx
     }
