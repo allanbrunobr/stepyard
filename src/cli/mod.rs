@@ -161,3 +161,53 @@ impl Cli {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn execute_accepts_repeatable_uppercase_vars() {
+        let cli = Cli::try_parse_from([
+            "stepyard",
+            "execute",
+            "--var",
+            "FOO=bar",
+            "--var",
+            "BAZ=hello=world",
+            "workflow.yaml",
+        ])
+        .expect("valid vars");
+        match cli.command {
+            Command::Execute(args) => {
+                assert_eq!(args.vars.len(), 2);
+            }
+            _ => panic!("expected execute command"),
+        }
+    }
+
+    #[test]
+    fn execute_rejects_var_without_equals_at_clap_parse_time() {
+        let err = match Cli::try_parse_from(["stepyard", "execute", "--var", "FOO", "workflow.yaml"]) {
+            Ok(_) => panic!("missing equals must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn execute_rejects_lowercase_var_key_at_clap_parse_time() {
+        let err = match Cli::try_parse_from([
+            "stepyard",
+            "execute",
+            "--var",
+            "foo=bar",
+            "workflow.yaml",
+        ]) {
+            Ok(_) => panic!("lowercase key must fail"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+}
