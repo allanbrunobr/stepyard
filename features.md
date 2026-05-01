@@ -92,7 +92,7 @@
 ## Feature 18: Auto-Merge on MergeToHead and Conflict Preservation with MergeAttempted/MergeConflict Events
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.4] As a workflow author, I want successful merge_to_head sessions to auto-merge the temp branch with MergeAttempted emitted first, and conflicts to preserve the temp branch + emit MergeConflict with affected files, so that parallel agents converge automatically on clean work and conflicts surface without losing the branch. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 17
-- Status: pending
+- Status: done
 
 ## Feature 19: D8 Two-Phase Startup Prune with WorkspacePruned Event and Uncommitted-Changes Preservation
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.5] As a platform operator, I want the workspace pruning slot in startup phase 3 to execute the D8 two-phase protocol (git worktree prune then filesystem walk) skipping worktrees with uncommitted changes and emitting WorkspacePruned per removed dir, so that stale worktrees reclaim without risking loss of uncommitted work. Source: _bmad-output/sandcastle-features/epics.md

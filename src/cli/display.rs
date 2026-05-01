@@ -123,6 +123,17 @@ pub fn branch_created(branch: &str, base: &str) {
     println!("  {} branch created: {branch} from {base}", "◆".cyan());
 }
 
+pub fn merge_attempted(source: &str, target: &str) {
+    println!("  {} merge attempted: {source} → {target}", "◆".cyan());
+}
+
+pub fn merge_conflict(source: &str, target: &str, files: usize) {
+    println!(
+        "  {} merge conflict: {source} → {target} ({files} files)",
+        "✗".red()
+    );
+}
+
 /// Display a map item position, e.g. "Item 2/5: filename.rs"
 pub fn map_item(current: usize, total: usize, name: &str) {
     println!(

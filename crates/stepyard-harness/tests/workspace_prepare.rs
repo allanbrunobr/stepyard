@@ -109,6 +109,7 @@ impl WorkspaceManager for AssertingWorkspaceManager {
         Ok(Workspace {
             path: self.planned_path.clone(),
             branch: Some("feat/workspace".to_string()),
+            merge_target: None,
             session_id: *session_id,
         })
     }

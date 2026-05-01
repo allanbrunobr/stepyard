@@ -10,7 +10,7 @@ use std::time::Instant;
 use chrono::Utc;
 use stepyard_core::{ChatMessage, Event, Signal, StepOutputSnapshot};
 use stepyard_sandbox_orchestrator::{
-    BranchStrategy, SandboxLifecycle, WorkspaceError, WorkspaceManager,
+    BranchStrategy, SandboxLifecycle, WorkflowOutcome, Workspace, WorkspaceError, WorkspaceManager,
 };
 use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
 use tokio::sync::broadcast;
@@ -237,6 +237,7 @@ pub struct Engine {
     workspace_manager: Option<Arc<dyn WorkspaceManager>>,
     workspace_strategy: BranchStrategy,
     workspace_path: Option<PathBuf>,
+    workspace: Option<Workspace>,
     workspace_prepared: bool,
 }
 
@@ -278,6 +279,7 @@ impl Engine {
             workspace_manager: None,
             workspace_strategy: BranchStrategy::Head,
             workspace_path: None,
+            workspace: None,
             workspace_prepared: false,
         }
     }
@@ -355,9 +357,48 @@ impl Engine {
             _ => {}
         }
 
-        manager.prepare(&session_id, &strategy).await?;
+        let workspace = manager.prepare(&session_id, &strategy).await?;
+        self.workspace = Some(workspace);
         self.workspace_prepared = true;
         Ok(())
+    }
+
+    async fn finalize_workspace_success_if_configured(&mut self) -> Result<(), EngineError> {
+        let Some(manager) = self.workspace_manager.clone() else {
+            return Ok(());
+        };
+        let Some(workspace) = self.workspace.clone() else {
+            return Ok(());
+        };
+
+        let merge_pair = workspace
+            .branch
+            .as_ref()
+            .zip(workspace.merge_target.as_ref())
+            .map(|(source, target)| (source.clone(), target.clone()));
+        if let Some((source, target)) = &merge_pair {
+            self.emit(Event::MergeAttempted {
+                source: source.clone(),
+                target: target.clone(),
+            })
+            .await?;
+        }
+
+        match manager.finalize(&workspace, WorkflowOutcome::Success).await {
+            Ok(_) => Ok(()),
+            Err(WorkspaceError::MergeConflict { files }) => {
+                if let Some((source, target)) = merge_pair {
+                    self.emit(Event::MergeConflict {
+                        source,
+                        target,
+                        files: files.clone(),
+                    })
+                    .await?;
+                }
+                Err(WorkspaceError::MergeConflict { files }.into())
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     /// Resolve the effective env for `step` by overlaying
@@ -1940,6 +1981,7 @@ impl Engine {
 
     async fn finalise_success(&mut self) -> Result<(), EngineError> {
         if self.session.status() == SessionStatus::Running {
+            self.finalize_workspace_success_if_configured().await?;
             let duration_ms = self
                 .started_at
                 .map(|t| t.elapsed().as_millis() as u64)
