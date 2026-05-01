@@ -228,6 +228,29 @@ pub enum AdapterError {
          or `m` (v1 parity: bare numbers are seconds)"
     )]
     ChatInvalidTimeout { name: String, value: String },
+
+    #[error(
+        "parallel step `{name}` has no `steps:` block — parallel must list at \
+         least one sub-step (v1 parity)"
+    )]
+    ParallelMissingSteps { name: String },
+
+    #[error(
+        "parallel step `{parent}` sub-step `{inner_name}` has type `{step_type}` \
+         which is not supported in PR 6 of #31 (allowed inside parallel: cmd)"
+    )]
+    ParallelSubStepUnsupported {
+        parent: String,
+        inner_name: String,
+        step_type: StepType,
+    },
+
+    #[error(
+        "parallel step `{name}` synthesises scope `{scope}` but the workflow \
+         already declares a scope with that name — `__parallel_*` is reserved \
+         for adapter-synthesised parallel scopes; rename the user-declared scope"
+    )]
+    ParallelSynthScopeCollision { name: String, scope: String },
 }
 
 #[derive(Clone, Copy)]
@@ -247,18 +270,39 @@ enum StepPosition {
 pub fn adapt(def: &WorkflowDef) -> Result<Workflow, AdapterError> {
     let scope_names: HashSet<&str> = def.scopes.keys().map(String::as_str).collect();
 
+    // PR 6 of #31: each top-level `parallel` step's YAML `steps:` body is
+    // synthesised into a hidden scope named `__parallel_<top_level_index>`.
+    // The harness sees parallel as just another scope-bodied container.
+    // Synth scopes accumulate here and merge into the final scopes map
+    // after the regular scope pass; collisions with user-declared scopes
+    // (a workflow that names a scope `__parallel_0` itself) are rejected.
     let mut steps = Vec::with_capacity(def.steps.len());
-    for s in &def.steps {
-        steps.push(adapt_step(s, &scope_names, StepPosition::TopLevel)?);
+    let mut synth_scopes: HashMap<String, Scope> = HashMap::new();
+    for (idx, s) in def.steps.iter().enumerate() {
+        if matches!(s.step_type, StepType::Parallel) {
+            let (step, synth_name, synth_scope) = adapt_parallel(s, idx)?;
+            if scope_names.contains(synth_name.as_str()) {
+                return Err(AdapterError::ParallelSynthScopeCollision {
+                    name: s.name.clone(),
+                    scope: synth_name,
+                });
+            }
+            steps.push(step);
+            synth_scopes.insert(synth_name, synth_scope);
+        } else {
+            steps.push(adapt_step(s, &scope_names, StepPosition::TopLevel)?);
+        }
     }
 
-    let mut scopes: HashMap<String, Scope> = HashMap::with_capacity(def.scopes.len());
+    let mut scopes: HashMap<String, Scope> =
+        HashMap::with_capacity(def.scopes.len() + synth_scopes.len());
     for (scope_name, scope_def) in &def.scopes {
         scopes.insert(
             scope_name.clone(),
             adapt_scope(scope_name, scope_def, &scope_names)?,
         );
     }
+    scopes.extend(synth_scopes);
 
     let mut wf = Workflow::new(def.name.clone(), steps);
     wf.env = def.env.clone();
@@ -746,11 +790,84 @@ fn apply_common_container_fields(step: &mut Step, s: &StepDef) -> Result<(), Ada
     Ok(())
 }
 
+/// Adapt a top-level `parallel` step (PR 6 of #31).
+///
+/// v1 stored sub-steps inline on `step.steps:`. v2's harness model is
+/// scope-based, so the adapter synthesises a hidden scope named
+/// `__parallel_<top_level_index>` carrying the v1 sub-step list, and
+/// the [`Step::parallel`] points at that scope. The harness's
+/// `run_parallel` then runs every sub-step in `JoinSet` and synthesises
+/// the container's terminal output from the LAST sub-step by definition
+/// order (v1 parity).
+///
+/// PR 6 narrows v1's "any nested step type" to `cmd`-only — agent /
+/// chat dispatch inside scope bodies is task #80 and lands separately.
+fn adapt_parallel(
+    s: &StepDef,
+    top_level_index: usize,
+) -> Result<(Step, String, Scope), AdapterError> {
+    let synth_name = format!("__parallel_{top_level_index}");
+
+    let raw_steps = s
+        .steps
+        .as_ref()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| AdapterError::ParallelMissingSteps {
+            name: s.name.clone(),
+        })?;
+
+    let mut body: Vec<Step> = Vec::with_capacity(raw_steps.len());
+    for inner in raw_steps {
+        // Defence-in-depth: nested containers in parallel.steps. A
+        // `parallel` whose sub-step is a `call`/`repeat`/`map`/`parallel`
+        // would need a multi-level scope_path (see `ScopeContext` doc on
+        // future `scope_path: Vec<ScopeFrame>`); reject for PR 6.
+        if let Some(kind) = container_kind(&inner.step_type) {
+            return Err(AdapterError::NestedScopesNotSupported {
+                scope: synth_name.clone(),
+                inner_name: inner.name.clone(),
+                kind,
+            });
+        }
+        // PR 6 of #31 / #80 deferral: parallel sub-steps are restricted
+        // to `cmd` until agent/chat dispatch is wired into scope bodies.
+        // Mirrors the harness's defensive `matches!(sub.kind, StepKind::Cmd)`
+        // check so the YAML rejection is symmetric with the runtime one.
+        if !matches!(inner.step_type, StepType::Cmd) {
+            return Err(AdapterError::ParallelSubStepUnsupported {
+                parent: s.name.clone(),
+                inner_name: inner.name.clone(),
+                step_type: inner.step_type.clone(),
+            });
+        }
+        // Pass an empty scope_names: cmd doesn't reference scopes, and
+        // any non-cmd sub-step has already been rejected above. The
+        // `Scoped` position keeps gate-action validation conservative
+        // for any future widening.
+        body.push(adapt_step(inner, &HashSet::new(), StepPosition::Scoped)?);
+    }
+
+    let mut step = Step::parallel(s.name.clone(), &synth_name);
+    apply_common_container_fields(&mut step, s)?;
+
+    let scope = Scope {
+        steps: body,
+        outputs: None,
+    };
+
+    Ok((step, synth_name, scope))
+}
+
 fn container_kind(step_type: &StepType) -> Option<&'static str> {
     match step_type {
         StepType::Call => Some("call"),
         StepType::Repeat => Some("repeat"),
         StepType::Map => Some("map"),
+        // PR 6 of #31: parallel is a scope-bodied container too. Listing
+        // it here makes `adapt_scope` reject `parallel` inside another
+        // scope body (nested-container guardrail) and matches the runner
+        // dispatch in `stepyard_harness::engine::run_container_step`.
+        StepType::Parallel => Some("parallel"),
         _ => None,
     }
 }
@@ -986,12 +1103,49 @@ steps:
     }
 
     #[test]
-    fn rejects_still_unsupported_step_type() {
-        // `agent` joined the executable list in PR 5a of #31, `chat` in
-        // PR 5c commit 3. `parallel` is the only remaining v1 step type
-        // not wired into the v2 dispatcher.
+    fn accepts_parallel_with_cmd_sub_steps_synthesizing_scope() {
+        // PR 6 of #31: a top-level `parallel` step's inline `steps:` body
+        // is lifted into a hidden scope named `__parallel_<top_level_index>`.
+        // The harness sees parallel as just another scope-bodied container.
         let yaml = r#"
-name: adapter-reject-parallel
+name: adapter-parallel-cmd-only
+steps:
+  - name: fan
+    type: parallel
+    steps:
+      - name: a
+        type: cmd
+        run: "echo aaa"
+      - name: b
+        type: cmd
+        run: "echo bbb"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let wf = adapt(&def).expect("adapt should succeed");
+
+        // The top-level step itself should still be named `fan` and
+        // point at the synthesised scope `__parallel_0`.
+        assert_eq!(wf.steps.len(), 1);
+        let fan = &wf.steps[0];
+        assert_eq!(fan.name, "fan");
+        assert_eq!(fan.scope.as_deref(), Some("__parallel_0"));
+
+        // Synth scope holds both sub-steps in declaration order.
+        let synth = wf
+            .scopes
+            .get("__parallel_0")
+            .expect("__parallel_0 scope should be synthesised");
+        assert_eq!(synth.steps.len(), 2);
+        assert_eq!(synth.steps[0].name, "a");
+        assert_eq!(synth.steps[1].name, "b");
+        assert!(synth.outputs.is_none(), "synth scopes do not carry outputs templates");
+    }
+
+    #[test]
+    fn rejects_parallel_with_missing_steps() {
+        let yaml = r#"
+name: adapter-parallel-missing-steps
 steps:
   - name: fan
     type: parallel
@@ -1000,7 +1154,133 @@ steps:
         let def = parser::parse_file(file.path()).unwrap();
         let err = adapt(&def).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("not yet supported"), "msg={msg}");
+        assert!(msg.contains("no `steps:` block"), "msg={msg}");
+        assert!(msg.contains("fan"), "msg={msg}");
+    }
+
+    #[test]
+    fn rejects_parallel_with_empty_steps_list() {
+        let yaml = r#"
+name: adapter-parallel-empty-steps
+steps:
+  - name: fan
+    type: parallel
+    steps: []
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no `steps:` block"), "msg={msg}");
+    }
+
+    #[test]
+    fn rejects_parallel_with_unsupported_sub_step_kind() {
+        // PR 6 narrows parallel sub-steps to `cmd` only. agent/chat
+        // would land via #80 once scope bodies dispatch them.
+        let yaml = r#"
+name: adapter-parallel-rejects-agent
+steps:
+  - name: fan
+    type: parallel
+    steps:
+      - name: ask
+        type: agent
+        prompt: "hi"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("allowed inside parallel: cmd"), "msg={msg}");
+        assert!(msg.contains("ask"), "msg={msg}");
+        assert!(msg.contains("fan"), "msg={msg}");
+    }
+
+    #[test]
+    fn rejects_parallel_with_nested_container_sub_step() {
+        // Nested containers inside parallel are rejected at the adapter
+        // boundary; the synth-scope path uses the same NestedScopesNotSupported
+        // error as `adapt_scope` for consistency.
+        let yaml = r#"
+name: adapter-parallel-rejects-nested-call
+steps:
+  - name: fan
+    type: parallel
+    steps:
+      - name: inner
+        type: call
+        scope: setup
+scopes:
+  setup:
+    steps:
+      - name: seed
+        type: cmd
+        run: "echo seed"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("nested containers are not supported"), "msg={msg}");
+        assert!(msg.contains("inner"), "msg={msg}");
+    }
+
+    #[test]
+    fn rejects_parallel_synth_scope_collision_with_user_scope() {
+        // A user explicitly declaring `__parallel_0` collides with the
+        // synth scope for a top-level parallel at index 0.
+        let yaml = r#"
+name: adapter-parallel-synth-collision
+steps:
+  - name: fan
+    type: parallel
+    steps:
+      - name: a
+        type: cmd
+        run: "echo a"
+scopes:
+  __parallel_0:
+    steps:
+      - name: oops
+        type: cmd
+        run: "echo nope"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("`__parallel_*` is reserved"), "msg={msg}");
+        assert!(msg.contains("fan"), "msg={msg}");
+    }
+
+    #[test]
+    fn rejects_parallel_inside_a_scope_body() {
+        // `parallel` is a container kind; placing one inside a `call`
+        // scope hits the nested-containers guardrail, same as a nested
+        // `call`/`repeat`/`map`.
+        let yaml = r#"
+name: adapter-parallel-rejected-inside-scope
+steps:
+  - name: outer
+    type: call
+    scope: setup
+scopes:
+  setup:
+    steps:
+      - name: nested_fan
+        type: parallel
+        steps:
+          - name: a
+            type: cmd
+            run: "echo a"
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let err = adapt(&def).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("nested containers are not supported"), "msg={msg}");
+        assert!(msg.contains("nested_fan"), "msg={msg}");
         assert!(msg.contains("parallel"), "msg={msg}");
     }
 

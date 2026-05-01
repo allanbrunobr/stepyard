@@ -43,6 +43,8 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 use stepyard_core::{Event, ScopeContext, StepOutputSnapshot};
+use stepyard_sandbox_orchestrator::{ExecOutput, SandboxError};
+use tokio::task::JoinSet;
 
 use crate::engine::{CmdOutcome, Engine, EngineError, StepOutcome};
 use crate::gate::{evaluate_bool, outcome_for, GateAction, GateError, GateOutcome};
@@ -413,6 +415,7 @@ impl Engine {
             StepKind::Call => self.run_call(step, start).await,
             StepKind::Repeat => self.run_repeat(step, start).await,
             StepKind::Map => self.run_map(step, start).await,
+            StepKind::Parallel => self.run_parallel(step, start).await,
             // Unreachable: `step()` dispatches by kind; this matcher
             // exists only so a future kind landing without wiring
             // produces a clean compile error.
@@ -420,6 +423,285 @@ impl Engine {
                 "run_container_step received non-container kind `{other}`"
             ))),
         }
+    }
+
+    /// Execute a `parallel` — run every sub-step in `scope` concurrently and
+    /// surface the first failure as the container failure (v1 parity:
+    /// `src/steps/parallel.rs`).
+    ///
+    /// PR 6 of Task #31. The adapter synthesises a hidden scope
+    /// (`__parallel_<top_level_index>`) from the YAML `steps:` list, so
+    /// the harness sees parallel as just another scope-bodied container
+    /// — but the runner is bespoke (sub-steps run concurrently, not
+    /// sequentially) so it does not share `run_scope_body`.
+    ///
+    /// Replay model: sub-step completions can land in any order, so we
+    /// can't reuse `ContainerReplayState` (which assumes sequential
+    /// `0..=p` completion). Instead we walk the log directly via
+    /// [`parallel_completed_positions`] and skip every position whose
+    /// `step_completed` is already persisted.
+    ///
+    /// Output synthesis is **position-specific**: the synthetic stdout
+    /// is the LAST sub-step by definition order (position `scope_len-1`),
+    /// not the chronologically last to finish. v1 parity:
+    /// `src/steps/parallel.rs` reads `nested_steps.last()` against the
+    /// outputs map keyed by definition order.
+    async fn run_parallel(
+        &mut self,
+        step: &Step,
+        start: std::time::Instant,
+    ) -> Result<StepOutcome, EngineError> {
+        let container_name = step.name.clone();
+
+        let scope_name = match step.scope.as_deref() {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => {
+                return self
+                    .emit_container_failure(
+                        step,
+                        start,
+                        "parallel step missing `scope:` field".into(),
+                    )
+                    .await;
+            }
+        };
+        let scope_def = match self.workflow().scopes.get(&scope_name).cloned() {
+            Some(s) => s,
+            None => {
+                return self
+                    .emit_container_failure(
+                        step,
+                        start,
+                        format!(
+                            "scope `{scope_name}` referenced by parallel step `{container_name}` not found in workflow"
+                        ),
+                    )
+                    .await;
+            }
+        };
+        let scope_len = scope_def.steps.len() as u32;
+
+        if scope_len == 0 {
+            // Empty parallel: synthesise an empty stdout and succeed.
+            // Mirrors v1's vacuous-Ok behavior (`nested_steps.last()` is
+            // None → fallback to `StepOutput::Empty`).
+            let synthetic = self
+                .synthesise_container_output(step, &scope_def.outputs, &container_name, None, 0)
+                .await;
+            return self.emit_container_success(step, start, synthetic).await;
+        }
+
+        // Container-level cancel check before spawning. Per-task cancel /
+        // signal / timeout `select!` arms land in PRs covering tests 4–6.
+        if self.is_cancelled() {
+            return self.emit_container_cancel(step, start).await;
+        }
+
+        // Replay-skip set: positions whose `step_completed` for this
+        // container at iteration 0 is already in the log. Critical that
+        // we walk the log directly instead of using
+        // `ContainerReplayState` — parallel sub-steps complete in
+        // arbitrary order, so the latter's "last_completed = (iter, p)
+        // means 0..=p complete" invariant doesn't hold here.
+        let already_completed = parallel_completed_positions(self, &container_name).await?;
+
+        // Render commands (and resolve env) for non-completed positions
+        // serially — the render step is cheap and avoids needing the
+        // `&self` borrow inside the spawned futures.
+        let top_outs = top_level_outputs(self).await?;
+        let mut to_run: Vec<(u32, Step, HashMap<String, String>)> = Vec::new();
+        for (pos, sub) in scope_def.steps.iter().enumerate() {
+            let pos = pos as u32;
+            if already_completed.contains(&pos) {
+                continue;
+            }
+            // Defence-in-depth: parallel sub-steps in v2 are restricted
+            // to `cmd` until #80 wires agent/chat into scope bodies. The
+            // adapter enforces the same rule at the YAML boundary; this
+            // catch is for defence against engineered Workflow values.
+            if !matches!(sub.kind, StepKind::Cmd) {
+                return self
+                    .emit_container_failure(
+                        step,
+                        start,
+                        format!(
+                            "parallel sub-step `{}` has unsupported kind `{}` (only `cmd` is supported in v2)",
+                            sub.name, sub.kind
+                        ),
+                    )
+                    .await;
+            }
+            let resolved_env = match self.prepare_step(sub) {
+                Ok(e) => e,
+                Err(e) => {
+                    return self
+                        .emit_container_failure(
+                            step,
+                            start,
+                            format!("env resolve for parallel sub-step `{}`: {e}", sub.name),
+                        )
+                        .await;
+                }
+            };
+            let ctx = RenderContext {
+                steps: &top_outs,
+                target: &self.run_context().target,
+                vars: &self.run_context().vars,
+                scope: None,
+            };
+            let rendered = match render(&sub.command, &ctx) {
+                Ok(s) => s,
+                Err(e) => {
+                    return self
+                        .emit_container_failure(
+                            step,
+                            start,
+                            format!("render parallel sub-step `{}`: {e}", sub.name),
+                        )
+                        .await;
+                }
+            };
+            let mut rendered_step = sub.clone();
+            rendered_step.command = rendered;
+            to_run.push((pos, rendered_step, resolved_env));
+        }
+
+        // Spawn one task per non-completed sub-step. Cloned executor
+        // handles let each task own its own `Arc` so the futures don't
+        // borrow `self`.
+        let session_uuid = *self.session().id().as_uuid();
+        let mut joinset: JoinSet<(u32, String, Result<ExecOutput, SandboxError>)> = JoinSet::new();
+        for (pos, sub_step, env) in to_run {
+            let executor = self.executor();
+            let name = sub_step.name.clone();
+            joinset.spawn(async move {
+                let res = executor.execute_with_env(session_uuid, &sub_step, &env).await;
+                (pos, name, res)
+            });
+        }
+
+        // Drain. First non-zero exit / executor error wins; subsequent
+        // tasks are aborted but we still drain to surface JoinErrors.
+        let mut completions: Vec<(u32, String, ExecOutput)> = Vec::new();
+        let mut error_msg: Option<String> = None;
+        while let Some(joined) = joinset.join_next().await {
+            let (pos, name, res) = match joined {
+                Ok(t) => t,
+                Err(je) if je.is_cancelled() => {
+                    // Aborted via `joinset.abort_all()` after another
+                    // sub-step failed — expected, drop silently.
+                    continue;
+                }
+                Err(je) => {
+                    if error_msg.is_none() {
+                        error_msg = Some(format!("parallel sub-step JoinError: {je}"));
+                        joinset.abort_all();
+                    }
+                    continue;
+                }
+            };
+            match res {
+                Ok(out) => {
+                    if out.exit_code != 0 && error_msg.is_none() {
+                        error_msg = Some(format!(
+                            "parallel sub-step `{name}` failed with exit_code={}",
+                            out.exit_code
+                        ));
+                        joinset.abort_all();
+                    }
+                    completions.push((pos, name, out));
+                }
+                Err(e) => {
+                    if error_msg.is_none() {
+                        error_msg = Some(format!("parallel sub-step `{name}`: {e}"));
+                        joinset.abort_all();
+                    }
+                }
+            }
+        }
+
+        // Emit scoped events for every completion in **definition** order
+        // (position-sorted). v1 parity: a downstream replay walking
+        // `step_completed` events sees deterministic ordering.
+        completions.sort_by_key(|(pos, _, _)| *pos);
+        for (pos, name, out) in &completions {
+            let scope_ctx = ScopeContext {
+                container: container_name.clone(),
+                iteration: 0,
+                position: *pos,
+            };
+            self.emit(Event::StepStarted {
+                step_name: name.clone(),
+                step_type: "cmd".into(),
+                timestamp: Utc::now(),
+                scope_context: Some(scope_ctx.clone()),
+            })
+            .await?;
+            let snap = StepOutputSnapshot {
+                stdout: out.stdout.clone(),
+                stderr: out.stderr.clone(),
+                exit_code: out.exit_code,
+            };
+            if out.exit_code == 0 {
+                self.emit(Event::StepCompleted {
+                    step_name: name.clone(),
+                    step_type: "cmd".into(),
+                    duration_ms: 0,
+                    timestamp: Utc::now(),
+                    input_tokens: None,
+                    output_tokens: None,
+                    cost_usd: None,
+                    sandboxed: true,
+                    output: Some(snap),
+                    scope_context: Some(scope_ctx),
+                    gate_outcome: None,
+                    agent_session_id: None,
+                })
+                .await?;
+            } else {
+                self.emit(Event::StepFailed {
+                    step_name: name.clone(),
+                    step_type: "cmd".into(),
+                    error: format!("exit_code={}", out.exit_code),
+                    duration_ms: 0,
+                    timestamp: Utc::now(),
+                    sandboxed: true,
+                })
+                .await?;
+            }
+        }
+
+        if let Some(err) = error_msg {
+            return self.emit_container_failure(step, start, err).await;
+        }
+
+        // Position-specific output synthesis: pull the last DEFINITION
+        // position's snapshot. Live-run path: in `completions`. Full
+        // replay path (no fresh completions because everything ran in a
+        // prior session): walk the log via `recover_logged_output`.
+        let last_pos = scope_len - 1;
+        let last_output = if let Some((_, _, out)) =
+            completions.iter().find(|(p, _, _)| *p == last_pos)
+        {
+            Some(StepOutputSnapshot {
+                stdout: out.stdout.clone(),
+                stderr: out.stderr.clone(),
+                exit_code: out.exit_code,
+            })
+        } else {
+            recover_logged_output(self, &container_name, 0, last_pos).await?
+        };
+
+        let synthetic = self
+            .synthesise_container_output(
+                step,
+                &scope_def.outputs,
+                &container_name,
+                last_output.as_ref(),
+                0,
+            )
+            .await;
+        self.emit_container_success(step, start, synthetic).await
     }
 
     /// Execute a `call` — run `scope` exactly once. A scope-body gate's
@@ -1443,6 +1725,53 @@ async fn top_level_position_of(engine: &Engine, container_name: &str) -> Result<
         .ok_or_else(|| EngineError::InvalidState(format!(
             "scope runner cannot locate container `{container_name}` in workflow.steps"
         )))
+}
+
+/// Replay-skip set for parallel: every position with a logged
+/// `step_completed` for `(container == container_name, iteration == 0)`.
+///
+/// `ContainerReplayState` is unsuitable for parallel because it assumes
+/// sequential completion (a logged `(iter, p)` implies positions
+/// `0..=p` are all done). Parallel sub-steps complete in arbitrary
+/// order, so we walk the log directly and collect a position set.
+async fn parallel_completed_positions(
+    engine: &Engine,
+    container_name: &str,
+) -> Result<HashSet<u32>, EngineError> {
+    let events = engine
+        .session_handle()
+        .replay()
+        .await
+        .map_err(EngineError::from)?;
+    let mut set: HashSet<u32> = HashSet::new();
+    for evt in events.iter() {
+        let Some(tag) = evt.payload.get("event").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if tag != "step_completed" {
+            continue;
+        }
+        let Some(sc) = evt.payload.get("scope_context").filter(|v| !v.is_null()) else {
+            continue;
+        };
+        let Some(container) = sc.get("container").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if container != container_name {
+            continue;
+        }
+        let Some(iter) = sc.get("iteration").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        if iter as u32 != 0 {
+            continue;
+        }
+        let Some(pos) = sc.get("position").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        set.insert(pos as u32);
+    }
+    Ok(set)
 }
 
 /// Look up the already-logged output snapshot for a scoped
