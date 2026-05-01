@@ -35,6 +35,11 @@ pub enum EngineError {
         expected: &'static str,
     },
 
+    /// A workflow field references a placeholder that is required for the
+    /// current configuration but has not been resolved yet.
+    #[error("placeholder `{key}` unresolved at {found_at}")]
+    PlaceholderUnresolved { key: String, found_at: String },
+
     /// Persistence layer failure (session storage, migrations, etc).
     #[error("persistence error: {0}")]
     Persistence(String),
@@ -163,6 +168,18 @@ mod tests {
             err.to_string(),
             "invalid workflow field at `steps[0].timeout`: got `30`, \
              expected duration string (e.g. 30s, 500ms, 1h30m)"
+        );
+    }
+
+    #[test]
+    fn placeholder_unresolved_display_is_stable() {
+        let err = EngineError::PlaceholderUnresolved {
+            key: "branch_name".into(),
+            found_at: "<workflow-file>".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "placeholder `branch_name` unresolved at <workflow-file>"
         );
     }
 }

@@ -1,3 +1,4 @@
+pub mod branch_strategy;
 mod commands;
 pub mod display;
 mod harness_adapter;

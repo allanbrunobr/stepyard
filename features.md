@@ -87,7 +87,7 @@
 ## Feature 17: Workflow branch_strategy: YAML Schema and CLI Override
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.3] As a workflow author, I want a top-level branch_strategy: YAML field (head|merge_to_head|named_branch) with required sibling branch_name: when named_branch plus a --branch-strategy CLI override, so that I can declare how agent commits land in the repo without hardcoding per-workflow branching logic. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 16
-- Status: pending
+- Status: done
 
 ## Feature 18: Auto-Merge on MergeToHead and Conflict Preservation with MergeAttempted/MergeConflict Events
 - Description: [Epic 4: Parallel Agent Isolation via Git Workspaces, Story 4.4] As a workflow author, I want successful merge_to_head sessions to auto-merge the temp branch with MergeAttempted emitted first, and conflicts to preserve the temp branch + emit MergeConflict with affected files, so that parallel agents converge automatically on clean work and conflicts surface without losing the branch. Source: _bmad-output/sandcastle-features/epics.md

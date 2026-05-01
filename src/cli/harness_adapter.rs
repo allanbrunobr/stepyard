@@ -307,6 +307,9 @@ pub fn adapt(def: &WorkflowDef) -> Result<Workflow, AdapterError> {
     let mut wf = Workflow::new(def.name.clone(), steps);
     wf.env = def.env.clone();
     wf.scopes = scopes;
+    wf.branch_strategy = def.branch_strategy;
+    wf.branch_name = def.branch_name.clone();
+    wf.base_branch = def.base_branch.clone();
     // PR 4 of #31: thread `prompts_dir:` from legacy YAML so template
     // steps resolve the same files v1 did. Absent → harness default
     // (`"prompts"`, per `stepyard_harness::template_exec::DEFAULT_PROMPTS_DIR`).
