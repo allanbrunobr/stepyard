@@ -104,6 +104,17 @@ pub fn step_timeout_fired(step_index: u32, configured_ms: u64) {
     );
 }
 
+/// Render an `IdleTimeoutFired` event in the lowercase, structured form
+/// agreed for Story 5.1.
+pub fn idle_timeout_fired(step_index: u32, idle_threshold_ms: u64) {
+    println!(
+        "  {} step {} idle for {}ms — terminated",
+        "✗".red(),
+        step_index,
+        idle_threshold_ms
+    );
+}
+
 /// Render a `SignalReceived` event (Story 2.3). [`Signal`]'s `Display`
 /// produces the lowercase snake_case wire form (`sigint`, `sigterm`,
 /// `crash_recovery`, or any forward-compat name carried by

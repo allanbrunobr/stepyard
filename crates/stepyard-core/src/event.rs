@@ -131,6 +131,13 @@ pub enum Event {
         step_index: u32,
         configured_ms: u64,
     },
+    /// A step produced no stdout within its configured idle threshold.
+    /// Emitted by the engine before teardown once the sandbox backend
+    /// reports [`TerminationReason::IdleTimeout`](crate::TerminationReason::IdleTimeout).
+    IdleTimeoutFired {
+        step_index: u32,
+        idle_threshold_ms: u64,
+    },
     /// A SIGINT / SIGTERM (or startup reconcile — Story 2.4) interrupted
     /// the engine. Emitted synchronously **before** the sandbox is destroyed
     /// (D5 emit-before-IO). The wire form stays a bare lowercase
@@ -350,6 +357,43 @@ mod tests {
             } => {
                 assert_eq!(step_index, 7);
                 assert_eq!(configured_ms, 5_000);
+            }
+            other => panic!("roundtrip produced unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn idle_timeout_fired_serializes_with_event_tag_and_snake_case_discriminator() {
+        let event = Event::IdleTimeoutFired {
+            step_index: 3,
+            idle_threshold_ms: 30_000,
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "idle_timeout_fired",
+                "step_index": 3,
+                "idle_threshold_ms": 30_000,
+            })
+        );
+    }
+
+    #[test]
+    fn idle_timeout_fired_roundtrips_through_json() {
+        let original = Event::IdleTimeoutFired {
+            step_index: 4,
+            idle_threshold_ms: 60_000,
+        };
+        let s = serde_json::to_string(&original).unwrap();
+        let back: Event = serde_json::from_str(&s).unwrap();
+        match back {
+            Event::IdleTimeoutFired {
+                step_index,
+                idle_threshold_ms,
+            } => {
+                assert_eq!(step_index, 4);
+                assert_eq!(idle_threshold_ms, 60_000);
             }
             other => panic!("roundtrip produced unexpected variant: {other:?}"),
         }

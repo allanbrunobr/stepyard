@@ -390,7 +390,7 @@ impl Workflow {
 
 /// Classify a `serde_path_to_error` failure into the right
 /// [`EngineError`] variant. When the offending path points at a known
-/// `Duration`-shaped field (`timeout`) we synthesise
+/// `Duration`-shaped field (`timeout` / `idle_timeout`) we synthesise
 /// [`EngineError::InvalidWorkflowField`] with the canonical grammar
 /// hint from [`core_duration::EXPECTED`]; everything else stays on
 /// [`EngineError::InvalidWorkflow`] since we can't reliably extract
@@ -416,7 +416,10 @@ fn map_path_error(err: serde_path_to_error::Error<serde_yaml::Error>) -> EngineE
 /// [`EngineError::InvalidWorkflowField`] without listing every
 /// possible parent prefix.
 fn path_points_at_duration_field(path: &str) -> bool {
-    path.ends_with(".timeout") || path == "timeout"
+    path.ends_with(".timeout")
+        || path == "timeout"
+        || path.ends_with(".idle_timeout")
+        || path == "idle_timeout"
 }
 
 /// Pull the offending raw value out of a serde_yaml error message.
@@ -479,6 +482,17 @@ pub struct Step {
         skip_serializing_if = "Option::is_none"
     )]
     pub timeout: Option<Duration>,
+    /// Output-idle timeout. Absent = no idle threshold. The wire format uses
+    /// the same strict duration-string parser as `timeout:` (`30s`, `500ms`,
+    /// `1h30m`) per Round 3's YAML field convention.
+    #[serde(
+        rename = "idle_timeout",
+        default,
+        serialize_with = "core_duration::serialize_optional",
+        deserialize_with = "core_duration::deserialize_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub idle_timeout: Option<Duration>,
     /// Step-level env vars. Highest precedence in the cascade resolver
     /// (Story 3.4) — overrides workflow, defaults, and host `${VAR}`.
     /// `#[serde(default)]` keeps existing YAML without `env:` parseable
@@ -768,6 +782,7 @@ impl Step {
             kind,
             command: String::new(),
             timeout: None,
+            idle_timeout: None,
             env: HashMap::new(),
             condition: None,
             on_pass: None,
@@ -803,6 +818,12 @@ impl Step {
     /// duration strings after Round 3 Story 1.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Builder variant that attaches an output-idle timeout.
+    pub fn with_idle_timeout(mut self, idle_timeout: Duration) -> Self {
+        self.idle_timeout = Some(idle_timeout);
         self
     }
 

@@ -96,6 +96,72 @@ steps:
 }
 
 #[test]
+fn valid_idle_timeout_duration_string_parses_to_duration() {
+    let yaml = r#"
+name: idle
+steps:
+  - name: fine
+    command: "true"
+    idle_timeout: 2m500ms
+"#;
+
+    let wf = Workflow::try_from_yaml(yaml).expect("valid idle_timeout parses");
+    assert_eq!(
+        wf.steps[0].idle_timeout,
+        Some(Duration::from_millis(120_500))
+    );
+}
+
+#[test]
+fn bare_integer_idle_timeout_fails_with_invalid_workflow_field() {
+    let yaml = r#"
+name: bad-idle
+steps:
+  - name: oops
+    command: "true"
+    idle_timeout: 30
+"#;
+
+    let err = Workflow::try_from_yaml(yaml).expect_err("bare integer must be rejected");
+    match err {
+        EngineError::InvalidWorkflowField {
+            path,
+            got,
+            expected,
+        } => {
+            assert!(path.contains("idle_timeout"));
+            assert!(got.contains("30"));
+            assert!(expected.contains("duration string"));
+        }
+        other => panic!("expected InvalidWorkflowField, got {other:?}"),
+    }
+}
+
+#[test]
+fn idle_timeout_roundtrip_normalizes_to_canonical_form() {
+    let yaml = r#"
+name: idle-round
+steps:
+  - name: one
+    command: "true"
+    idle_timeout: 90s
+"#;
+
+    let wf = Workflow::try_from_yaml(yaml).expect("90s parses");
+    assert_eq!(wf.steps[0].idle_timeout, Some(Duration::from_secs(90)));
+
+    let emitted = serde_yaml::to_string(&wf).expect("round-trip serialize");
+    assert!(
+        emitted.contains("1m30s"),
+        "canonical output should carry `1m30s`, got:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("90s"),
+        "canonical output should not keep the original `90s`, got:\n{emitted}"
+    );
+}
+
+#[test]
 fn malformed_duration_string_fails_with_invalid_workflow_field() {
     // The strict grammar rejects uppercase, whitespace, decimals, mixed
     // order. All of them surface through the same error path as the

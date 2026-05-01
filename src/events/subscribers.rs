@@ -276,6 +276,11 @@ impl EventSubscriber for DashboardSubscriber {
                 // Dashboard payload is emitted by the subsequent
                 // StepFailed event, so nothing to accumulate here.
             }
+            Event::IdleTimeoutFired { .. } => {
+                // Story 5.1: handled explicitly for the same reason as
+                // StepTimeoutFired. Dashboard payload remains driven by the
+                // subsequent StepFailed event.
+            }
             Event::SignalReceived { .. } => {
                 // Story 2.3: signals surface as a subsequent StepFailed event
                 // carrying TerminationReason::SignalReceived — so the
