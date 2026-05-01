@@ -49,8 +49,8 @@ pub use executor::StepExecutor;
 pub use gate::{GateAction, GateError, GateOutcome};
 pub use render::{render, RenderContext, RenderError};
 pub use workflow::{
-    AgentPermissions, AgentSessionMode, ChatProvider, ChatTruncation, Scope, Step, StepKind,
-    Workflow,
+    AgentPermissions, AgentSessionMode, BranchStrategyYaml, ChatProvider, ChatTruncation, Scope,
+    Step, StepKind, Workflow,
 };
 
 // Re-export so callers matching on `EngineError::StepFailed.reason` don't

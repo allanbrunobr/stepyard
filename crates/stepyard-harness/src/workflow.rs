@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use stepyard_core::duration as core_duration;
 use stepyard_core::env as core_env;
 use stepyard_core::EngineError;
+use stepyard_sandbox_orchestrator::BranchStrategy;
 
 /// Every step kind the harness can represent.
 ///
@@ -42,6 +43,24 @@ pub enum StepKind {
     Call,
     Template,
     Script,
+}
+
+/// YAML-facing branch strategy. YAML deliberately uses snake_case while the
+/// CLI accepts kebab-case flags and maps them into [`BranchStrategy`] at the
+/// command boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchStrategyYaml {
+    #[default]
+    Head,
+    MergeToHead,
+    NamedBranch,
+}
+
+impl BranchStrategyYaml {
+    fn is_head(&self) -> bool {
+        matches!(self, Self::Head)
+    }
 }
 
 impl StepKind {
@@ -249,6 +268,16 @@ pub struct Workflow {
     /// parity with `src/engine/context.rs:58`). PR 4 of Task #31.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompts_dir: Option<String>,
+    /// Workflow-wide git branch strategy for workspace preparation.
+    #[serde(default, skip_serializing_if = "BranchStrategyYaml::is_head")]
+    pub branch_strategy: BranchStrategyYaml,
+    /// Required when `branch_strategy: named_branch`. A literal
+    /// `{{BRANCH_NAME}}` placeholder is intentionally preserved for Epic 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_name: Option<String>,
+    /// Base branch for `branch_strategy: merge_to_head`; defaults to `main`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
 }
 
 impl Workflow {
@@ -259,6 +288,9 @@ impl Workflow {
             env: HashMap::new(),
             scopes: HashMap::new(),
             prompts_dir: None,
+            branch_strategy: BranchStrategyYaml::Head,
+            branch_name: None,
+            base_branch: None,
         }
     }
 
@@ -297,6 +329,7 @@ impl Workflow {
     /// the `pub` field setters do NOT auto-validate so tests can build
     /// invalid workflows for negative-path coverage.
     pub fn validate(&self) -> Result<(), EngineError> {
+        self.resolve_branch_strategy()?;
         core_env::validate_env_map("env", &self.env)?;
         for (idx, step) in self.steps.iter().enumerate() {
             core_env::validate_env_map(&format!("steps[{idx}].env"), &step.env)?;
@@ -310,6 +343,48 @@ impl Workflow {
             }
         }
         Ok(())
+    }
+
+    pub fn resolve_branch_strategy(&self) -> Result<BranchStrategy, EngineError> {
+        match self.branch_strategy {
+            BranchStrategyYaml::Head => Ok(BranchStrategy::Head),
+            BranchStrategyYaml::MergeToHead => Ok(BranchStrategy::MergeToHead {
+                target: self
+                    .base_branch
+                    .clone()
+                    .unwrap_or_else(|| "main".to_string()),
+            }),
+            BranchStrategyYaml::NamedBranch => {
+                let Some(name) = self.branch_name.as_ref().filter(|s| !s.is_empty()) else {
+                    return Err(EngineError::PlaceholderUnresolved {
+                        key: "branch_name".to_string(),
+                        found_at: "<workflow-file>".to_string(),
+                    });
+                };
+                Ok(BranchStrategy::NamedBranch { name: name.clone() })
+            }
+        }
+    }
+
+    pub fn set_branch_strategy(&mut self, strategy: BranchStrategy) {
+        match strategy {
+            BranchStrategy::Head => {
+                self.branch_strategy = BranchStrategyYaml::Head;
+                self.branch_name = None;
+                self.base_branch = None;
+            }
+            BranchStrategy::MergeToHead { target } => {
+                self.branch_strategy = BranchStrategyYaml::MergeToHead;
+                self.branch_name = None;
+                self.base_branch = Some(target);
+            }
+            BranchStrategy::NamedBranch { name } => {
+                self.branch_strategy = BranchStrategyYaml::NamedBranch;
+                self.branch_name = Some(name);
+                self.base_branch = None;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -793,6 +868,121 @@ scopes:
         assert_eq!(scope.steps.len(), 1);
         assert_eq!(scope.steps[0].name, "inner");
         assert_eq!(scope.steps[0].kind, StepKind::Cmd);
+    }
+
+    #[test]
+    fn branch_strategy_defaults_to_head() {
+        let yaml = r#"
+name: default-branch
+steps:
+  - name: one
+    command: "echo one"
+"#;
+        let wf = Workflow::try_from_yaml(yaml).unwrap();
+        assert_eq!(wf.branch_strategy, BranchStrategyYaml::Head);
+        assert!(matches!(
+            wf.resolve_branch_strategy().unwrap(),
+            BranchStrategy::Head
+        ));
+    }
+
+    #[test]
+    fn branch_strategy_yaml_fixtures_parse() {
+        let head = Workflow::try_from_yaml(
+            r#"
+name: head
+branch_strategy: head
+steps:
+  - name: one
+    command: "echo one"
+"#,
+        )
+        .unwrap();
+        assert_eq!(head.branch_strategy, BranchStrategyYaml::Head);
+
+        let merge = Workflow::try_from_yaml(
+            r#"
+name: merge
+branch_strategy: merge_to_head
+base_branch: release
+steps:
+  - name: one
+    command: "echo one"
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            merge.resolve_branch_strategy().unwrap(),
+            BranchStrategy::MergeToHead { ref target } if target == "release"
+        ));
+
+        let named = Workflow::try_from_yaml(
+            r#"
+name: named
+branch_strategy: named_branch
+branch_name: feat/test
+steps:
+  - name: one
+    command: "echo one"
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            named.resolve_branch_strategy().unwrap(),
+            BranchStrategy::NamedBranch { ref name } if name == "feat/test"
+        ));
+    }
+
+    #[test]
+    fn merge_to_head_defaults_base_branch_to_main() {
+        let yaml = r#"
+name: merge-default
+branch_strategy: merge_to_head
+steps:
+  - name: one
+    command: "echo one"
+"#;
+        let wf = Workflow::try_from_yaml(yaml).unwrap();
+        assert!(matches!(
+            wf.resolve_branch_strategy().unwrap(),
+            BranchStrategy::MergeToHead { ref target } if target == "main"
+        ));
+    }
+
+    #[test]
+    fn named_branch_without_branch_name_fails_fast() {
+        let yaml = r#"
+name: missing-branch-name
+branch_strategy: named_branch
+steps:
+  - name: one
+    command: "echo one"
+"#;
+        let err = Workflow::try_from_yaml(yaml).unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::PlaceholderUnresolved {
+                ref key,
+                ref found_at
+            } if key == "branch_name" && found_at == "<workflow-file>"
+        ));
+    }
+
+    #[test]
+    fn named_branch_placeholder_is_preserved_literal() {
+        let yaml = r#"
+name: placeholder-branch
+branch_strategy: named_branch
+branch_name: "{{BRANCH_NAME}}"
+steps:
+  - name: one
+    command: "echo one"
+"#;
+        let wf = Workflow::try_from_yaml(yaml).unwrap();
+        assert!(matches!(
+            wf.resolve_branch_strategy().unwrap(),
+            BranchStrategy::NamedBranch { ref name } if name == "{{BRANCH_NAME}}"
+        ));
     }
 
     #[test]
