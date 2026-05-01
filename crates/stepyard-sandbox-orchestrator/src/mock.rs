@@ -57,6 +57,7 @@ pub struct MockLifecycle {
     // output — lets tests dictate what the mock reports without running any
     // real command.
     exec_overrides: Arc<Mutex<Vec<(String, ExecOutput)>>>,
+    exec_with_options_error: Arc<Mutex<Option<SandboxError>>>,
 }
 
 impl MockLifecycle {
@@ -77,6 +78,13 @@ impl MockLifecycle {
             .lock()
             .await
             .push((cmd.to_string(), output));
+    }
+
+    /// Make the next `exec_with_options` call return `err` after recording
+    /// the full [`ExecOptions`] payload. Used by harness tests that need to
+    /// drive structured sandbox failures such as idle timeout.
+    pub async fn set_exec_with_options_error(&self, err: SandboxError) {
+        *self.exec_with_options_error.lock().await = Some(err);
     }
 }
 
@@ -149,6 +157,9 @@ impl SandboxLifecycle for MockLifecycle {
             cmd: cmd.to_vec(),
             opts: opts.clone(),
         });
+        if let Some(err) = self.exec_with_options_error.lock().await.take() {
+            return Err(err);
+        }
         Ok(ExecOutput {
             stdout: String::new(),
             stderr: String::new(),

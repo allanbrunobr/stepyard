@@ -107,7 +107,7 @@
 ## Feature 21: Implement DockerLifecycle::exec_with_options Streaming and Engine Wiring for IdleTimeoutFired
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.2] As a workflow author, I want the engine to detect when an agent stops producing stdout for idle_timeout ms, synchronously emit IdleTimeoutFired, then destroy the container and return StepFailed { reason: IdleTimeout }, so that idle agents terminate deterministically without indefinite resource consumption. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 20
-- Status: pending
+- Status: done
 
 ## Feature 22: {{KEY}} Template Substitution Preprocessor with YAML-Safe Output
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.3] As a workflow author, I want a stepyard_core::template::substitute(text, &vars) pre-parse pass that replaces every {{KEY}} with the YAML-encoded value via serde_yaml::to_string running BEFORE serde_yaml::from_str, so that one workflow YAML can be parameterized across N projects without YAML structure injection from raw value substitution. Source: _bmad-output/sandcastle-features/epics.md
