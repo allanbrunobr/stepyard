@@ -148,6 +148,16 @@ pub enum Event {
     /// before the worktree subprocess runs, paired with
     /// [`Self::WorkspacePrepared`] for non-`head` strategies.
     BranchCreated { branch: String, base: String },
+    /// A merge from a session branch back to the target branch is about to
+    /// run. Emitted before the `git merge` subprocess.
+    MergeAttempted { source: String, target: String },
+    /// A merge hit conflicts. The source branch and worktree are preserved
+    /// for manual resolution.
+    MergeConflict {
+        source: String,
+        target: String,
+        files: Vec<String>,
+    },
     /// One turn of an `agent` / `chat` step's conversation was persisted
     /// to the session log. Emitted once per role turn so a post-crash
     /// replay can reconstruct the full `chat_sessions` map from the log
@@ -375,6 +385,42 @@ mod tests {
                 "event": "branch_created",
                 "branch": "feat/test",
                 "base": "HEAD",
+            })
+        );
+    }
+
+    #[test]
+    fn merge_attempted_serializes_with_event_tag_and_payload() {
+        let event = Event::MergeAttempted {
+            source: "stepyard/session-1".into(),
+            target: "main".into(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "merge_attempted",
+                "source": "stepyard/session-1",
+                "target": "main",
+            })
+        );
+    }
+
+    #[test]
+    fn merge_conflict_serializes_with_event_tag_and_payload() {
+        let event = Event::MergeConflict {
+            source: "stepyard/session-1".into(),
+            target: "main".into(),
+            files: vec!["README.md".into()],
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "event": "merge_conflict",
+                "source": "stepyard/session-1",
+                "target": "main",
+                "files": ["README.md"],
             })
         );
     }
