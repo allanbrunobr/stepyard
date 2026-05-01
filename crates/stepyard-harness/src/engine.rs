@@ -293,10 +293,7 @@ impl Engine {
     /// store defaults on the `Engine` instead (per the builder
     /// [`Engine::with_defaults`]) so the call site in [`Engine::step`]
     /// stays a single-line swap. Behavior is identical.
-    pub fn prepare_step(
-        &self,
-        step: &Step,
-    ) -> Result<HashMap<String, String>, EngineError> {
+    pub fn prepare_step(&self, step: &Step) -> Result<HashMap<String, String>, EngineError> {
         resolve_env(&self.defaults, &self.workflow.env, &step.env)
     }
 
@@ -489,9 +486,7 @@ impl Engine {
         // signal/timeout arms. PR 5c of Task #31.
         if matches!(step.kind, StepKind::Chat) {
             let step_index = progress.completed_steps as u32;
-            return self
-                .run_chat_step(step, &progress, start, step_index)
-                .await;
+            return self.run_chat_step(step, &progress, start, step_index).await;
         }
 
         // Kinds other than Cmd/Gate/Call/Repeat/Map/Template/Script/Agent/Chat
@@ -854,11 +849,19 @@ impl Engine {
         // template problem.
         let on_pass = match GateAction::parse(step.on_pass.as_deref()) {
             Ok(a) => a,
-            Err(e) => return self.emit_gate_failure(step, step_type, start, e.to_string()).await,
+            Err(e) => {
+                return self
+                    .emit_gate_failure(step, step_type, start, e.to_string())
+                    .await
+            }
         };
         let on_fail = match GateAction::parse(step.on_fail.as_deref()) {
             Ok(a) => a,
-            Err(e) => return self.emit_gate_failure(step, step_type, start, e.to_string()).await,
+            Err(e) => {
+                return self
+                    .emit_gate_failure(step, step_type, start, e.to_string())
+                    .await
+            }
         };
         let Some(condition) = step.condition.as_deref().filter(|c| !c.trim().is_empty()) else {
             let err = GateError::MissingCondition {
@@ -1270,12 +1273,8 @@ impl Engine {
         let signal_slot = self.config.shutdown_signal.clone();
         let step_timeout = step.timeout;
         let selection = {
-            let exec_fut = crate::agent_exec::run_agent_step(
-                step,
-                &rendered_prompt,
-                &state,
-                &resolved_env,
-            );
+            let exec_fut =
+                crate::agent_exec::run_agent_step(step, &rendered_prompt, &state, &resolved_env);
             let cancel_fut = async {
                 while !cancel_token.is_cancelled() {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1855,7 +1854,7 @@ impl Engine {
         Ok(())
     }
 
-    async fn progress_from_log(&self) -> Result<Progress, EngineError> {
+    pub(crate) async fn progress_from_log(&self) -> Result<Progress, EngineError> {
         let events = self.session.replay().await?;
         compute_progress(&events)
     }
@@ -1931,6 +1930,18 @@ impl Engine {
         &self.run_context
     }
 
+    pub(crate) fn shutdown_signal(&self) -> Arc<OnceLock<String>> {
+        self.config.shutdown_signal.clone()
+    }
+
+    pub(crate) fn chat_client(&self) -> Option<Arc<dyn ChatClient>> {
+        self.config.chat_client.clone()
+    }
+
+    pub(crate) fn shutdown_rx_mut(&mut self) -> &mut broadcast::Receiver<()> {
+        &mut self.shutdown_rx
+    }
+
     /// Session handle — scope replay rescans the log to reconstruct the
     /// per-container iteration counter / last-iteration-completed state
     /// without holding per-container memory on the engine.
@@ -1947,16 +1958,16 @@ impl Engine {
 }
 
 #[derive(Debug)]
-struct Progress {
-    completed_steps: usize,
-    has_failure: bool,
-    last_failed_step: Option<String>,
+pub(crate) struct Progress {
+    pub(crate) completed_steps: usize,
+    pub(crate) has_failure: bool,
+    pub(crate) last_failed_step: Option<String>,
     /// Cross-step outputs map rebuilt from the session log on every
     /// `progress_from_log` call. Gate steps read this to render
     /// `{{ steps.X.stdout }}`; cmd steps don't consume it yet (the
     /// template pass over `command` is deferred to a later PR of #31).
     /// PR 2 of Task #31.
-    outputs: HashMap<String, StepOutputSnapshot>,
+    pub(crate) outputs: HashMap<String, StepOutputSnapshot>,
     /// Captured Claude CLI `session_id` keyed by top-level agent step
     /// name, rebuilt on every scan. The v2 agent executor consumes this
     /// to resolve explicit `resume: <step_name>` / `fork_session:
@@ -1973,7 +1984,7 @@ struct Progress {
     /// rejects duplicates at the adapter boundary, so this branch is
     /// unreachable in practice; the semantics here is just "don't
     /// special-case it".
-    agent_session_ids: HashMap<String, String>,
+    pub(crate) agent_session_ids: HashMap<String, String>,
     /// First-wins top-level agent session_id, mirroring v1's
     /// `SessionManager::capture` semantics. Consumed by the v2 agent
     /// executor for the workflow-level `session: shared` default path:
@@ -1985,7 +1996,7 @@ struct Progress {
     /// `None` on a fresh log and on logs containing only non-agent
     /// completions. Scope-nested completions do not contribute (see
     /// [`Self::agent_session_ids`]).
-    first_agent_session_id: Option<String>,
+    pub(crate) first_agent_session_id: Option<String>,
     /// Chat-session history keyed by the session bucket name (the
     /// `session` field on [`Event::ChatMessageAppended`]). Each bucket
     /// holds the **committed** turns in log-append order, so a post-
@@ -2017,7 +2028,7 @@ struct Progress {
     /// sees the same prior turns the pre-crash run durably
     /// produced. PR 5c of Task #31 activates this field; PR 5b
     /// shipped the staging contract first.
-    chat_sessions: HashMap<String, Vec<ChatMessage>>,
+    pub(crate) chat_sessions: HashMap<String, Vec<ChatMessage>>,
 }
 
 /// Pure scan from a session's persisted events to replay state.
@@ -2119,12 +2130,11 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
                 let snapshot = match evt.payload.get("output") {
                     None | Some(serde_json::Value::Null) => None,
                     Some(raw) => Some(
-                        serde_json::from_value::<StepOutputSnapshot>(raw.clone())
-                            .map_err(|e| {
-                                EngineError::InvalidState(format!(
-                                    "step_completed log entry has malformed `output` payload: {e}"
-                                ))
-                            })?,
+                        serde_json::from_value::<StepOutputSnapshot>(raw.clone()).map_err(|e| {
+                            EngineError::InvalidState(format!(
+                                "step_completed log entry has malformed `output` payload: {e}"
+                            ))
+                        })?,
                     ),
                 };
                 // Same strictness contract as `output`: absent is fine
@@ -2266,7 +2276,7 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
 /// return). The three control-plane branches (cancel/timeout/signal)
 /// do not carry a payload and are identical across step kinds, so
 /// keeping them here removes two otherwise-identical enums.
-enum StepSelection<T> {
+pub(crate) enum StepSelection<T> {
     /// The executor returned a result (either `Ok(output)` or `Err(e)`).
     Done(T),
     /// The cancel token was flipped mid-step.
@@ -2738,10 +2748,7 @@ mod progress_tests {
         // about the completion counter, not chat_sessions population.
         let events = vec![
             evt(1, step_completed("setup", None)),
-            evt(
-                2,
-                chat_message_appended("draft", "shared", "user", "hello"),
-            ),
+            evt(2, chat_message_appended("draft", "shared", "user", "hello")),
             evt(3, step_completed("teardown", None)),
         ];
         let progress = compute_progress(&events).unwrap();
@@ -3030,11 +3037,7 @@ mod send_check {
         lifecycle: Arc<dyn SandboxLifecycle>,
     ) {
         assert_send_future(Engine::resume_existing(
-            config,
-            pool,
-            session_id,
-            workflow,
-            lifecycle,
+            config, pool, session_id, workflow, lifecycle,
         ));
     }
 }

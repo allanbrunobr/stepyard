@@ -23,7 +23,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
-    Engine, HarnessConfig, Scope, Step, StepExecutor, StepOutcome, Workflow,
+    ChatClient, ChatClientError, ChatCompletionRequest, ChatCompletionResponse, Engine,
+    HarnessConfig, Scope, Step, StepExecutor, StepOutcome, Workflow,
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionEvent};
@@ -57,7 +58,8 @@ struct EchoExecutor;
 #[async_trait]
 impl StepExecutor for EchoExecutor {
     async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
-        self.execute_with_env(session_id, step, &HashMap::new()).await
+        self.execute_with_env(session_id, step, &HashMap::new())
+            .await
     }
 
     async fn execute_with_env(
@@ -94,6 +96,42 @@ fn echo_executor() -> Arc<dyn StepExecutor> {
     Arc::new(EchoExecutor)
 }
 
+fn fixture_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_claude.sh")
+}
+
+fn agent_step(name: &str, prompt: &str) -> Step {
+    let mut step = Step::agent(name, prompt);
+    step.agent_command = Some(fixture_path().to_string_lossy().into_owned());
+    step
+}
+
+#[derive(Debug)]
+struct MockChatClient {
+    reply: String,
+}
+
+impl MockChatClient {
+    fn new(reply: impl Into<String>) -> Self {
+        Self {
+            reply: reply.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatClient for MockChatClient {
+    async fn complete(
+        &self,
+        _req: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, ChatClientError> {
+        Ok(ChatCompletionResponse {
+            content: self.reply.clone(),
+            ..Default::default()
+        })
+    }
+}
+
 async fn events(engine: &Engine) -> Vec<SessionEvent> {
     engine.session().replay().await.expect("replay")
 }
@@ -120,7 +158,10 @@ fn workflow_with_parallel(
     scope_name: &str,
     body: Vec<Step>,
 ) -> Workflow {
-    let mut wf = Workflow::new(workflow_name, vec![Step::parallel(parallel_name, scope_name)]);
+    let mut wf = Workflow::new(
+        workflow_name,
+        vec![Step::parallel(parallel_name, scope_name)],
+    );
     wf.scopes.insert(
         scope_name.into(),
         Scope {
@@ -165,10 +206,12 @@ async fn parallel_with_one_cmd_sub_step_completes() {
         let scoped_a_done = evs.iter().any(|e| {
             event_kind(e) == Some("step_completed")
                 && event_step_name(e) == Some("a")
-                && scope_context_of(e)
-                    .is_some_and(|(c, _, _)| c == "p")
+                && scope_context_of(e).is_some_and(|(c, _, _)| c == "p")
         });
-        assert!(scoped_a_done, "scoped sub-step `a` must have completed under container `p`");
+        assert!(
+            scoped_a_done,
+            "scoped sub-step `a` must have completed under container `p`"
+        );
 
         // Top-level container completion must exist (no scope_context) and
         // carry the synthetic stdout from the last (only) sub-step.
@@ -268,6 +311,87 @@ async fn parallel_with_two_cmds_runs_both_and_synthesizes_definition_last() {
         assert!(
             !output.contains("aaa"),
             "synthetic stdout must NOT include earlier sub-step `a`; got {output}"
+        );
+    });
+}
+
+#[tokio::test]
+async fn parallel_with_agent_and_chat_sub_steps_completes() {
+    db_test!(pool, {
+        let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("session");
+
+        let mut chat = Step::chat("ask", "Hello from chat");
+        chat.chat_session = Some("parallel-chat".into());
+        let wf = workflow_with_parallel(
+            "parallel-agent-chat",
+            "p",
+            "__parallel_0",
+            vec![agent_step("plan", "Hello from agent"), chat],
+        );
+        let config = HarnessConfig {
+            chat_client: Some(Arc::new(MockChatClient::new("Chat reply"))),
+            ..Default::default()
+        };
+
+        let mut engine = Engine::with_executor(config, session, wf, lifecycle(), echo_executor());
+        let outcome = engine.resume().await.expect("resume");
+        assert_eq!(outcome, StepOutcome::WorkflowCompleted);
+
+        let evs = events(&engine).await;
+        let mut scoped: Vec<(u64, String, String)> = evs
+            .iter()
+            .filter_map(|e| {
+                if event_kind(e)? != "step_completed" {
+                    return None;
+                }
+                let (container, iter, pos) = scope_context_of(e)?;
+                if container != "p" || iter != 0 {
+                    return None;
+                }
+                Some((
+                    pos,
+                    event_step_name(e)?.to_string(),
+                    e.payload.get("step_type")?.as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        scoped.sort_by_key(|(pos, _, _)| *pos);
+        assert_eq!(
+            scoped,
+            vec![
+                (0, "plan".to_string(), "agent".to_string()),
+                (1, "ask".to_string(), "chat".to_string())
+            ]
+        );
+
+        let chat_turns = evs
+            .iter()
+            .filter(|e| event_kind(e) == Some("chat_message_appended"))
+            .count();
+        assert_eq!(
+            chat_turns, 2,
+            "scoped chat must emit user + assistant turns"
+        );
+
+        let container_done = evs
+            .iter()
+            .find(|e| {
+                event_kind(e) == Some("step_completed")
+                    && event_step_name(e) == Some("p")
+                    && scope_context_of(e).is_none()
+            })
+            .expect("container top-level completion");
+        let output = container_done
+            .payload
+            .get("output")
+            .and_then(|v| v.get("stdout"))
+            .and_then(|v| v.as_str())
+            .expect("synthetic stdout");
+        assert_eq!(
+            output, "Chat reply",
+            "parallel synthetic output must come from definition-last chat sub-step"
         );
     });
 }

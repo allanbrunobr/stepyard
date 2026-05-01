@@ -13,7 +13,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
-    Engine, EngineError, HarnessConfig, Scope, Step, StepExecutor, StepKind, StepOutcome,
+    ChatClient, ChatClientError, ChatCompletionRequest, ChatCompletionResponse, Engine,
+    EngineError, HarnessConfig, Scope, Step, StepExecutor, StepKind, StepOutcome,
     TerminationReason, Workflow,
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
@@ -54,11 +55,7 @@ struct EchoExecutor;
 
 #[async_trait]
 impl StepExecutor for EchoExecutor {
-    async fn execute(
-        &self,
-        session_id: Uuid,
-        step: &Step,
-    ) -> Result<ExecOutput, SandboxError> {
+    async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
         self.execute_with_env(session_id, step, &HashMap::new())
             .await
     }
@@ -97,6 +94,42 @@ fn echo_executor() -> Arc<dyn StepExecutor> {
     Arc::new(EchoExecutor)
 }
 
+fn fixture_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_claude.sh")
+}
+
+fn agent_step(name: &str, prompt: &str) -> Step {
+    let mut step = Step::agent(name, prompt);
+    step.agent_command = Some(fixture_path().to_string_lossy().into_owned());
+    step
+}
+
+#[derive(Debug)]
+struct MockChatClient {
+    reply: String,
+}
+
+impl MockChatClient {
+    fn new(reply: impl Into<String>) -> Self {
+        Self {
+            reply: reply.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatClient for MockChatClient {
+    async fn complete(
+        &self,
+        _req: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, ChatClientError> {
+        Ok(ChatCompletionResponse {
+            content: self.reply.clone(),
+            ..Default::default()
+        })
+    }
+}
+
 /// Slow executor: blocks for 200ms before returning. Used by the
 /// scoped-cmd timeout attribution test — the body cmd's `timeout:`
 /// fires well before this returns, so the `TimedOut` branch of
@@ -107,7 +140,8 @@ struct SleepExecutor;
 #[async_trait]
 impl StepExecutor for SleepExecutor {
     async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
-        self.execute_with_env(session_id, step, &HashMap::new()).await
+        self.execute_with_env(session_id, step, &HashMap::new())
+            .await
     }
 
     async fn execute_with_env(
@@ -190,12 +224,7 @@ async fn call_runs_scope_once_and_output_is_referenceable_afterwards() {
             "call-basic",
             vec![
                 Step::call("greet", "greeter"),
-                gate(
-                    "after",
-                    "{{ steps.greet.stdout }}",
-                    "continue",
-                    "fail",
-                ),
+                gate("after", "{{ steps.greet.stdout }}", "continue", "fail"),
             ],
             "greeter",
             vec![Step::cmd("body", "echo ok")],
@@ -241,6 +270,101 @@ async fn call_runs_scope_once_and_output_is_referenceable_afterwards() {
 }
 
 #[tokio::test]
+async fn call_scope_body_runs_agent_and_chat_steps() {
+    db_test!(pool, {
+        let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
+            .await
+            .expect("session");
+
+        let mut chat = Step::chat("ask", "Hello {{ steps.seed.stdout }}");
+        chat.chat_session = Some("scoped-chat".into());
+        let wf = workflow_with_scope(
+            "call-agent-chat",
+            vec![Step::call("run", "body")],
+            "body",
+            vec![
+                Step::cmd("seed", "echo scoped"),
+                agent_step("plan", "Plan with {{ steps.seed.stdout }}"),
+                chat,
+            ],
+            None,
+        );
+        let config = HarnessConfig {
+            chat_client: Some(Arc::new(MockChatClient::new("Scoped chat reply"))),
+            ..Default::default()
+        };
+
+        let mut engine = Engine::with_executor(config, session, wf, lifecycle(), echo_executor());
+        assert_eq!(
+            engine.resume().await.expect("resume"),
+            StepOutcome::WorkflowCompleted
+        );
+
+        let evs = events(&engine).await;
+        let mut scoped_done: Vec<(u64, String, String)> = evs
+            .iter()
+            .filter_map(|e| {
+                if event_kind(e)? != "step_completed" {
+                    return None;
+                }
+                let (container, iter, pos) = scope_context_of(e)?;
+                if container != "run" || iter != 0 {
+                    return None;
+                }
+                Some((
+                    pos,
+                    event_step_name(e)?.to_string(),
+                    e.payload.get("step_type")?.as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        scoped_done.sort_by_key(|(pos, _, _)| *pos);
+        assert_eq!(
+            scoped_done,
+            vec![
+                (0, "seed".to_string(), "cmd".to_string()),
+                (1, "plan".to_string(), "agent".to_string()),
+                (2, "ask".to_string(), "chat".to_string())
+            ]
+        );
+
+        let chat_turns: Vec<&SessionEvent> = evs
+            .iter()
+            .filter(|e| event_kind(e) == Some("chat_message_appended"))
+            .collect();
+        assert_eq!(
+            chat_turns.len(),
+            2,
+            "scoped chat emits user + assistant turns"
+        );
+        assert_eq!(
+            chat_turns[0]
+                .payload
+                .get("content")
+                .and_then(|v| v.as_str()),
+            Some("Hello scoped\n"),
+            "scoped chat prompt must render against earlier scoped cmd output"
+        );
+
+        let container_done = evs
+            .iter()
+            .find(|e| {
+                event_kind(e) == Some("step_completed")
+                    && event_step_name(e) == Some("run")
+                    && scope_context_of(e).is_none()
+            })
+            .expect("container top-level completion");
+        let output = container_done
+            .payload
+            .get("output")
+            .and_then(|v| v.get("stdout"))
+            .and_then(|v| v.as_str())
+            .expect("synthetic stdout");
+        assert_eq!(output, "Scoped chat reply");
+    });
+}
+
+#[tokio::test]
 async fn repeat_breaks_on_scoped_gate_and_top_level_counter_advances_once() {
     db_test!(pool, {
         let session = Session::new(&pool, Uuid::new_v4(), "edenred".into())
@@ -263,12 +387,7 @@ async fn repeat_breaks_on_scoped_gate_and_top_level_counter_advances_once() {
                 // template resolves via Tera's truthy vocabulary. Easier:
                 // branch on `{{ scope.index >= 1 }}` which Tera renders
                 // as `true`/`false`.
-                gate(
-                    "check",
-                    "{{ scope.index >= 1 }}",
-                    "break",
-                    "continue",
-                ),
+                gate("check", "{{ scope.index >= 1 }}", "break", "continue"),
             ],
             None,
         );
@@ -287,9 +406,7 @@ async fn repeat_breaks_on_scoped_gate_and_top_level_counter_advances_once() {
         // Two iterations executed (index 0 → continue, index 1 → break).
         let scoped_completions: Vec<_> = evs
             .iter()
-            .filter(|e| {
-                event_kind(e) == Some("step_completed") && scope_context_of(e).is_some()
-            })
+            .filter(|e| event_kind(e) == Some("step_completed") && scope_context_of(e).is_some())
             .collect();
         // Iter 0: work + check ; Iter 1: work + check → 4 scoped completions.
         assert_eq!(
@@ -302,9 +419,7 @@ async fn repeat_breaks_on_scoped_gate_and_top_level_counter_advances_once() {
         // Top-level container + trailing `after` both completed.
         let top_level_done_names: Vec<_> = evs
             .iter()
-            .filter(|e| {
-                event_kind(e) == Some("step_completed") && scope_context_of(e).is_none()
-            })
+            .filter(|e| event_kind(e) == Some("step_completed") && scope_context_of(e).is_none())
             .filter_map(event_step_name)
             .collect();
         assert_eq!(top_level_done_names, vec!["loop", "after"]);
@@ -324,12 +439,7 @@ async fn repeat_skip_routes_to_next_iteration_without_failing() {
             vec![Step::repeat("loop", "body")],
             "body",
             vec![
-                gate(
-                    "pre",
-                    "{{ scope.index >= 1 }}",
-                    "continue",
-                    "skip",
-                ),
+                gate("pre", "{{ scope.index >= 1 }}", "continue", "skip"),
                 Step::cmd("work", "echo ran_{{ scope.index }}"),
                 gate("post", "{{ scope.index >= 1 }}", "break", "continue"),
             ],
@@ -553,12 +663,7 @@ async fn map_skip_advances_to_next_item_without_break() {
             vec![Step::map("fan", "body", r#"["x","y","z"]"#)],
             "body",
             vec![
-                gate(
-                    "guard",
-                    "{{ scope.index >= 1 }}",
-                    "continue",
-                    "skip",
-                ),
+                gate("guard", "{{ scope.index >= 1 }}", "continue", "skip"),
                 Step::cmd("emit", "echo {{ scope.value }}"),
             ],
             None,
@@ -640,10 +745,7 @@ async fn map_break_ends_loop_early() {
 /// the "pre-crash" side of a replay test — subsequent phases inject a
 /// prefix of these events into a new session and verify the scope
 /// runner can pick up where the log leaves off.
-async fn capture_full_log(
-    pool: &sqlx::PgPool,
-    wf: Workflow,
-) -> Vec<SessionEvent> {
+async fn capture_full_log(pool: &sqlx::PgPool, wf: Workflow) -> Vec<SessionEvent> {
     let session = Session::new(pool, Uuid::new_v4(), "edenred".into())
         .await
         .expect("session");
@@ -669,10 +771,7 @@ fn cut_after(events: &[SessionEvent], pred: impl Fn(&SessionEvent) -> bool) -> u
         + 1
 }
 
-async fn seed_session_with_prefix(
-    pool: &sqlx::PgPool,
-    prefix: &[SessionEvent],
-) -> Session {
+async fn seed_session_with_prefix(pool: &sqlx::PgPool, prefix: &[SessionEvent]) -> Session {
     let session = Session::new(pool, Uuid::new_v4(), "edenred".into())
         .await
         .expect("session");
@@ -694,10 +793,7 @@ async fn call_replay_picks_up_mid_scope_body() {
             "call-replay",
             vec![Step::call("greet", "body")],
             "body",
-            vec![
-                Step::cmd("a", "echo first"),
-                Step::cmd("b", "echo second"),
-            ],
+            vec![Step::cmd("a", "echo first"), Step::cmd("b", "echo second")],
             None,
         );
 
@@ -728,15 +824,11 @@ async fn call_replay_picks_up_mid_scope_body() {
         // top-level completion. `a` must not reappear.
         let a_completions = evs
             .iter()
-            .filter(|e| {
-                event_kind(e) == Some("step_completed") && event_step_name(e) == Some("a")
-            })
+            .filter(|e| event_kind(e) == Some("step_completed") && event_step_name(e) == Some("a"))
             .count();
         let b_completions = evs
             .iter()
-            .filter(|e| {
-                event_kind(e) == Some("step_completed") && event_step_name(e) == Some("b")
-            })
+            .filter(|e| event_kind(e) == Some("step_completed") && event_step_name(e) == Some("b"))
             .count();
         assert_eq!(a_completions, 1, "a should not re-run");
         assert_eq!(b_completions, 1, "b must run post-replay");
@@ -855,15 +947,9 @@ async fn scoped_completions_do_not_advance_top_level_step_counter() {
         // without the engine short-circuiting past it.
         let wf = workflow_with_scope(
             "counter-isolation",
-            vec![
-                Step::call("group", "body"),
-                Step::cmd("after", "echo post"),
-            ],
+            vec![Step::call("group", "body"), Step::cmd("after", "echo post")],
             "body",
-            vec![
-                Step::cmd("first", "echo 1"),
-                Step::cmd("second", "echo 2"),
-            ],
+            vec![Step::cmd("first", "echo 1"), Step::cmd("second", "echo 2")],
             None,
         );
 
@@ -882,9 +968,7 @@ async fn scoped_completions_do_not_advance_top_level_step_counter() {
         let evs = events(&engine).await;
         let top_level_done_names: Vec<_> = evs
             .iter()
-            .filter(|e| {
-                event_kind(e) == Some("step_completed") && scope_context_of(e).is_none()
-            })
+            .filter(|e| event_kind(e) == Some("step_completed") && scope_context_of(e).is_none())
             .filter_map(event_step_name)
             .collect();
         // Only `group` (container) and `after` count at top level, in
@@ -894,9 +978,7 @@ async fn scoped_completions_do_not_advance_top_level_step_counter() {
         // Sanity: scoped completions exist for the two body steps.
         let scoped_names: Vec<_> = evs
             .iter()
-            .filter(|e| {
-                event_kind(e) == Some("step_completed") && scope_context_of(e).is_some()
-            })
+            .filter(|e| event_kind(e) == Some("step_completed") && scope_context_of(e).is_some())
             .filter_map(event_step_name)
             .collect();
         assert_eq!(scoped_names, vec!["first", "second"]);
@@ -1081,19 +1163,9 @@ async fn repeat_replay_after_gate_skip_advances_iteration() {
             vec![Step::repeat("loop", "body")],
             "body",
             vec![
-                gate(
-                    "pre",
-                    "{{ scope.index >= 1 }}",
-                    "continue",
-                    "skip",
-                ),
+                gate("pre", "{{ scope.index >= 1 }}", "continue", "skip"),
                 Step::cmd("work", "echo ran_{{ scope.index }}"),
-                gate(
-                    "post",
-                    "{{ scope.index >= 1 }}",
-                    "break",
-                    "continue",
-                ),
+                gate("post", "{{ scope.index >= 1 }}", "break", "continue"),
             ],
             None,
         );
@@ -1152,7 +1224,10 @@ async fn repeat_replay_after_gate_skip_advances_iteration() {
                 && event_step_name(e) == Some("loop")
                 && scope_context_of(e).is_none()
         });
-        assert!(container_done, "repeat container must finalise after replay");
+        assert!(
+            container_done,
+            "repeat container must finalise after replay"
+        );
 
         let reloaded = Session::load(&pool, session_id).await.unwrap();
         assert_eq!(reloaded.status(), SessionStatus::Completed);
@@ -1170,12 +1245,7 @@ async fn map_replay_after_gate_skip_advances_item() {
             vec![Step::map("fan", "body", r#"["x","y"]"#)],
             "body",
             vec![
-                gate(
-                    "guard",
-                    "{{ scope.index >= 1 }}",
-                    "continue",
-                    "skip",
-                ),
+                gate("guard", "{{ scope.index >= 1 }}", "continue", "skip"),
                 Step::cmd("emit", "echo {{ scope.value }}"),
             ],
             None,
@@ -1235,8 +1305,8 @@ async fn map_replay_after_gate_skip_advances_item() {
             .and_then(|v| v.get("stdout"))
             .and_then(|v| v.as_str())
             .expect("container output.stdout");
-        let parsed: Vec<String> = serde_json::from_str(container_stdout)
-            .expect("container stdout is a JSON array");
+        let parsed: Vec<String> =
+            serde_json::from_str(container_stdout).expect("container stdout is a JSON array");
         assert_eq!(parsed, vec!["".to_string(), "y\n".to_string()]);
 
         let reloaded = Session::load(&pool, session_id).await.unwrap();
@@ -1256,12 +1326,7 @@ async fn map_replay_after_gate_break_does_not_process_remaining_items() {
             "body",
             vec![
                 Step::cmd("emit", "echo {{ scope.value }}"),
-                gate(
-                    "stop",
-                    "{{ scope.index >= 0 }}",
-                    "break",
-                    "continue",
-                ),
+                gate("stop", "{{ scope.index >= 0 }}", "break", "continue"),
             ],
             None,
         );
@@ -1302,9 +1367,9 @@ async fn map_replay_after_gate_break_does_not_process_remaining_items() {
         assert_eq!(emit_iters, vec![0]);
 
         // Defence-in-depth: no scoped event of any kind lands at iter>=1.
-        let later_scoped = evs.iter().any(|e| {
-            scope_context_of(e).is_some_and(|(_, it, _)| it >= 1)
-        });
+        let later_scoped = evs
+            .iter()
+            .any(|e| scope_context_of(e).is_some_and(|(_, it, _)| it >= 1));
         assert!(
             !later_scoped,
             "no scoped event must land after break on later iterations"
@@ -1316,7 +1381,10 @@ async fn map_replay_after_gate_break_does_not_process_remaining_items() {
                 && event_step_name(e) == Some("fan")
                 && scope_context_of(e).is_none()
         });
-        assert!(container_done, "map container must finalise after break replay");
+        assert!(
+            container_done,
+            "map container must finalise after break replay"
+        );
 
         let reloaded = Session::load(&pool, session_id).await.unwrap();
         assert_eq!(reloaded.status(), SessionStatus::Completed);
