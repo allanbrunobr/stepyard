@@ -21,6 +21,7 @@ stepyard-session = { path = "../stepyard-session" }
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 serde_yaml = "0.9"
+tempfile = "3"
 
 [lints]
 workspace = true
