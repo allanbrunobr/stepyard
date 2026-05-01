@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -40,6 +41,91 @@ fn resolve_workflow_path(path: &Path) -> anyhow::Result<PathBuf> {
     bail!("Workflow file not found: {}\n  Hint: run `stepyard slack start` once to extract built-in workflows to ~/.stepyard/workflows/", path.display())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliVar {
+    key: String,
+    value: String,
+}
+
+fn parse_cli_var(raw: &str) -> Result<CliVar, String> {
+    let Some((key, value)) = raw.split_once('=') else {
+        return Err(format!("--var expects KEY=VALUE, got `{raw}`"));
+    };
+    if !is_valid_template_var_key(key) {
+        return Err(format!(
+            "--var key `{key}` must match [A-Z_][A-Z0-9_]*"
+        ));
+    }
+    Ok(CliVar {
+        key: key.to_string(),
+        value: value.to_string(),
+    })
+}
+
+fn is_valid_template_var_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some('A'..='Z') | Some('_') => {}
+        _ => return false,
+    }
+    chars.all(|c| matches!(c, 'A'..='Z' | '0'..='9' | '_'))
+}
+
+fn resolve_template_vars(
+    defaults: &HashMap<String, String>,
+    cli_vars: &[CliVar],
+) -> HashMap<String, String> {
+    let mut vars = defaults.clone();
+    for cli_var in cli_vars {
+        vars.insert(cli_var.key.clone(), cli_var.value.clone());
+    }
+    vars
+}
+
+fn validate_template_var_map(
+    path_prefix: &str,
+    vars: &HashMap<String, String>,
+) -> Result<(), stepyard_core::EngineError> {
+    let mut keys: Vec<&String> = vars.keys().collect();
+    keys.sort();
+    for key in keys {
+        if !is_valid_template_var_key(key) {
+            return Err(stepyard_core::EngineError::InvalidWorkflowField {
+                path: format!("{path_prefix}.{key}"),
+                got: format!("`{key}`"),
+                expected: "template var key matching [A-Z_][A-Z0-9_]*",
+            });
+        }
+    }
+    Ok(())
+}
+
+fn workflow_vars_as_json(vars: &HashMap<String, String>) -> HashMap<String, serde_json::Value> {
+    vars.iter()
+        .map(|(key, value)| {
+            (
+                key.clone(),
+                serde_json::Value::String(value.clone()),
+            )
+        })
+        .collect()
+}
+
+fn parse_workflow_file_with_vars(
+    path: &Path,
+    vars: &HashMap<String, String>,
+) -> anyhow::Result<crate::workflow::schema::WorkflowDef> {
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("Cannot read {}", path.display()))?;
+    let substituted = stepyard_core::template::substitute_workflow_vars(
+        &content,
+        vars,
+        &path.display().to_string(),
+    )
+    .map_err(stepyard_core::EngineError::from)?;
+    parser::parse_str(&substituted)
+}
+
 #[derive(Args)]
 pub struct ExecuteArgs {
     /// Path to the workflow YAML file
@@ -77,9 +163,14 @@ pub struct ExecuteArgs {
     #[arg(long = "no-sandbox")]
     pub no_sandbox: bool,
 
-    /// Set workflow variable (KEY=VALUE)
-    #[arg(long = "var", value_name = "KEY=VALUE")]
-    pub vars: Vec<String>,
+    /// Set workflow variable (KEY=VALUE). Repeatable; overrides defaults vars.
+    #[arg(
+        long = "var",
+        value_name = "KEY=VALUE",
+        action = clap::ArgAction::Append,
+        value_parser = parse_cli_var
+    )]
+    pub vars: Vec<CliVar>,
 
     /// Override global timeout in seconds
     #[arg(long)]
@@ -182,6 +273,8 @@ pub struct SessionListArgs {
 async fn execute_v2(
     args: ExecuteArgs,
     workflow: crate::workflow::schema::WorkflowDef,
+    project_defaults: crate::config::env_defaults::Defaults,
+    template_vars: HashMap<String, String>,
     sandbox_mode: SandboxMode,
     shutdown_tx: Arc<broadcast::Sender<()>>,
     shutdown_signal: Arc<OnceLock<String>>,
@@ -253,34 +346,24 @@ async fn execute_v2(
         ..HarnessConfig::default()
     };
 
-    // Load `.stepyard/defaults.yaml` env layer. Missing file → empty defaults
-    // (the loader is explicit about that). This is the weakest layer of the
-    // cascade; step.env and workflow.env still override.
-    let defaults_path = Path::new(".stepyard/defaults.yaml");
-    let env_defaults = crate::config::load_env_defaults(defaults_path)
-        .with_context(|| format!("failed to load {}", defaults_path.display()))?;
+    // `.stepyard/defaults.yaml` was loaded before workflow parsing because
+    // its `vars:` field participates in YAML template substitution. Reuse
+    // the same parsed value here for the env cascade.
     // Round 3 Story 3 — defaults boundary check. The loader itself (Story
     // 3.3) accepts any well-formed YAML mapping; the env key/value grammar
     // is enforced here so a bad key in `.stepyard/defaults.yaml` surfaces
     // as `EngineError::InvalidWorkflowField` with the same constants the
     // workflow path uses. Path prefix carries the file location so the
     // operator sees where the offender lives, not just `env.<KEY>`.
-    stepyard_core::env::validate_env_map(".stepyard/defaults.yaml:env", &env_defaults.env)?;
-    let harness_defaults = HarnessDefaults::with_env(env_defaults.env);
+    stepyard_core::env::validate_env_map(".stepyard/defaults.yaml:env", &project_defaults.env)?;
+    let harness_defaults = HarnessDefaults::with_env(project_defaults.env);
 
-    // PR 2 of Task #31: thread the CLI's `--target` and `--var k=v` into the
-    // harness so gate conditions can reference `{{ target }}` / `{{ vars.X }}`.
-    // Mirrors the v1 path's args.target.first() / args.vars parsing (see line
-    // ~353) without reaching into the legacy engine's Context.
-    let mut run_vars = std::collections::HashMap::new();
-    for kv in &args.vars {
-        if let Some((k, v)) = kv.split_once('=') {
-            run_vars.insert(k.to_string(), v.to_string());
-        }
-    }
+    // PR 2 of Task #31 plus Story 5.4: thread the CLI/defaults template vars
+    // into the harness so gate conditions can reference `{{ target }}` /
+    // `{{ vars.X }}` with the same precedence used for YAML substitution.
     let run_context = HarnessRunContext {
         target: args.target.first().cloned().unwrap_or_default(),
-        vars: run_vars,
+        vars: template_vars,
     };
     let planned_workspace_path = workspace_manager.workspace_path(&session_id);
 
@@ -384,7 +467,13 @@ pub async fn execute(
 ) -> anyhow::Result<()> {
     let workflow_path = resolve_workflow_path(&args.workflow)?;
 
-    let mut workflow = parser::parse_file(&workflow_path)
+    let defaults_path = Path::new(".stepyard/defaults.yaml");
+    let project_defaults = crate::config::load_env_defaults(defaults_path)
+        .with_context(|| format!("failed to load {}", defaults_path.display()))?;
+    validate_template_var_map(".stepyard/defaults.yaml:vars", &project_defaults.vars)?;
+    let template_vars = resolve_template_vars(&project_defaults.vars, &args.vars);
+
+    let mut workflow = parse_workflow_file_with_vars(&workflow_path, &template_vars)
         .with_context(|| format!("Failed to parse {}", workflow_path.display()))?;
 
     // Apply centralized defaults (~/.stepyard/defaults.yaml, .stepyard/config.yaml)
@@ -411,12 +500,7 @@ pub async fn execute(
 
     let target = args.target.first().cloned().unwrap_or_default();
 
-    let mut vars = std::collections::HashMap::new();
-    for kv in &args.vars {
-        if let Some((k, v)) = kv.split_once('=') {
-            vars.insert(k.to_string(), serde_json::Value::String(v.to_string()));
-        }
-    }
+    let vars = workflow_vars_as_json(&template_vars);
 
     // Resolve sandbox mode: sandbox is ON by default, --no-sandbox disables it
     let sandbox_flag = args.sandbox && !args.no_sandbox;
@@ -457,7 +541,16 @@ pub async fn execute(
             if args.dry_run {
                 bail!("--engine v2 does not support --dry-run yet (Story 2.4)");
             }
-            return execute_v2(args, workflow, sandbox_mode, shutdown_tx, shutdown_signal).await;
+            return execute_v2(
+                args,
+                workflow,
+                project_defaults,
+                template_vars,
+                sandbox_mode,
+                shutdown_tx,
+                shutdown_signal,
+            )
+            .await;
         }
         other => bail!("unknown --engine value `{other}` (expected `v1` or `v2`)"),
     }
@@ -1377,6 +1470,7 @@ pub async fn session_list(args: SessionListArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn extract_failed_step_parses_correctly() {
@@ -1395,5 +1489,105 @@ mod tests {
         assert_eq!(SessionStatus::Completed.as_db_str(), "completed");
         assert_eq!(SessionStatus::Failed.as_db_str(), "failed");
         assert_eq!(SessionStatus::Cancelled.as_db_str(), "cancelled");
+    }
+
+    #[test]
+    fn parse_cli_var_splits_on_first_equals() {
+        let parsed = parse_cli_var("MSG=hello=world").expect("valid var");
+        assert_eq!(parsed.key, "MSG");
+        assert_eq!(parsed.value, "hello=world");
+    }
+
+    #[test]
+    fn parse_cli_var_rejects_missing_equals() {
+        let err = parse_cli_var("MSG").expect_err("missing equals must fail");
+        assert!(err.contains("KEY=VALUE"), "{err}");
+    }
+
+    #[test]
+    fn parse_cli_var_rejects_non_uppercase_key() {
+        let err = parse_cli_var("bad=value").expect_err("lowercase key must fail");
+        assert!(err.contains("[A-Z_][A-Z0-9_]*"), "{err}");
+    }
+
+    #[test]
+    fn resolve_template_vars_lets_cli_override_defaults() {
+        let defaults = HashMap::from([
+            ("BAZ".to_string(), "from-defaults".to_string()),
+            ("ONLY".to_string(), "x".to_string()),
+        ]);
+        let cli = vec![
+            CliVar {
+                key: "FOO".to_string(),
+                value: "bar".to_string(),
+            },
+            CliVar {
+                key: "BAZ".to_string(),
+                value: "qux".to_string(),
+            },
+        ];
+
+        let resolved = resolve_template_vars(&defaults, &cli);
+        assert_eq!(resolved["FOO"], "bar");
+        assert_eq!(resolved["BAZ"], "qux");
+        assert_eq!(resolved["ONLY"], "x");
+    }
+
+    #[test]
+    fn validate_template_var_map_rejects_bad_defaults_key() {
+        let vars = HashMap::from([("bad".to_string(), "value".to_string())]);
+        let err = validate_template_var_map(".stepyard/defaults.yaml:vars", &vars)
+            .expect_err("bad key must fail");
+        match err {
+            stepyard_core::EngineError::InvalidWorkflowField {
+                path,
+                got,
+                expected,
+            } => {
+                assert_eq!(path, ".stepyard/defaults.yaml:vars.bad");
+                assert!(got.contains("bad"));
+                assert!(expected.contains("[A-Z_]"));
+            }
+            other => panic!("expected InvalidWorkflowField, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_workflow_file_with_vars_substitutes_before_yaml_parse() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp workflow");
+        write!(
+            file,
+            "name: {{{{NAME}}}}\nsteps:\n  - name: hello\n    type: cmd\n    run: echo {{{{MSG}}}}\n"
+        )
+        .expect("write workflow");
+        let vars = HashMap::from([
+            ("NAME".to_string(), "demo".to_string()),
+            ("MSG".to_string(), "hello=world".to_string()),
+        ]);
+
+        let workflow = parse_workflow_file_with_vars(file.path(), &vars).expect("parse workflow");
+        assert_eq!(workflow.name, "demo");
+        assert_eq!(workflow.steps[0].run.as_deref(), Some("echo hello=world"));
+    }
+
+    #[test]
+    fn parse_workflow_file_with_vars_reports_missing_placeholder() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp workflow");
+        write!(
+            file,
+            "name: demo\nsteps:\n  - name: hello\n    type: cmd\n    run: echo {{{{MISSING}}}}\n"
+        )
+        .expect("write workflow");
+
+        let err = parse_workflow_file_with_vars(file.path(), &HashMap::new())
+            .expect_err("missing placeholder must fail");
+        assert!(
+            err.to_string().contains("placeholder {{MISSING}} unresolved at"),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains(":5:15"),
+            "location should point at raw YAML placeholder, got {err}"
+        );
     }
 }

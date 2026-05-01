@@ -7,7 +7,7 @@
 
 use thiserror::Error;
 
-use crate::Signal;
+use crate::{template::TemplateError, Signal};
 
 /// Errors returned by engine-level APIs.
 #[non_exhaustive]
@@ -37,7 +37,7 @@ pub enum EngineError {
 
     /// A workflow field references a placeholder that is required for the
     /// current configuration but has not been resolved yet.
-    #[error("placeholder `{key}` unresolved at {found_at}")]
+    #[error("placeholder {{{{{key}}}}} unresolved at {found_at}")]
     PlaceholderUnresolved { key: String, found_at: String },
 
     /// Persistence layer failure (session storage, migrations, etc).
@@ -68,6 +68,22 @@ pub enum EngineError {
     /// preferable to widening this variant.
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+impl From<TemplateError> for EngineError {
+    fn from(value: TemplateError) -> Self {
+        match value {
+            TemplateError::Unresolved { key, found_at } => {
+                EngineError::PlaceholderUnresolved { key, found_at }
+            }
+            TemplateError::InvalidPlaceholder { token, position } => EngineError::InvalidWorkflow(
+                format!("invalid placeholder `{token}` at byte {position}"),
+            ),
+            TemplateError::YamlEncoding { source } => {
+                EngineError::InvalidWorkflow(format!("yaml placeholder encoding failed: {source}"))
+            }
+        }
+    }
 }
 
 /// How a step terminated — the `reason` carried by [`EngineError::StepFailed`].
@@ -179,7 +195,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "placeholder `branch_name` unresolved at <workflow-file>"
+            "placeholder {{branch_name}} unresolved at <workflow-file>"
         );
     }
 }

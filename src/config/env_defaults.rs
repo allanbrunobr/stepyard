@@ -1,6 +1,6 @@
-//! `.stepyard/defaults.yaml` env loader (Story 3.3, FR10).
+//! `.stepyard/defaults.yaml` env/vars loader (Story 3.3, FR10; Story 5.4, FR19).
 //!
-//! This module owns ONLY the env-vars layer of the project-root defaults
+//! This module owns ONLY the env-vars and template-vars layer of the project-root defaults
 //! file. The existing [`crate::config::defaults`] module handles the
 //! agent/chat/global `WorkflowConfig` layers — different concern, different
 //! type, intentionally kept separate so neither leaks into the other.
@@ -20,15 +20,18 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-/// The parsed shape of `.stepyard/defaults.yaml` for env injection.
+/// The parsed shape of `.stepyard/defaults.yaml` for env injection and
+/// workflow-template variables.
 ///
-/// Only the `env:` field is consumed by this loader. Other fields in the
-/// same file (future layers) are tolerated because `serde_yaml` ignores
+/// Only the `env:` and `vars:` fields are consumed by this loader. Other
+/// fields in the same file are tolerated because `serde_yaml` ignores
 /// unknown keys by default.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct Defaults {
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub vars: HashMap<String, String>,
 }
 
 /// Errors produced by [`load_defaults`]. Uses `thiserror` per NFR21 — this
@@ -95,6 +98,23 @@ mod tests {
         expected.insert("FOO".to_string(), "bar".to_string());
         expected.insert("BAZ".to_string(), "qux".to_string());
         assert_eq!(defaults.env, expected);
+        assert!(defaults.vars.is_empty());
+    }
+
+    #[test]
+    fn load_defaults_yaml_returns_template_vars() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = write_fixture(
+            &dir,
+            "defaults.yaml",
+            "vars:\n  PROJECT: stepyard\n  MSG: hello\n",
+        );
+        let defaults = load_defaults(&path).expect("load");
+        let mut expected = HashMap::new();
+        expected.insert("PROJECT".to_string(), "stepyard".to_string());
+        expected.insert("MSG".to_string(), "hello".to_string());
+        assert_eq!(defaults.vars, expected);
+        assert!(defaults.env.is_empty());
     }
 
     #[test]

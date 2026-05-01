@@ -117,7 +117,7 @@
 ## Feature 23: CLI --var KEY=VAL Flag + Defaults Source + EngineError::PlaceholderUnresolved Validation
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.4] As a workflow author, I want stepyard run --var KEY=VAL as a multi-value CLI flag and .stepyard/defaults.yaml providing value sources for {{KEY}}, with EngineError::PlaceholderUnresolved failing fast at parse time when any placeholder is missing, so that I can run one workflow across N projects with explicit per-run parameters and clear errors on missing keys. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 22
-- Status: pending
+- Status: done
 
 ## Feature 24: Completion-Signal String Detection on Agent Stdout
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.5] As a workflow author, I want a per-workflow completion_signal: "<string>" YAML field that terminates the iteration loop early on substring match in agent stdout with a new CompletionSignaled event, so that agents (e.g., LLM loops) can self-signal task completion without relying solely on subprocess exit codes. Source: _bmad-output/sandcastle-features/epics.md
