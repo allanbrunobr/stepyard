@@ -1,13 +1,16 @@
 //! [`LocalShellLifecycle`] — run commands directly on the host via `sh -c`.
 //!
 //! Used by `stepyard execute --no-sandbox --engine v2`. No Docker daemon, no
-//! container boundaries, no cleanup — each `exec` spawns a fresh `sh -c`
-//! process in the current working directory.
+//! container boundaries — each `exec` spawns a fresh host process in the
+//! current working directory. On Unix, each spawned process becomes its own
+//! process-group leader so dropping an in-flight exec future kills descendants
+//! as well as the direct child.
 //!
 //! Trades the container isolation guarantees for simpler local runs. Callers
 //! that need isolation must pick [`crate::DockerLifecycle`] instead.
 
 use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -26,6 +29,68 @@ impl LocalShellLifecycle {
     pub fn new() -> Self {
         Self
     }
+}
+
+#[derive(Debug)]
+struct LocalProcessGroupKillOnDrop {
+    pgid: i32,
+}
+
+impl LocalProcessGroupKillOnDrop {
+    #[allow(dead_code)] // referenced only on Unix; non-Unix builds keep the helper shape.
+    fn new(pgid: i32) -> Self {
+        Self { pgid }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for LocalProcessGroupKillOnDrop {
+    fn drop(&mut self) {
+        // SAFETY: a negative pid targets the process group whose id is
+        // `abs(pid)`. The pgid comes from a child we spawned after
+        // `process_group(0)`, so it names a group owned by this lifecycle.
+        // ESRCH for an already-reaped group is intentionally ignored.
+        unsafe {
+            libc::kill(-self.pgid, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+impl Drop for LocalProcessGroupKillOnDrop {
+    fn drop(&mut self) {}
+}
+
+async fn run_local_command(mut command: Command) -> Result<ExecOutput, SandboxError> {
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    #[cfg(unix)]
+    command.process_group(0);
+
+    let child = command
+        .spawn()
+        .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+
+    #[cfg(unix)]
+    let _kill_group = {
+        let pid = child
+            .id()
+            .expect("Child::id is Some between spawn and wait") as i32;
+        LocalProcessGroupKillOnDrop::new(pid)
+    };
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+    Ok(ExecOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code().unwrap_or(-1),
+    })
 }
 
 #[async_trait]
@@ -49,17 +114,9 @@ impl SandboxLifecycle for LocalShellLifecycle {
         if cmd.is_empty() {
             return Err(SandboxError::ExecFailed("empty argv".into()));
         }
-        let output = Command::new(&cmd[0])
-            .args(&cmd[1..])
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
-        Ok(ExecOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-        })
+        let mut command = Command::new(&cmd[0]);
+        command.args(&cmd[1..]);
+        run_local_command(command).await
     }
 
     async fn exec_with_env(
@@ -71,18 +128,9 @@ impl SandboxLifecycle for LocalShellLifecycle {
         if cmd.is_empty() {
             return Err(SandboxError::ExecFailed("empty argv".into()));
         }
-        let output = Command::new(&cmd[0])
-            .args(&cmd[1..])
-            .envs(env)
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
-        Ok(ExecOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-        })
+        let mut command = Command::new(&cmd[0]);
+        command.args(&cmd[1..]).envs(env);
+        run_local_command(command).await
     }
 }
 
@@ -91,19 +139,11 @@ struct LocalShellExec;
 #[async_trait]
 impl ExecFn for LocalShellExec {
     async fn exec(&self, _id: SandboxId, cmd: &str) -> Result<ExecOutput, SandboxError> {
-        // `kill_on_drop` so a cancelled harness future stops the subprocess
-        // instead of letting it run to completion in the background.
-        let output = Command::new("sh")
-            .args(["-c", cmd])
-            .kill_on_drop(true)
-            .output()
-            .await
-            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
-        Ok(ExecOutput {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
-        })
+        // `run_local_command` adds `kill_on_drop` plus Unix process-group
+        // cleanup so a cancelled harness future stops descendants too.
+        let mut command = Command::new("sh");
+        command.args(["-c", cmd]);
+        run_local_command(command).await
     }
 }
 
@@ -142,5 +182,59 @@ mod tests {
         let output = lifecycle.exec_with_env(&id, &cmd, &env).await.unwrap();
         assert_eq!(output.exit_code, 0);
         assert_eq!(output.stdout, "propagated");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_exec_future_kills_descendant_process() {
+        let lifecycle = LocalShellLifecycle::new();
+        let sandbox = lifecycle.create(Uuid::new_v4()).await.unwrap();
+        let pidfile =
+            std::env::temp_dir().join(format!("stepyard-local-shell-{}.pid", Uuid::new_v4()));
+        let script = format!("sleep 60 & echo $! > {}; wait", pidfile.display());
+
+        let handle = {
+            let sandbox = sandbox.clone();
+            tokio::spawn(async move { sandbox.exec(&script).await })
+        };
+
+        let started = std::time::Instant::now();
+        let descendant_pid: i32 = loop {
+            if let Ok(s) = std::fs::read_to_string(&pidfile) {
+                if let Ok(pid) = s.trim().parse() {
+                    break pid;
+                }
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "descendant pidfile never appeared",
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        };
+
+        handle.abort();
+        let _ = handle.await;
+
+        let started = std::time::Instant::now();
+        loop {
+            // SAFETY: `kill(pid, 0)` is a liveness probe and does not send a
+            // signal. The pid came from a child spawned by this test.
+            let rc = unsafe { libc::kill(descendant_pid, 0) };
+            if rc == -1 {
+                let err = std::io::Error::last_os_error();
+                assert_eq!(
+                    err.raw_os_error(),
+                    Some(libc::ESRCH),
+                    "kill(pid, 0) failed with unexpected errno: {err}",
+                );
+                let _ = std::fs::remove_file(&pidfile);
+                return;
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "descendant pid {descendant_pid} still alive after dropping exec future",
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
     }
 }
