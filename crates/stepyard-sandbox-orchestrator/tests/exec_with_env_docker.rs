@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use stepyard_sandbox_orchestrator::{DockerLifecycle, SandboxId, SandboxLifecycle};
+use stepyard_sandbox_orchestrator::{
+    DockerLifecycle, ExecOptions, SandboxError, SandboxId, SandboxLifecycle,
+};
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -211,6 +213,38 @@ async fn exec_with_env_deterministic_ordering_on_repeated_calls() {
 
     assert_eq!(first.stdout, "A=one\nB=two\nC=three\n");
     assert_eq!(first.stdout, second.stdout);
+
+    teardown(&name).await;
+}
+
+#[tokio::test]
+async fn exec_with_options_idle_timeout_returns_typed_error() {
+    if !docker_enabled() {
+        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
+        return;
+    }
+
+    let session_id = Uuid::new_v4();
+    let name = create_alpine_container(session_id).await;
+    let lifecycle = DockerLifecycle::default();
+    let id = SandboxId::from(session_id);
+    let cmd = vec!["sleep".to_string(), "300".to_string()];
+    let opts = ExecOptions {
+        env: HashMap::new(),
+        idle_timeout: Some(Duration::from_secs(2)),
+    };
+
+    let err = timeout(
+        Duration::from_secs(8),
+        lifecycle.exec_with_options(&id, &cmd, &opts),
+    )
+    .await
+    .expect("exec_with_options should return before outer timeout")
+    .expect_err("sleep without stdout should idle-time out");
+    match err {
+        SandboxError::IdleTimeout { idle_ms } => assert_eq!(idle_ms, 2_000),
+        other => panic!("expected IdleTimeout, got {other:?}"),
+    }
 
     teardown(&name).await;
 }

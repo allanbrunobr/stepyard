@@ -126,6 +126,9 @@ enum BodyStep {
     /// Per-step wall-clock timeout. `StepTimeoutFired` + `StepFailed` +
     /// sandbox destroy + `finalise_fail` already emitted.
     TimedOut { configured_ms: u64 },
+    /// Output-idle timeout. `IdleTimeoutFired` + `StepFailed` + sandbox
+    /// destroy + `finalise_fail` already emitted.
+    IdleTimedOut { idle_ms: u64 },
 }
 
 enum ParallelTask {
@@ -203,6 +206,9 @@ enum IterationOutcome {
     Signal(String),
     TimedOut {
         configured_ms: u64,
+    },
+    IdleTimedOut {
+        idle_ms: u64,
     },
 }
 
@@ -1203,6 +1209,12 @@ impl Engine {
                         reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
                     });
                 }
+                IterationOutcome::IdleTimedOut { idle_ms } => {
+                    return Err(EngineError::StepFailed {
+                        step_index: container_top_level_index,
+                        reason: stepyard_core::TerminationReason::IdleTimeout { idle_ms },
+                    });
+                }
             }
         } else {
             // Resume path: iteration 0 is already terminal — either
@@ -1399,6 +1411,12 @@ impl Engine {
                         reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
                     });
                 }
+                IterationOutcome::IdleTimedOut { idle_ms } => {
+                    return Err(EngineError::StepFailed {
+                        step_index: container_top_level_index,
+                        reason: stepyard_core::TerminationReason::IdleTimeout { idle_ms },
+                    });
+                }
             }
         }
 
@@ -1548,6 +1566,12 @@ impl Engine {
                         reason: stepyard_core::TerminationReason::StepTimeout { configured_ms },
                     });
                 }
+                IterationOutcome::IdleTimedOut { idle_ms } => {
+                    return Err(EngineError::StepFailed {
+                        step_index: container_top_level_index,
+                        reason: stepyard_core::TerminationReason::IdleTimeout { idle_ms },
+                    });
+                }
             }
         }
 
@@ -1692,6 +1716,9 @@ impl Engine {
                 BodyStep::Signal(s) => return Ok(IterationOutcome::Signal(s)),
                 BodyStep::TimedOut { configured_ms } => {
                     return Ok(IterationOutcome::TimedOut { configured_ms })
+                }
+                BodyStep::IdleTimedOut { idle_ms } => {
+                    return Ok(IterationOutcome::IdleTimedOut { idle_ms })
                 }
             }
         }
@@ -1848,6 +1875,7 @@ impl Engine {
             CmdOutcome::Cancelled => Ok(BodyStep::Cancelled),
             CmdOutcome::Signal(s) => Ok(BodyStep::Signal(s)),
             CmdOutcome::TimedOut { configured_ms } => Ok(BodyStep::TimedOut { configured_ms }),
+            CmdOutcome::IdleTimedOut { idle_ms } => Ok(BodyStep::IdleTimedOut { idle_ms }),
         }
     }
 

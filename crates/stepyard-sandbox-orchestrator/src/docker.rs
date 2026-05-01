@@ -6,16 +6,18 @@
 //! refactor unifies sandbox config with lifecycle.
 
 use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::docker_errors::{classify_create_stderr, classify_destroy_stderr};
 use crate::sandbox::{ExecFn, ExecOutput, Sandbox, SandboxError, SandboxId, SandboxState};
-use crate::SandboxLifecycle;
+use crate::{ExecOptions, SandboxLifecycle};
 
 /// Tunables for [`DockerLifecycle`]. Override the image to use something
 /// other than `alpine:latest` for the container body, and set a custom
@@ -210,6 +212,103 @@ impl SandboxLifecycle for DockerLifecycle {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
+
+    async fn exec_with_options(
+        &self,
+        id: &SandboxId,
+        cmd: &[String],
+        opts: &ExecOptions,
+    ) -> Result<ExecOutput, SandboxError> {
+        let Some(idle_timeout) = opts.idle_timeout else {
+            return self.exec_with_env(id, cmd, &opts.env).await;
+        };
+
+        // Argv-only enforcement point (D7, NFR-argv). Mirrors
+        // `exec_with_env` but keeps stdout/stderr piped so the idle timer can
+        // reset on each stdout read.
+        let name = Self::container_name(*id.as_uuid());
+        let mut pairs: Vec<(&String, &String)> = opts.env.iter().collect();
+        pairs.sort_by(|a, b| a.0.cmp(b.0));
+        let env_values: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+
+        let mut command = Command::new("docker");
+        command.arg("exec");
+        for value in &env_values {
+            command.arg("--env").arg(value);
+        }
+        command.arg(&name);
+        command.args(cmd);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        // NFR-secrets: log keys only, never values.
+        let keys: Vec<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
+        tracing::debug!(
+            container = %name,
+            env_keys = ?keys,
+            idle_timeout_ms = idle_timeout.as_millis() as u64,
+            "docker exec_with_options"
+        );
+
+        let mut child = command
+            .spawn()
+            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| SandboxError::ExecFailed("docker exec stdout pipe missing".into()))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| SandboxError::ExecFailed("docker exec stderr pipe missing".into()))?;
+
+        let stderr_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            stderr.read_to_end(&mut buf).await.map(|_| buf)
+        });
+
+        let mut stdout = BufReader::new(stdout);
+        let mut stdout_buf = Vec::new();
+        loop {
+            match tokio::time::timeout(
+                idle_timeout,
+                stdout.read_until(b'\n', &mut stdout_buf),
+            )
+            .await
+            {
+                Ok(Ok(0)) => break,
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    let _ = stderr_task.await;
+                    return Err(SandboxError::ExecFailed(e.to_string()));
+                }
+                Err(_) => {
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    let _ = stderr_task.await;
+                    return Err(SandboxError::IdleTimeout {
+                        idle_ms: idle_timeout.as_millis() as u64,
+                    });
+                }
+            }
+        }
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+        let stderr_buf = stderr_task
+            .await
+            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?
+            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+
+        Ok(ExecOutput {
+            stdout: String::from_utf8_lossy(&stdout_buf).to_string(),
+            stderr: String::from_utf8_lossy(&stderr_buf).to_string(),
+            exit_code: status.code().unwrap_or(-1),
         })
     }
 
