@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # CI runners are ephemeral and the workflow expects the conventional target
+  # path inside the checkout. Local cargo uses /tmp via .cargo/config.toml to
+  # keep developer workspaces from growing huge target/ directories.
+  CARGO_TARGET_DIR: target
 
 concurrency:
   group: check-${{ github.ref }}
