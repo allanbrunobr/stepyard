@@ -43,16 +43,20 @@ jobs:
           docker-images: false
           swap-storage: false
 
-      - name: Cache Cargo registry and build
+      # Cache dependency sources only. Caching `target/` made the cache archive
+      # grow past 5 GiB and repeatedly left PR checks stuck in the restore
+      # step before the build even started. The runner has enough disk after
+      # the cleanup step to build from scratch; keeping `target/` out of the
+      # cache makes CI slower but predictable.
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-v2-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-check-
+            ${{ runner.os }}-cargo-registry-v2-
 
       - name: Build workspace
         run: cargo build --workspace --all-targets
