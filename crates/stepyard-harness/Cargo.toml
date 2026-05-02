@@ -8,7 +8,7 @@ authors = ["Allan Bruno"]
 
 [dependencies]
 stepyard-core = { path = "../stepyard-core" }
-stepyard-session = { path = "../stepyard-session" }
+stepyard-session = { path = "../stepyard-session", default-features = false }
 stepyard-sandbox-orchestrator = { path = "../stepyard-sandbox-orchestrator" }
 
 tokio = { version = "1", features = ["full"] }
@@ -26,9 +26,8 @@ serde_path_to_error = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 tracing = "0.1"
-sqlx = { version = "0.8", features = [
+sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-native-tls",
-    "postgres",
     "uuid",
     "chrono",
 ] }
@@ -48,7 +47,7 @@ libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util", "rt-multi-thread", "macros"] }
-sqlx = { version = "0.8", features = [
+sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-native-tls",
     "postgres",
     "uuid",
@@ -62,6 +61,11 @@ sqlx = { version = "0.8", features = [
 assert_cmd = "2"
 tempfile = "3"
 wait-timeout = "0.2"
+
+[features]
+default = ["postgres"]
+postgres = ["stepyard-session/postgres", "sqlx/postgres"]
+sqlite = ["stepyard-session/sqlite", "sqlx/sqlite"]
 
 [lints]
 workspace = true
