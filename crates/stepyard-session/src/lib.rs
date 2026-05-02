@@ -47,11 +47,31 @@
 //! "Data Model" (Invariante 2, Invariante 11). Schema is in
 //! `crates/minion-session/migrations/`.
 
-mod session;
-mod store;
+#[cfg(all(feature = "postgres", feature = "sqlite"))]
+compile_error!("stepyard-session: features `postgres` and `sqlite` are mutually exclusive");
 
+#[cfg(not(any(feature = "postgres", feature = "sqlite")))]
+compile_error!("stepyard-session: enable exactly one backend feature: `postgres` or `sqlite`");
+
+mod factory;
+pub mod file_log_mirror;
+#[cfg(feature = "postgres")]
+mod pg_store;
+mod session;
+#[cfg(feature = "sqlite")]
+mod sqlite_store;
+mod store;
+mod store_trait;
+
+pub use factory::{build_store_from_env, build_store_with_file_logs, StoreConfig};
+pub use file_log_mirror::{FileLogConfig, FileLogMirror};
+#[cfg(feature = "postgres")]
+pub use pg_store::PgEventStore;
 pub use session::{Session, SessionStatus};
+#[cfg(feature = "sqlite")]
+pub use sqlite_store::SqliteEventStore;
 pub use store::{SessionError, SessionEvent, SessionId};
+pub use store_trait::{DynEventStore, EventStore, SessionMeta};
 
 /// Runs the embedded SQL migrations against the given pool.
 ///
@@ -60,8 +80,18 @@ pub use store::{SessionError, SessionEvent, SessionId};
 ///
 /// # Errors
 /// Returns [`SessionError::Database`] if the migration runner fails.
+#[cfg(feature = "postgres")]
 pub async fn migrate(pool: &sqlx::PgPool) -> Result<(), SessionError> {
     sqlx::migrate!("./migrations")
+        .run(pool)
+        .await
+        .map_err(|e| SessionError::Database(sqlx::Error::Migrate(Box::new(e))))?;
+    Ok(())
+}
+
+#[cfg(feature = "sqlite")]
+pub async fn migrate_sqlite(pool: &sqlx::SqlitePool) -> Result<(), SessionError> {
+    sqlx::migrate!("./migrations-sqlite")
         .run(pool)
         .await
         .map_err(|e| SessionError::Database(sqlx::Error::Migrate(Box::new(e))))?;

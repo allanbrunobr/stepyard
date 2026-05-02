@@ -24,9 +24,7 @@ use crate::Signal;
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     /// A workflow execution started. Always the first event in a session.
-    WorkflowStarted {
-        timestamp: DateTime<Utc>,
-    },
+    WorkflowStarted { timestamp: DateTime<Utc> },
     /// A workflow execution finished successfully (status = `completed`).
     WorkflowCompleted {
         duration_ms: u64,
@@ -127,10 +125,7 @@ pub enum Event {
     /// timeout-fired family carries only the structural facts the engine
     /// knows at firing time; wall-clock attribution happens via the
     /// surrounding `StepFailed` event (Story 1.4) or the session log.
-    StepTimeoutFired {
-        step_index: u32,
-        configured_ms: u64,
-    },
+    StepTimeoutFired { step_index: u32, configured_ms: u64 },
     /// A step produced no stdout within its configured idle threshold.
     /// Emitted by the engine before teardown once the sandbox backend
     /// reports [`TerminationReason::IdleTimeout`](crate::TerminationReason::IdleTimeout).
@@ -144,9 +139,7 @@ pub enum Event {
     /// snake_case string (`"sigint"` / `"sigterm"` / `"crash_recovery"`)
     /// so existing session logs round-trip; [`Signal`] adds typed access
     /// without changing those bytes.
-    SignalReceived {
-        signal: Signal,
-    },
+    SignalReceived { signal: Signal },
     /// A workflow-level completion signal matched an agent stdout line.
     ///
     /// The payload records the configured signal literal, not the matched
@@ -195,6 +188,14 @@ pub enum Event {
         session: String,
         role: ChatRole,
         content: String,
+        timestamp: DateTime<Utc>,
+    },
+    /// The session file-log mirror failed to append to
+    /// `.stepyard/logs/<session_id>.jsonl`. Emitted once per affected
+    /// session to make degradation visible without failing the originating
+    /// workflow step.
+    FileLogWriteFailed {
+        error_class: String,
         timestamp: DateTime<Utc>,
     },
 }
@@ -606,6 +607,27 @@ mod tests {
                 assert_eq!(session, "review");
                 assert_eq!(role, ChatRole::Assistant);
                 assert_eq!(content, "ack");
+                assert_eq!(timestamp, chat_timestamp());
+            }
+            other => panic!("roundtrip produced unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_log_write_failed_roundtrips_through_json() {
+        let original = Event::FileLogWriteFailed {
+            error_class: "permission_denied".into(),
+            timestamp: chat_timestamp(),
+        };
+        let s = serde_json::to_string(&original).unwrap();
+        assert!(s.contains(r#""event":"file_log_write_failed""#), "got: {s}");
+        let back: Event = serde_json::from_str(&s).unwrap();
+        match back {
+            Event::FileLogWriteFailed {
+                error_class,
+                timestamp,
+            } => {
+                assert_eq!(error_class, "permission_denied");
                 assert_eq!(timestamp, chat_timestamp());
             }
             other => panic!("roundtrip produced unexpected variant: {other:?}"),

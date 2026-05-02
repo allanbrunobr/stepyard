@@ -70,7 +70,19 @@ name = "stepyard"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["postgres"]
+postgres = [
+    "sqlx/postgres",
+    "stepyard-session/postgres",
+    "stepyard-harness/postgres",
+    "stepyard-sandbox-orchestrator/postgres",
+]
+sqlite = [
+    "sqlx/sqlite",
+    "stepyard-session/sqlite",
+    "stepyard-harness/sqlite",
+    "stepyard-sandbox-orchestrator/sqlite",
+]
 slack = ["axum", "hmac", "sha2", "hex"]
 
 [dependencies]
@@ -130,17 +142,16 @@ libloading = "0.8"
 stepyard-core = { path = "crates/stepyard-core" }
 
 # Session persistence (Epic 1 Story 1.4)
-stepyard-session = { path = "crates/stepyard-session" }
+stepyard-session = { path = "crates/stepyard-session", default-features = false }
 
 # Sandbox lifecycle abstraction (Epic 2 Story 2.2)
-stepyard-sandbox-orchestrator = { path = "crates/stepyard-sandbox-orchestrator" }
+stepyard-sandbox-orchestrator = { path = "crates/stepyard-sandbox-orchestrator", default-features = false }
 
 # Harness step/resume/cancel loop (Epic 2 Story 2.3)
-stepyard-harness = { path = "crates/stepyard-harness" }
+stepyard-harness = { path = "crates/stepyard-harness", default-features = false }
 
-sqlx = { version = "0.8", features = [
+sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-native-tls",
-    "postgres",
     "uuid",
     "chrono",
 ] }

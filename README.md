@@ -126,6 +126,7 @@ API keys **never enter the container**. Stepyard runs a host-side reverse proxy 
 ```bash
 stepyard execute code-review.yaml -- 42        # Sandbox ON (default)
 stepyard execute code-review.yaml --no-sandbox -- 42  # Run locally instead
+stepyard execute code-review.yaml --sandbox-runtime local -- 42  # Force LocalShell runtime
 ```
 
 ## Security Model
@@ -168,6 +169,8 @@ stepyard execute <workflow.yaml> [flags] -- [target]
 | Flag | Description |
 |------|-------------|
 | `--no-sandbox` | Disable Docker sandbox (sandbox is ON by default) |
+| `--sandbox-runtime docker\|local` | Select Docker or LocalShell runtime. Overrides `STEPYARD_SANDBOX`. |
+| `--no-file-logs` | Disable `.stepyard/logs/<session_id>.jsonl` mirroring for this run. |
 | `--verbose` | Show all step outputs |
 | `--quiet` | Only show errors |
 | `--json` | Output result as JSON |
@@ -184,6 +187,10 @@ stepyard execute fix-test.yaml -- 7                  # Fix failing tests for PR 
 stepyard execute security-audit.yaml                 # Security audit (no target needed)
 stepyard execute workflow.yaml --var mode=strict -- 5 # Pass variables
 ```
+
+By default, each appended session event is also mirrored to
+`.stepyard/logs/<session_id>.jsonl` for tail-friendly local inspection.
+Set `STEPYARD_NO_FILE_LOGS=1` or pass `--no-file-logs` to disable the mirror.
 
 ### `stepyard init`
 
