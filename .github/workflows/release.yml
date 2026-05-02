@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Release packaging copies binaries from target/<triple>/release below.
+  # Keep that path stable even though local cargo defaults to /tmp via
+  # .cargo/config.toml.
+  CARGO_TARGET_DIR: target
   BINARY_NAME: minion
 
 jobs:

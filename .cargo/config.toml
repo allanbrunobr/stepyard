@@ -7,5 +7,13 @@
 #
 # Keep this alias aligned with xtask's subcommand set; see the match arm in
 # `xtask/src/main.rs::main`.
+[build]
+# Keep local Rust build artifacts out of the repository checkout. This repo's
+# workspace `target/` has exceeded 100 GiB during repeated full-workspace
+# gates, which is not acceptable on a developer machine. CI/release workflows
+# set `CARGO_TARGET_DIR=target` explicitly because their runners are ephemeral
+# and some packaging steps expect the conventional relative path.
+target-dir = "/tmp/stepyard-minion-engine-target"
+
 [alias]
 xtask = "run --quiet --package xtask --"
