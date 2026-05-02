@@ -826,7 +826,7 @@ impl Engine {
                             first_agent_session_id: first_agent_session_id.as_deref(),
                         };
                         let fut = async {
-                            crate::agent_exec::run_agent_step(&step, &prompt, &state, &env)
+                            crate::agent_exec::run_agent_step(&step, &prompt, &state, &env, None)
                                 .await
                                 .map(ParallelTaskOutput::Agent)
                                 .map_err(|e| e.to_string())
@@ -1933,6 +1933,7 @@ impl Engine {
                 &rendered_prompt,
                 &state,
                 &resolved_env,
+                None,
             );
             let cancel_fut = async {
                 while !cancel_token.is_cancelled() {

@@ -123,6 +123,16 @@ pub fn signal_received(signal: &Signal) {
     println!("  {} signal received: {}", "✗".red(), signal);
 }
 
+/// Render a workflow-level completion-signal match.
+pub fn completion_signaled(step_index: u32, signal: &str) {
+    println!(
+        "  {} completion signal matched at step {}: {}",
+        "✓".green(),
+        step_index,
+        signal
+    );
+}
+
 pub fn workspace_prepared(path: &str, strategy: &str) {
     println!(
         "  {} workspace prepared at {path} (strategy: {strategy})",

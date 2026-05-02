@@ -288,6 +288,12 @@ impl EventSubscriber for DashboardSubscriber {
                 // explicitly so `non_exhaustive_omitted_patterns` fires if a
                 // future variant is forgotten.
             }
+            Event::CompletionSignaled { .. } => {
+                // Story 5.5: the completion signal is an audit/control-flow
+                // event. The dashboard's terminal payload is still emitted by
+                // WorkflowCompleted, and the matched stdout line is
+                // deliberately not carried here.
+            }
             Event::WorkspacePrepared { .. } => {
                 // Workspace lifecycle is an audit-log concern for now. The
                 // dashboard's step payload is still driven by StepStarted /
