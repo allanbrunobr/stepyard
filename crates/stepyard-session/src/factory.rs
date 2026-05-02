@@ -18,17 +18,9 @@ use crate::sqlite_store::SqliteEventStore;
 use crate::store::SessionError;
 use crate::store_trait::DynEventStore;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StoreConfig {
     pub file_logs: FileLogConfig,
-}
-
-impl Default for StoreConfig {
-    fn default() -> Self {
-        Self {
-            file_logs: FileLogConfig::default(),
-        }
-    }
 }
 
 pub async fn build_store_from_env() -> Result<DynEventStore, SessionError> {
