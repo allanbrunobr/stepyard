@@ -4,12 +4,13 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::{bail, Context};
+#[cfg(feature = "postgres")]
 use chrono::{DateTime, Utc};
 use clap::{Args, ValueEnum};
 use tokio::sync::broadcast;
 
 use crate::engine::{Engine, EngineOptions};
-use crate::sandbox::{self, SandboxMode};
+use crate::sandbox::{self, SandboxMode, SandboxRuntime};
 use crate::workflow::parser;
 use crate::workflow::validator;
 
@@ -17,7 +18,9 @@ use super::branch_strategy::{apply_cli_override, parse_cli_branch_strategy, CliB
 use super::display;
 use super::harness_adapter;
 use super::init_templates;
-use super::session_setup::{connect_pg, open_session, open_session_with_pool};
+#[cfg(feature = "postgres")]
+use super::session_setup::connect_pg;
+use super::session_setup::{build_store, open_session_with_store};
 
 /// Resolve a workflow path with fallback chain:
 /// 1. As-is (if the file exists — developer running from repo or absolute path)
@@ -52,9 +55,7 @@ fn parse_cli_var(raw: &str) -> Result<CliVar, String> {
         return Err(format!("--var expects KEY=VALUE, got `{raw}`"));
     };
     if !is_valid_template_var_key(key) {
-        return Err(format!(
-            "--var key `{key}` must match [A-Z_][A-Z0-9_]*"
-        ));
+        return Err(format!("--var key `{key}` must match [A-Z_][A-Z0-9_]*"));
     }
     Ok(CliVar {
         key: key.to_string(),
@@ -102,12 +103,7 @@ fn validate_template_var_map(
 
 fn workflow_vars_as_json(vars: &HashMap<String, String>) -> HashMap<String, serde_json::Value> {
     vars.iter()
-        .map(|(key, value)| {
-            (
-                key.clone(),
-                serde_json::Value::String(value.clone()),
-            )
-        })
+        .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
         .collect()
 }
 
@@ -162,6 +158,14 @@ pub struct ExecuteArgs {
     /// Disable Docker sandbox — run directly on your machine
     #[arg(long = "no-sandbox")]
     pub no_sandbox: bool,
+
+    /// Select the sandbox runtime. Overrides STEPYARD_SANDBOX.
+    #[arg(long = "sandbox-runtime", value_enum, value_name = "docker|local")]
+    pub sandbox_runtime: Option<SandboxRuntime>,
+
+    /// Disable `.stepyard/logs/<session_id>.jsonl` file mirroring.
+    #[arg(long = "no-file-logs")]
+    pub no_file_logs: bool,
 
     /// Set workflow variable (KEY=VALUE). Repeatable; overrides defaults vars.
     #[arg(
@@ -276,6 +280,7 @@ async fn execute_v2(
     project_defaults: crate::config::env_defaults::Defaults,
     template_vars: HashMap<String, String>,
     sandbox_mode: SandboxMode,
+    sandbox_runtime: SandboxRuntime,
     shutdown_tx: Arc<broadcast::Sender<()>>,
     shutdown_signal: Arc<OnceLock<String>>,
 ) -> anyhow::Result<()> {
@@ -299,7 +304,6 @@ async fn execute_v2(
     harness_workflow.validate()?;
     let branch_strategy = harness_workflow.resolve_branch_strategy()?;
 
-    let pool = connect_pg(args.json).await?;
     let repo_root = std::env::current_dir().context("failed to resolve current directory")?;
     let workspace_manager = Arc::new(GitWorktreeManager::new(
         repo_root.clone(),
@@ -307,30 +311,38 @@ async fn execute_v2(
         24,
     ));
 
-    // D8 startup reconcile (Story 2.4). Runs unconditionally before any
-    // engine is constructed. Uses a dedicated `DockerLifecycle::default()`
-    // because the runtime lifecycle may be `LocalShellLifecycle` when
-    // `--no-sandbox` is set, and Phase 2 still has to scan real Docker.
-    // When Docker is unreachable, the reconcile logs a warning via
-    // `tracing::warn!` and Phase 1 (PG session cleanup) still runs.
-    let reconcile_lifecycle = DockerLifecycle::default();
-    let reconcile_report: crate::startup::ReconcileReport =
-        crate::startup::reconcile_with_workspace_manager(
-            &pool,
-            &reconcile_lifecycle,
-            Some(workspace_manager.as_ref()),
-        )
+    #[cfg(feature = "postgres")]
+    {
+        let pool = connect_pg(args.json).await?;
+
+        // D8 startup reconcile (Story 2.4). Runs unconditionally before any
+        // engine is constructed. Uses a dedicated `DockerLifecycle::default()`
+        // because the runtime lifecycle may be `LocalShellLifecycle` when
+        // `--no-sandbox` is set, and Phase 2 still has to scan real Docker.
+        // When Docker is unreachable, the reconcile logs a warning via
+        // `tracing::warn!` and Phase 1 (PG session cleanup) still runs.
+        let reconcile_lifecycle = DockerLifecycle::default();
+        let reconcile_report: crate::startup::ReconcileReport =
+            crate::startup::reconcile_with_workspace_manager(
+                &pool,
+                &reconcile_lifecycle,
+                Some(workspace_manager.as_ref()),
+            )
             .await
             .context("startup reconcile failed")?;
-    tracing::debug!(?reconcile_report, "startup reconcile report");
+        tracing::debug!(?reconcile_report, "startup reconcile report");
+    }
 
-    let session = open_session_with_pool(&pool, &workflow.name).await?;
+    let store = build_store(args.no_file_logs).await?;
+    let session = open_session_with_store(store, &workflow.name).await?;
     let session_id = session.id();
 
-    let lifecycle: Arc<dyn SandboxLifecycle> = if sandbox_mode == SandboxMode::Disabled {
-        Arc::new(LocalShellLifecycle::new())
-    } else {
-        Arc::new(DockerLifecycle::default())
+    let lifecycle: Arc<dyn SandboxLifecycle> = match sandbox_runtime {
+        SandboxRuntime::Local => Arc::new(LocalShellLifecycle::new()),
+        SandboxRuntime::Docker if sandbox_mode == SandboxMode::Disabled => {
+            Arc::new(LocalShellLifecycle::new())
+        }
+        SandboxRuntime::Docker => Arc::new(DockerLifecycle::default()),
     };
 
     let config = HarnessConfig {
@@ -414,8 +426,7 @@ async fn execute_v2(
                 unreachable!("pending never resolves — install_handlers wins main's select!")
             }
             Err(e) => {
-                return Err(anyhow::Error::new(e)
-                    .context("stepyard_harness::Engine::step failed"));
+                return Err(anyhow::Error::new(e).context("stepyard_harness::Engine::step failed"));
             }
         };
 
@@ -509,9 +520,18 @@ pub async fn execute(
         &workflow.config.global,
         &workflow.config.agent,
     );
+    let sandbox_runtime = sandbox::resolve_runtime(args.sandbox_runtime, args.no_sandbox)
+        .context("failed to resolve sandbox runtime")?;
+    if args.no_sandbox && args.sandbox_runtime.is_some() {
+        tracing::warn!("--no-sandbox was also provided; --sandbox-runtime takes precedence");
+    }
+    let effective_sandbox_mode = match sandbox_runtime {
+        SandboxRuntime::Local => SandboxMode::Disabled,
+        SandboxRuntime::Docker => sandbox_mode,
+    };
 
     // Validate Docker availability if sandbox mode is active
-    if sandbox_mode != SandboxMode::Disabled {
+    if effective_sandbox_mode != SandboxMode::Disabled {
         if let Err(e) = sandbox::require_docker().await {
             if args.json {
                 let json = serde_json::json!({
@@ -528,7 +548,12 @@ pub async fn execute(
     // ── Pre-flight: validate required environment variables ──────────────
     // Give clear, actionable errors before starting the workflow so that
     // developers installing via `cargo install` know exactly what's missing.
-    validate_environment(&workflow, sandbox_mode != SandboxMode::Disabled, args.json).await?;
+    validate_environment(
+        &workflow,
+        effective_sandbox_mode != SandboxMode::Disabled,
+        args.json,
+    )
+    .await?;
 
     // ── Engine selection (Epic 2 Story 2.4) ──────────────────────────────
     // `--engine v2` drives the workflow through `stepyard_harness::Engine` — a
@@ -546,7 +571,8 @@ pub async fn execute(
                 workflow,
                 project_defaults,
                 template_vars,
-                sandbox_mode,
+                effective_sandbox_mode,
+                sandbox_runtime,
                 shutdown_tx,
                 shutdown_signal,
             )
@@ -562,7 +588,8 @@ pub async fn execute(
     let session = if args.dry_run {
         None
     } else {
-        Some(open_session(&workflow.name, args.json).await?)
+        let store = build_store(args.no_file_logs).await?;
+        Some(open_session_with_store(store, &workflow.name).await?)
     };
 
     let opts = EngineOptions {
@@ -571,7 +598,7 @@ pub async fn execute(
         json: args.json,
         dry_run: args.dry_run,
         resume_from: args.resume.clone(),
-        sandbox_mode,
+        sandbox_mode: effective_sandbox_mode,
         repo: args.repo.clone(),
         session,
     };
@@ -885,7 +912,10 @@ async fn collect_missing_prompts(
     let mut checked = std::collections::HashSet::new();
 
     // Collect all prompt function names referenced in a text string
-    fn extract_prompt_names(text: &str, checked: &mut std::collections::HashSet<String>) -> Vec<String> {
+    fn extract_prompt_names(
+        text: &str,
+        checked: &mut std::collections::HashSet<String>,
+    ) -> Vec<String> {
         let mut names = Vec::new();
         let mut s = text;
         while let Some(pos) = s.find("prompts.") {
@@ -925,12 +955,8 @@ async fn collect_missing_prompts(
 
     // Resolve each prompt name asynchronously
     for fn_name in &all_names {
-        match crate::prompts::resolver::PromptResolver::resolve(
-            fn_name,
-            stack_info,
-            prompts_dir,
-        )
-        .await
+        match crate::prompts::resolver::PromptResolver::resolve(fn_name, stack_info, prompts_dir)
+            .await
         {
             Ok(_) => {}
             Err(e) => missing.push(format!("{e}")),
@@ -1308,19 +1334,22 @@ pub async fn config_path() -> anyhow::Result<()> {
 }
 
 pub async fn config_init() -> anyhow::Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let dir = home.join(".stepyard");
     let path = dir.join("defaults.yaml");
 
     if path.exists() {
-        println!("\x1b[33m!\x1b[0m Config file already exists: {}", path.display());
+        println!(
+            "\x1b[33m!\x1b[0m Config file already exists: {}",
+            path.display()
+        );
         println!("  Edit it directly: {}", path.display());
         println!("  Or delete it and run `stepyard config init` again.");
         return Ok(());
     }
 
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("Failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("Failed to create {}", dir.display()))?;
 
     std::fs::write(&path, USER_DEFAULTS_TEMPLATE)
         .with_context(|| format!("Failed to write {}", path.display()))?;
@@ -1339,7 +1368,8 @@ pub async fn config_init() -> anyhow::Result<()> {
 }
 
 pub async fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let dir = home.join(".stepyard");
     let path = dir.join("defaults.yaml");
 
@@ -1398,12 +1428,19 @@ pub async fn config_set(key: &str, value: &str) -> anyhow::Result<()> {
     let yaml_str = serde_yaml::to_string(&config)?;
     std::fs::write(&path, &yaml_str)?;
 
-    println!("\x1b[32m✓\x1b[0m Set {}.{} = {} in {}", section, field, value, path.display());
+    println!(
+        "\x1b[32m✓\x1b[0m Set {}.{} = {} in {}",
+        section,
+        field,
+        value,
+        path.display()
+    );
 
     Ok(())
 }
 
 /// One row of `session list` output: `(id, status, started_at, ended_at)`.
+#[cfg(feature = "postgres")]
 type SessionListRow = (uuid::Uuid, String, DateTime<Utc>, Option<DateTime<Utc>>);
 
 /// `stepyard session list --status <status> [--since <duration>]` — FR24 / Story 2.5.
@@ -1415,6 +1452,7 @@ type SessionListRow = (uuid::Uuid, String, DateTime<Utc>, Option<DateTime<Utc>>)
 /// `--since` binds a `"<seconds> seconds"` string cast to `INTERVAL` via the
 /// `$2::INTERVAL` cast — PG's `INTERVAL` parser accepts that literal form
 /// (`humantime` emits `24h`, which PG would reject).
+#[cfg(feature = "postgres")]
 pub async fn session_list(args: SessionListArgs) -> anyhow::Result<()> {
     // session-log-as-truth (D1): query PG, never an in-memory registry
     let pool = connect_pg(false).await?;
@@ -1455,16 +1493,15 @@ pub async fn session_list(args: SessionListArgs) -> anyhow::Result<()> {
         let ended = ended_at
             .map(|t| t.to_rfc3339())
             .unwrap_or_else(|| "-".to_string());
-        println!(
-            "{}  {}  {}  {}",
-            id,
-            status,
-            started_at.to_rfc3339(),
-            ended,
-        );
+        println!("{}  {}  {}  {}", id, status, started_at.to_rfc3339(), ended,);
     }
 
     Ok(())
+}
+
+#[cfg(not(feature = "postgres"))]
+pub async fn session_list(_args: SessionListArgs) -> anyhow::Result<()> {
+    bail!("`stepyard session list` currently requires the postgres build profile")
 }
 
 #[cfg(test)]
@@ -1582,7 +1619,8 @@ mod tests {
         let err = parse_workflow_file_with_vars(file.path(), &HashMap::new())
             .expect_err("missing placeholder must fail");
         assert!(
-            err.to_string().contains("placeholder {{MISSING}} unresolved at"),
+            err.to_string()
+                .contains("placeholder {{MISSING}} unresolved at"),
             "{err}"
         );
         assert!(

@@ -1,15 +1,21 @@
 //! The [`Session`] handle — the public entry point for the append-only log.
 //!
 //! A `Session` is cheaply cloneable (`Clone + Send + Sync`) because internally
-//! it holds a [`sqlx::PgPool`] and a few UUIDs. Cloning does not open a new
-//! connection.
+//! it holds an [`EventStore`](crate::EventStore) handle and a few UUIDs.
+//! Cloning does not open a new connection.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "postgres")]
 use sqlx::PgPool;
+#[cfg(feature = "postgres")]
+use std::sync::Arc;
 use uuid::Uuid;
 
+#[cfg(feature = "postgres")]
+use crate::pg_store::PgEventStore;
 use crate::store::{SessionError, SessionEvent, SessionId};
+use crate::store_trait::{DynEventStore, SessionMeta};
 
 /// Lifecycle status of a session, matching the DB enum domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,7 +38,7 @@ impl SessionStatus {
         }
     }
 
-    fn from_db(s: &str) -> Result<Self, SessionError> {
+    pub(crate) fn from_db(s: &str) -> Result<Self, SessionError> {
         match s {
             "running" => Ok(Self::Running),
             "completed" => Ok(Self::Completed),
@@ -56,7 +62,7 @@ pub struct Session {
     status: SessionStatus,
     started_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
-    pool: PgPool,
+    store: DynEventStore,
 }
 
 impl std::fmt::Debug for Session {
@@ -72,42 +78,32 @@ impl std::fmt::Debug for Session {
     }
 }
 
-/// sqlx row tuple for `SELECT id, workflow_id, tenant_id, status, started_at, ended_at FROM sessions`.
-type SessionRow = (Uuid, Uuid, String, String, DateTime<Utc>, Option<DateTime<Utc>>);
-
 impl Session {
     /// Create a new session row in the database with status `running`.
     ///
     /// # Errors
     /// Returns [`SessionError::Database`] on SQL failure.
+    #[cfg(feature = "postgres")]
     pub async fn new(
         pool: &PgPool,
         workflow_id: Uuid,
         tenant_id: String,
     ) -> Result<Self, SessionError> {
-        let id = SessionId::new();
-        let row: (Uuid, String, chrono::DateTime<Utc>) = sqlx::query_as(
-            r#"
-            INSERT INTO sessions (id, workflow_id, tenant_id, status, started_at)
-            VALUES ($1, $2, $3, 'running', NOW())
-            RETURNING id, status, started_at
-            "#,
-        )
-        .bind(id.as_uuid())
-        .bind(workflow_id)
-        .bind(&tenant_id)
-        .fetch_one(pool)
-        .await?;
-
-        Ok(Self {
-            id: SessionId(row.0),
+        Self::new_with_store(
+            Arc::new(PgEventStore::new(pool.clone())),
             workflow_id,
             tenant_id,
-            status: SessionStatus::from_db(&row.1)?,
-            started_at: row.2,
-            ended_at: None,
-            pool: pool.clone(),
-        })
+        )
+        .await
+    }
+
+    pub async fn new_with_store(
+        store: DynEventStore,
+        workflow_id: Uuid,
+        tenant_id: String,
+    ) -> Result<Self, SessionError> {
+        let meta = store.create_session(workflow_id, tenant_id).await?;
+        Ok(Self::from_meta(store, meta))
     }
 
     /// Load an existing session by its [`SessionId`].
@@ -115,31 +111,29 @@ impl Session {
     /// # Errors
     /// - [`SessionError::NotFound`] if no row matches.
     /// - [`SessionError::Database`] on SQL failure.
+    #[cfg(feature = "postgres")]
     pub async fn load(pool: &PgPool, id: SessionId) -> Result<Self, SessionError> {
-        let row: Option<SessionRow> =
-            sqlx::query_as(
-                r#"
-                SELECT id, workflow_id, tenant_id, status, started_at, ended_at
-                FROM sessions
-                WHERE id = $1
-                "#,
-            )
-            .bind(id.as_uuid())
-            .fetch_optional(pool)
-            .await?;
+        Self::load_with_store(Arc::new(PgEventStore::new(pool.clone())), id).await
+    }
 
-        let (id_db, workflow_id, tenant_id, status, started_at, ended_at) =
-            row.ok_or(SessionError::NotFound(id))?;
+    pub async fn load_with_store(
+        store: DynEventStore,
+        id: SessionId,
+    ) -> Result<Self, SessionError> {
+        let meta = store.load_session_meta(id).await?;
+        Ok(Self::from_meta(store, meta))
+    }
 
-        Ok(Self {
-            id: SessionId(id_db),
-            workflow_id,
-            tenant_id,
-            status: SessionStatus::from_db(&status)?,
-            started_at,
-            ended_at,
-            pool: pool.clone(),
-        })
+    fn from_meta(store: DynEventStore, meta: SessionMeta) -> Self {
+        Self {
+            id: meta.id,
+            workflow_id: meta.workflow_id,
+            tenant_id: meta.tenant_id,
+            status: meta.status,
+            started_at: meta.started_at,
+            ended_at: meta.ended_at,
+            store,
+        }
     }
 
     /// Append an event payload to the session log.
@@ -153,46 +147,8 @@ impl Session {
     ///   violation if the advisory lock is bypassed).
     /// - [`SessionError::Payload`] if `payload` is not valid JSON (cannot fail
     ///   for [`serde_json::Value`] input).
-    pub async fn append(
-        &self,
-        payload: serde_json::Value,
-    ) -> Result<SessionEvent, SessionError> {
-        let mut tx = self.pool.begin().await?;
-
-        // Serialize appends per session so `seq` stays monotonic without gaps.
-        // The lock key must fit in a BIGINT; `hashtextextended` returns i64.
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-            .bind(self.id.as_uuid().to_string())
-            .execute(&mut *tx)
-            .await?;
-
-        let row: (Uuid, Uuid, i64, DateTime<Utc>, serde_json::Value) = sqlx::query_as(
-            r#"
-            INSERT INTO session_events (id, session_id, seq, created_at, payload)
-            VALUES (
-                gen_random_uuid(),
-                $1,
-                COALESCE((SELECT MAX(seq) FROM session_events WHERE session_id = $1), 0) + 1,
-                NOW(),
-                $2
-            )
-            RETURNING id, session_id, seq, created_at, payload
-            "#,
-        )
-        .bind(self.id.as_uuid())
-        .bind(&payload)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-
-        Ok(SessionEvent {
-            id: row.0,
-            session_id: SessionId(row.1),
-            seq: row.2,
-            created_at: row.3,
-            payload: row.4,
-        })
+    pub async fn append(&self, payload: serde_json::Value) -> Result<SessionEvent, SessionError> {
+        self.store.append(self.id, payload).await
     }
 
     /// Replay all events for this session in `seq` order.
@@ -204,28 +160,7 @@ impl Session {
     /// # Errors
     /// [`SessionError::Database`] on SQL failure.
     pub async fn replay(&self) -> Result<Vec<SessionEvent>, SessionError> {
-        let rows: Vec<(Uuid, Uuid, i64, DateTime<Utc>, serde_json::Value)> = sqlx::query_as(
-            r#"
-            SELECT id, session_id, seq, created_at, payload
-            FROM session_events
-            WHERE session_id = $1
-            ORDER BY seq ASC
-            "#,
-        )
-        .bind(self.id.as_uuid())
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|(id, session_id, seq, created_at, payload)| SessionEvent {
-                id,
-                session_id: SessionId(session_id),
-                seq,
-                created_at,
-                payload,
-            })
-            .collect())
+        self.store.replay(self.id).await
     }
 
     /// The [`SessionId`] of this session.
@@ -290,21 +225,8 @@ impl Session {
         // Only transition from `running`; re-calling with the same terminal
         // state is a no-op so the engine can safely call complete/fail
         // idempotently on cleanup paths.
-        let row: Option<(String, Option<DateTime<Utc>>)> = sqlx::query_as(
-            r#"
-            UPDATE sessions
-            SET status = $2, ended_at = NOW()
-            WHERE id = $1 AND status = 'running'
-            RETURNING status, ended_at
-            "#,
-        )
-        .bind(self.id.as_uuid())
-        .bind(status.as_str())
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some((db_status, ended_at)) = row {
-            self.status = SessionStatus::from_db(&db_status)?;
+        if let Some((db_status, ended_at)) = self.store.finish_session(self.id, status).await? {
+            self.status = db_status;
             self.ended_at = ended_at;
         }
         // If row is None, session already terminal (or missing). Leave

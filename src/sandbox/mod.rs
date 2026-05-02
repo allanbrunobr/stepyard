@@ -18,9 +18,11 @@
 pub mod config;
 pub mod docker;
 pub mod proxy;
+pub mod runtime;
 
 pub use config::{SandboxConfig, SandboxMode};
 pub use docker::DockerSandbox;
+pub use runtime::{resolve_runtime, SandboxRuntime};
 
 use anyhow::{bail, Result};
 

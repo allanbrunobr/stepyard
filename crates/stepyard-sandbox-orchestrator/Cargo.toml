@@ -16,12 +16,17 @@ thiserror = "2"
 tracing = "0.1"
 libc = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
-stepyard-session = { path = "../stepyard-session" }
+stepyard-session = { path = "../stepyard-session", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 serde_yaml = "0.9"
 tempfile = "3"
+
+[features]
+default = ["postgres"]
+postgres = ["stepyard-session/postgres"]
+sqlite = ["stepyard-session/sqlite"]
 
 [lints]
 workspace = true
