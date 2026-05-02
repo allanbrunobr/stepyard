@@ -274,6 +274,7 @@ pub struct SessionListArgs {
 /// Returns `Ok(())` on successful completion. Non-zero exit codes for failed
 /// or cancelled workflows are produced by `std::process::exit` so the caller
 /// does not need to translate them.
+#[allow(clippy::too_many_arguments)]
 async fn execute_v2(
     args: ExecuteArgs,
     workflow: crate::workflow::schema::WorkflowDef,
