@@ -278,6 +278,10 @@ pub struct Workflow {
     /// Base branch for `branch_strategy: merge_to_head`; defaults to `main`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// Workflow-level agent stdout substring that ends the run as successful
+    /// when matched. Plain string, no regex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_signal: Option<String>,
 }
 
 impl Workflow {
@@ -291,6 +295,7 @@ impl Workflow {
             branch_strategy: BranchStrategyYaml::Head,
             branch_name: None,
             base_branch: None,
+            completion_signal: None,
         }
     }
 
@@ -854,6 +859,21 @@ steps:
         assert_eq!(wf.steps.len(), 2);
         assert_eq!(wf.steps[0].kind, StepKind::Cmd);
         assert!(wf.scopes.is_empty());
+        assert_eq!(wf.completion_signal, None);
+    }
+
+    #[test]
+    fn completion_signal_yaml_field_parses_as_plain_string() {
+        let yaml = r#"
+name: signal
+completion_signal: TASK_COMPLETE
+steps:
+  - name: ask
+    kind: agent
+    prompt: "finish"
+"#;
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(wf.completion_signal.as_deref(), Some("TASK_COMPLETE"));
     }
 
     #[test]

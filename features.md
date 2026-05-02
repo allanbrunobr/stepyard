@@ -122,7 +122,7 @@
 ## Feature 24: Completion-Signal String Detection on Agent Stdout
 - Description: [Epic 5: Workflow Templating & Idle Detection, Story 5.5] As a workflow author, I want a per-workflow completion_signal: "<string>" YAML field that terminates the iteration loop early on substring match in agent stdout with a new CompletionSignaled event, so that agents (e.g., LLM loops) can self-signal task completion without relying solely on subprocess exit codes. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 23
-- Status: pending
+- Status: done
 
 ## Feature 25: Implement PodmanLifecycle to Validate Multi-Provider Support via Existing Trait
 - Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.1] As a platform operator, I want a PodmanLifecycle struct implementing the existing SandboxLifecycle trait (without changing the trait) shippable as an alternate provider via --sandbox-provider <docker|podman> CLI flag, so that Docker-restricted hosts can run stepyard via Podman and we prove the trait supports multiple providers without abstraction-layer redesign. Source: _bmad-output/sandcastle-features/epics.md

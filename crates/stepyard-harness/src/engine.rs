@@ -455,6 +455,10 @@ impl Engine {
                 error: "workflow previously failed".into(),
             });
         }
+        if progress.workflow_completed {
+            self.finalise_success().await?;
+            return Ok(StepOutcome::WorkflowCompleted);
+        }
         if progress.completed_steps >= self.workflow.steps.len() {
             // Happy path: every step has a completed event. Mark session.
             self.finalise_success().await?;
@@ -1419,8 +1423,17 @@ impl Engine {
         let signal_slot = self.config.shutdown_signal.clone();
         let step_timeout = step.timeout;
         let selection = {
-            let exec_fut =
-                crate::agent_exec::run_agent_step(step, &rendered_prompt, &state, &resolved_env);
+            // Completion-signal matching happens inside the stdout reader
+            // below. It races naturally with this outer timeout/cancel/signal
+            // select: if a timeout and a matching stdout read become ready in
+            // the same tick, the first `tokio::select!` arm selected wins.
+            let exec_fut = crate::agent_exec::run_agent_step(
+                step,
+                &rendered_prompt,
+                &state,
+                &resolved_env,
+                self.workflow.completion_signal.as_deref(),
+            );
             let cancel_fut = async {
                 while !cancel_token.is_cancelled() {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1548,6 +1561,18 @@ impl Engine {
                 });
             }
         };
+
+        if output.completion_signaled {
+            let signal = self
+                .workflow
+                .completion_signal
+                .clone()
+                .expect("completion_signaled requires workflow.completion_signal");
+            self.emit(Event::CompletionSignaled { step_index, signal })
+                .await?;
+            self.finalise_success().await?;
+            return Ok(StepOutcome::WorkflowCompleted);
+        }
 
         // Snapshot follows the template/script convention: the unified
         // `{ stdout, stderr, exit_code }` shape so `{{ steps.ask.stdout }}`
@@ -2113,6 +2138,7 @@ pub(crate) struct Progress {
     pub(crate) completed_steps: usize,
     pub(crate) has_failure: bool,
     pub(crate) last_failed_step: Option<String>,
+    pub(crate) workflow_completed: bool,
     /// Cross-step outputs map rebuilt from the session log on every
     /// `progress_from_log` call. Gate steps read this to render
     /// `{{ steps.X.stdout }}`; cmd steps don't consume it yet (the
@@ -2194,6 +2220,7 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
     let mut completed = 0usize;
     let mut has_failure = false;
     let mut last_failed: Option<String> = None;
+    let mut workflow_completed = false;
     // Rebuild the top-level cross-step outputs map (PR 2 of Task #31)
     // in the same scan as the progress counters — one pass of the log
     // per `step()` call. PR 3 of Task #31 widens this to ignore
@@ -2227,6 +2254,9 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
             continue;
         };
         match tag {
+            "workflow_completed" | "completion_signaled" => {
+                workflow_completed = true;
+            }
             "step_started" => {
                 // PR 5b/3 of #31: a fresh StepStarted for `step_name`
                 // is the rerun boundary for staged chat turns. The
@@ -2411,6 +2441,7 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
         completed_steps: completed,
         has_failure,
         last_failed_step: last_failed,
+        workflow_completed,
         outputs,
         agent_session_ids,
         first_agent_session_id,
