@@ -177,6 +177,7 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
+    use crate::store_trait::EventStore;
     use crate::Session;
 
     async fn store() -> SqliteEventStore {
@@ -191,7 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_round_trips_events_and_terminal_status() {
-        let store = Arc::new(store().await);
+        let store: Arc<dyn EventStore> = Arc::new(store().await);
         let mut session =
             Session::new_with_store(Arc::clone(&store), Uuid::new_v4(), "lite".into())
                 .await
