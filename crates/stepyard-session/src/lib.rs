@@ -13,9 +13,9 @@
 //! 3. **Replay is deterministic.** `Session::load(id).replay()` always returns
 //!    events in `seq` order, independent of `created_at` clock skew.
 //!
-//! # Quick start
+//! # Postgres quick start
 //!
-//! ```no_run
+//! ```ignore
 //! use stepyard_session::{Session, SessionId};
 //! use serde_json::json;
 //! use sqlx::postgres::PgPoolOptions;

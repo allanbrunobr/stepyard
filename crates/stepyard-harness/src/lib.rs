@@ -36,6 +36,7 @@ mod process_group;
 mod render;
 mod scope;
 mod script_exec;
+#[cfg(feature = "postgres")]
 pub mod startup;
 mod template_exec;
 mod workflow;
