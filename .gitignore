@@ -11,3 +11,12 @@ dist/
 
 # Node
 node_modules/
+
+# Local agent/editor state
+.claude/
+.mcp.json
+.vscode/
+territory_map.json
+
+# TypeScript incremental build artifacts
+*.tsbuildinfo
