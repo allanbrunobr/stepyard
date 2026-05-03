@@ -22,59 +22,6 @@ impl SqliteEventStore {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use serde_json::json;
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    use super::*;
-    use crate::Session;
-
-    async fn store() -> SqliteEventStore {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("connect in-memory sqlite");
-        crate::migrate_sqlite(&pool).await.expect("migrate sqlite");
-        SqliteEventStore::new(pool)
-    }
-
-    #[tokio::test]
-    async fn session_round_trips_events_and_terminal_status() {
-        let store = Arc::new(store().await);
-        let mut session = Session::new_with_store(store.clone(), Uuid::new_v4(), "lite".into())
-            .await
-            .expect("create session");
-
-        let first = session
-            .append(json!({"event": "first"}))
-            .await
-            .expect("append first");
-        let second = session
-            .append(json!({"event": "second"}))
-            .await
-            .expect("append second");
-
-        assert_eq!(first.seq, 1);
-        assert_eq!(second.seq, 2);
-
-        let reloaded = Session::load_with_store(store.clone(), session.id())
-            .await
-            .expect("reload session");
-        let events = reloaded.replay().await.expect("replay events");
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].payload, json!({"event": "first"}));
-        assert_eq!(events[1].payload, json!({"event": "second"}));
-
-        session.complete().await.expect("complete session");
-        assert_eq!(session.status(), SessionStatus::Completed);
-        assert!(session.ended_at().is_some());
-    }
-}
-
 type SqliteSessionRow = (
     String,
     String,
@@ -219,5 +166,59 @@ impl EventStore for SqliteEventStore {
 
         row.map(|(db_status, ended_at)| Ok((SessionStatus::from_db(&db_status)?, ended_at)))
             .transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+    use crate::Session;
+
+    async fn store() -> SqliteEventStore {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        crate::migrate_sqlite(&pool).await.expect("migrate sqlite");
+        SqliteEventStore::new(pool)
+    }
+
+    #[tokio::test]
+    async fn session_round_trips_events_and_terminal_status() {
+        let store = Arc::new(store().await);
+        let mut session =
+            Session::new_with_store(Arc::clone(&store), Uuid::new_v4(), "lite".into())
+                .await
+                .expect("create session");
+
+        let first = session
+            .append(json!({"event": "first"}))
+            .await
+            .expect("append first");
+        let second = session
+            .append(json!({"event": "second"}))
+            .await
+            .expect("append second");
+
+        assert_eq!(first.seq, 1);
+        assert_eq!(second.seq, 2);
+
+        let reloaded = Session::load_with_store(Arc::clone(&store), session.id())
+            .await
+            .expect("reload session");
+        let events = reloaded.replay().await.expect("replay events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].payload, json!({"event": "first"}));
+        assert_eq!(events[1].payload, json!({"event": "second"}));
+
+        session.complete().await.expect("complete session");
+        assert_eq!(session.status(), SessionStatus::Completed);
+        assert!(session.ended_at().is_some());
     }
 }
