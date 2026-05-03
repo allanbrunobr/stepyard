@@ -15,6 +15,8 @@
 //! are idempotent — running `stepyard_session::migrate` is safe to call per
 //! test.
 
+#![cfg(feature = "postgres")]
+
 use std::sync::Arc;
 
 use stepyard_session::{migrate, Session, SessionError, SessionId};

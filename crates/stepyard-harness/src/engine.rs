@@ -964,6 +964,7 @@ impl Engine {
     /// workflow must match the one used when the session was originally
     /// created — the harness trusts the caller here (Story 2.x will add
     /// workflow hash verification).
+    #[cfg(feature = "postgres")]
     pub async fn resume_existing(
         config: HarnessConfig,
         pool: &sqlx::PgPool,
@@ -3214,6 +3215,7 @@ mod send_check {
         assert_send_future(engine.resume());
     }
 
+    #[cfg(feature = "postgres")]
     #[allow(dead_code)]
     fn resume_existing_future_is_send(
         config: HarnessConfig,
