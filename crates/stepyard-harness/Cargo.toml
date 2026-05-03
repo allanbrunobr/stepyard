@@ -9,7 +9,7 @@ authors = ["Allan Bruno"]
 [dependencies]
 stepyard-core = { path = "../stepyard-core" }
 stepyard-session = { path = "../stepyard-session", default-features = false }
-stepyard-sandbox-orchestrator = { path = "../stepyard-sandbox-orchestrator" }
+stepyard-sandbox-orchestrator = { path = "../stepyard-sandbox-orchestrator", default-features = false }
 
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
