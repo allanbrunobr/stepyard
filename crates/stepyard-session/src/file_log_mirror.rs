@@ -83,6 +83,7 @@ impl FileLogMirror {
             .await
             .map_err(classify_io_error)?;
         file.write_all(&line).await.map_err(classify_io_error)?;
+        file.flush().await.map_err(classify_io_error)?;
         Ok(())
     }
 }
@@ -131,5 +132,117 @@ impl EventStore for FileLogMirror {
         status: SessionStatus,
     ) -> Result<Option<(SessionStatus, Option<DateTime<Utc>>)>, SessionError> {
         self.inner.finish_session(session_id, status).await
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::{json, Value};
+    use sqlx::sqlite::SqlitePoolOptions;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::{Session, SqliteEventStore};
+
+    async fn sqlite_store() -> Arc<dyn EventStore> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        crate::migrate_sqlite(&pool).await.expect("migrate sqlite");
+        Arc::new(SqliteEventStore::new(pool))
+    }
+
+    fn temp_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "stepyard-file-log-mirror-{label}-{}",
+            Uuid::new_v4()
+        ))
+    }
+
+    fn read_jsonl(path: PathBuf) -> Vec<SessionEvent> {
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read jsonl `{}`: {e}", path.display()));
+        body.lines()
+            .map(|line| {
+                serde_json::from_str::<SessionEvent>(line)
+                    .unwrap_or_else(|e| panic!("decode jsonl line `{line}`: {e}"))
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn append_mirrors_session_event_as_jsonl() {
+        let inner = sqlite_store().await;
+        let dir = temp_path("happy");
+        let store: Arc<dyn EventStore> =
+            Arc::new(FileLogMirror::new(Arc::clone(&inner), dir.clone()));
+        let session = Session::new_with_store(store, Uuid::new_v4(), "lite".into())
+            .await
+            .expect("create session");
+
+        let appended = session
+            .append(json!({"event": "first"}))
+            .await
+            .expect("append");
+
+        let mirrored = read_jsonl(dir.join(format!("{}.jsonl", session.id())));
+        assert_eq!(mirrored.len(), 1);
+        assert_eq!(mirrored[0].session_id, session.id());
+        assert_eq!(mirrored[0].seq, appended.seq);
+        assert_eq!(mirrored[0].payload, json!({"event": "first"}));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn write_failure_emits_one_degradation_event_and_disables_that_session() {
+        let inner = sqlite_store().await;
+        let blocker = temp_path("blocked");
+        std::fs::write(&blocker, "not a directory").expect("write blocker file");
+
+        let store: Arc<dyn EventStore> =
+            Arc::new(FileLogMirror::new(Arc::clone(&inner), blocker.clone()));
+        let session = Session::new_with_store(store, Uuid::new_v4(), "lite".into())
+            .await
+            .expect("create session");
+
+        session
+            .append(json!({"event": "first"}))
+            .await
+            .expect("first append still succeeds");
+        session
+            .append(json!({"event": "second"}))
+            .await
+            .expect("second append still succeeds");
+
+        let replay = inner.replay(session.id()).await.expect("replay");
+        let payloads: Vec<&Value> = replay.iter().map(|event| &event.payload).collect();
+
+        assert_eq!(payloads[0], &json!({"event": "first"}));
+        assert_eq!(
+            payloads[1].get("event").and_then(Value::as_str),
+            Some("file_log_write_failed")
+        );
+        assert_eq!(
+            payloads[1].get("error_class").and_then(Value::as_str),
+            Some("io_other")
+        );
+        assert_eq!(payloads[2], &json!({"event": "second"}));
+        assert_eq!(
+            payloads
+                .iter()
+                .filter(|payload| {
+                    payload.get("event").and_then(Value::as_str) == Some("file_log_write_failed")
+                })
+                .count(),
+            1,
+            "mirror should emit the degradation event once per broken session"
+        );
+
+        let _ = std::fs::remove_file(blocker);
     }
 }
