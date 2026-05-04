@@ -152,6 +152,36 @@ fn agent_step_hang(name: &str, prompt: &str, timeout: Option<Duration>) -> Step 
     step
 }
 
+fn agent_step_hang_with_ready_file(
+    name: &str,
+    prompt: &str,
+    timeout: Option<Duration>,
+    ready_file: &Path,
+) -> Step {
+    let mut step = agent_step_hang(name, prompt, timeout);
+    step.env.insert(
+        "MOCK_CLAUDE_READY_FILE".into(),
+        ready_file.to_string_lossy().into_owned(),
+    );
+    step
+}
+
+async fn wait_for_ready_file(path: PathBuf) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if tokio::fs::try_exists(&path)
+                .await
+                .unwrap_or_else(|e| panic!("ready file {}: {e}", path.display()))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("agent fixture did not create {}", path.display()));
+}
+
 // ---------------------------------------------------------------------------
 // Happy path: a single agent step runs the mock CLI end-to-end. Asserts both
 // halves of the PR's metadata design — event-level tokens/cost/session_id
@@ -642,10 +672,17 @@ async fn agent_cancel_mid_step_returns_cancelled_outcome() {
             .await
             .expect("session");
         let session_id = session.id();
+        let tmp = tempfile::tempdir().unwrap();
+        let ready_file = tmp.path().join("agent-ready");
 
         let wf = Workflow::new(
             "agent-cancel",
-            vec![agent_step_hang("hung-agent", "hang please", None)],
+            vec![agent_step_hang_with_ready_file(
+                "hung-agent",
+                "hang please",
+                None,
+                &ready_file,
+            )],
         );
 
         let mut engine = Engine::with_executor(
@@ -656,13 +693,12 @@ async fn agent_cancel_mid_step_returns_cancelled_outcome() {
             unreachable_executor(),
         );
 
-        // Mid-step cancel. Flip AFTER step() starts so the select's
-        // cancel_fut arm fires (not the pre-step fast-path). The 100ms
-        // sleep in `cancel_fut` polls every 100ms; 250ms delay guarantees
-        // we're inside the select when the token flips.
+        // Mid-step cancel. Flip only after the fixture has drained stdin
+        // and entered its hanging body, so the select's cancel_fut arm
+        // fires instead of the pre-step fast-path.
         let token = engine.cancel_token();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            wait_for_ready_file(ready_file).await;
             token.cancel();
         });
 
@@ -707,10 +743,17 @@ async fn agent_shutdown_broadcast_emits_signal_received_then_step_failed() {
             .await
             .expect("session");
         let session_id = session.id();
+        let tmp = tempfile::tempdir().unwrap();
+        let ready_file = tmp.path().join("agent-ready");
 
         let wf = Workflow::new(
             "agent-signal",
-            vec![agent_step_hang("hung-agent", "hang please", None)],
+            vec![agent_step_hang_with_ready_file(
+                "hung-agent",
+                "hang please",
+                None,
+                &ready_file,
+            )],
         );
 
         let (tx, _rx_keepalive) = broadcast::channel::<()>(16);
@@ -739,7 +782,7 @@ async fn agent_shutdown_broadcast_emits_signal_received_then_step_failed() {
         let tx_for_fire = shutdown_tx.clone();
         let slot_for_fire = shutdown_signal.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            wait_for_ready_file(ready_file).await;
             let _ = slot_for_fire.set("sigterm".into());
             let _ = tx_for_fire.send(());
         });

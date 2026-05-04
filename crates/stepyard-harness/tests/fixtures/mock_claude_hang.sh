@@ -23,6 +23,9 @@ if [ -n "${MOCK_CLAUDE_ARGV_FILE:-}" ]; then
 fi
 
 cat >/dev/null
+if [ -n "${MOCK_CLAUDE_READY_FILE:-}" ]; then
+    : > "$MOCK_CLAUDE_READY_FILE"
+fi
 # `exec sleep` (not a bash loop + child sleep) so the direct process the
 # harness spawned IS the sleep — `kill_on_drop(true)` only kills the
 # immediate child, so a `while … do sleep` loop leaves the `sleep`
