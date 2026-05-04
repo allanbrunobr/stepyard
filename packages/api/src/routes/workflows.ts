@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { spawn } from 'child_process';
-import { closeSync, existsSync, mkdirSync, openSync } from 'fs';
+import { randomUUID } from 'crypto';
+import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from 'fs';
 import { basename, join } from 'path';
 import { pool } from '../db';
 import { logger } from '../logger';
@@ -238,6 +239,7 @@ workflowsRouter.get('/workflows/distinct', async (_req: Request, res: Response) 
 // --- GET /workflows/:runId/logs/stream (SSE snapshots for remote CLI) ---
 
 const TERMINAL_STATUSES = new Set(['completed', 'success', 'failed', 'cancelled', 'canceled']);
+const MAX_LOG_CHUNK_BYTES = 8192;
 
 interface WorkflowSnapshot {
   run: Record<string, unknown>;
@@ -266,6 +268,53 @@ function writeSse(res: Response, event: string, data: unknown): void {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+function dispatchLogPath(snapshot: WorkflowSnapshot): string | null {
+  const path = snapshot.run.dispatch_log_path;
+  return typeof path === 'string' && path.length > 0 ? path : null;
+}
+
+function readDispatchLogChunk(path: string, offset: number): { text: string; nextOffset: number; hasMore: boolean } | null {
+  try {
+    const stat = statSync(path);
+    if (!stat.isFile() || stat.size <= offset) {
+      return null;
+    }
+
+    const bytesToRead = Math.min(stat.size - offset, MAX_LOG_CHUNK_BYTES);
+    const fd = openSync(path, 'r');
+    try {
+      const buffer = Buffer.alloc(bytesToRead);
+      const bytesRead = readSync(fd, buffer, 0, bytesToRead, offset);
+      return {
+        text: sanitizeLogText(buffer.subarray(0, bytesRead).toString('utf8')),
+        nextOffset: offset + bytesRead,
+        hasMore: stat.size > offset + bytesRead,
+      };
+    } finally {
+      closeSync(fd);
+    }
+  } catch (err) {
+    logger.warn({ err, path }, 'Unable to read dispatch log chunk');
+    return null;
+  }
+}
+
+function sanitizeLogText(input: string): string {
+  let output = '';
+  for (const char of input) {
+    const cp = char.codePointAt(0);
+    if (cp == null) continue;
+    const allowedControl = char === '\n' || char === '\r' || char === '\t';
+    const bidiOverride = (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069);
+    if ((!allowedControl && cp <= 0x1f) || cp === 0x7f || (cp >= 0x80 && cp <= 0x9f) || bidiOverride) {
+      output += `\\u{${cp.toString(16).padStart(4, '0')}}`;
+    } else {
+      output += char;
+    }
+  }
+  return output;
+}
+
 workflowsRouter.get('/workflows/:runId/logs/stream', requireAuth, async (req: Request, res: Response) => {
   const runId = String(req.params.runId);
 
@@ -282,12 +331,25 @@ workflowsRouter.get('/workflows/:runId/logs/stream', requireAuth, async (req: Re
     res.flushHeaders?.();
 
     let seq = 0;
+    let logSeq = 0;
+    let logOffset = 0;
     let lastPayload = '';
     const emitSnapshot = async (): Promise<boolean> => {
       const snapshot = await loadWorkflowSnapshot(runId);
       if (!snapshot) {
         writeSse(res, 'error', { code: 'NOT_FOUND', message: `Workflow run ${runId} not found` });
         return true;
+      }
+
+      const logPath = dispatchLogPath(snapshot);
+      let logHasMore = false;
+      if (logPath) {
+        const chunk = readDispatchLogChunk(logPath, logOffset);
+        if (chunk && chunk.text.length > 0) {
+          logOffset = chunk.nextOffset;
+          logHasMore = chunk.hasMore;
+          writeSse(res, 'log', { seq: ++logSeq, text: chunk.text });
+        }
       }
 
       const payload = JSON.stringify(snapshot);
@@ -299,7 +361,7 @@ workflowsRouter.get('/workflows/:runId/logs/stream', requireAuth, async (req: Re
       }
 
       const status = String(snapshot.run.status ?? '').toLowerCase();
-      if (TERMINAL_STATUSES.has(status)) {
+      if (TERMINAL_STATUSES.has(status) && !logHasMore) {
         writeSse(res, 'done', { seq, status });
         return true;
       }
@@ -390,7 +452,7 @@ const dispatchSchema = z.object({
   vars: z.record(z.string(), z.string()).optional(),
 });
 
-workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Response) => {
+workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, res: Response) => {
   const parsed = dispatchSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({
@@ -429,29 +491,56 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
   //   2. otherwise → spawn `stepyard` directly from $PATH
   // NOTE: Default binary name is still 'minion' until the VPS migration flips
   // the installed binary — override with STEPYARD_BINARY=stepyard once deployed.
-  const sshHost = process.env.STEPYARD_DISPATCH_SSH_HOST;
-  const [binary, args] = sshHost
-    ? buildSshCommand(sshHost, stepyardArgs)
-    : [process.env.STEPYARD_BINARY || 'minion', stepyardArgs];
-
   // Log file for the detached process. Persists after the api request returns
   // so operators can inspect failures post-hoc. Written to /tmp; container-local.
   const logDir = process.env.STEPYARD_DISPATCH_LOG_DIR || '/tmp';
   try { mkdirSync(logDir, { recursive: true }); } catch {}
+  const runId = randomUUID();
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const logPath = join(logDir, `stepyard-dispatch-${ts}-${process.pid}.log`);
+  const logPath = join(logDir, `stepyard-dispatch-${ts}-${runId}.log`);
+
+  const dispatchEnv = {
+    ...process.env,
+    STEPYARD_DASHBOARD_RUN_ID: runId,
+    STEPYARD_DISPATCH_LOG_PATH: logPath,
+  };
+
+  const sshHost = process.env.STEPYARD_DISPATCH_SSH_HOST;
+  const [binary, args] = sshHost
+    ? buildSshCommand(sshHost, stepyardArgs, dispatchEnv)
+    : [process.env.STEPYARD_BINARY || 'minion', stepyardArgs];
 
   logger.info(
-    { binary, args, workflow, target, repo, branch, sshHost: !!sshHost, logPath },
+    { binary, args, workflow, target, repo, branch, sshHost: !!sshHost, runId, logPath },
     'Dispatching stepyard run',
   );
 
   try {
+    await pool.query(
+      `INSERT INTO workflow_runs (
+        run_id, user_name, workflow, target, repo, status, started_at,
+        dispatch_log_path, event_version, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, 0, NOW())
+      ON CONFLICT (run_id) DO UPDATE SET
+        status = EXCLUDED.status,
+        dispatch_log_path = EXCLUDED.dispatch_log_path,
+        updated_at = NOW()`,
+      [
+        runId,
+        process.env.STEPYARD_USER || 'remote',
+        workflow,
+        target,
+        repo ?? null,
+        'dispatching',
+        logPath,
+      ],
+    );
+
     const logFd = openSync(logPath, 'a');
     const child = spawn(binary, args, {
       detached: true,
       stdio: ['ignore', logFd, logFd],
-      env: process.env,
+      env: dispatchEnv,
     });
     child.on('error', (err) => {
       logger.error({ err, args }, 'Spawned stepyard emitted error event');
@@ -460,10 +549,12 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
     closeSync(logFd);
     const pid = child.pid;
     if (typeof pid !== 'number') {
+      await markDispatchFailed(runId, 'Failed to spawn stepyard (no pid)');
       res.status(500).json({ error: { code: 'SPAWN_FAILED', message: 'Failed to spawn stepyard (no pid)' } });
       return;
     }
     res.status(202).json({
+      run_id: runId,
       dispatched_at: new Date().toISOString(),
       pid,
       workflow,
@@ -474,6 +565,7 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
     });
   } catch (err) {
     logger.error({ err, args }, 'Failed to spawn stepyard');
+    await markDispatchFailed(runId, (err as Error).message);
     res.status(500).json({ error: { code: 'SPAWN_FAILED', message: (err as Error).message } });
   }
 });
@@ -491,12 +583,18 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, (req: Request, res: Res
  *                       container's DATABASE_URL points at `db` but the host
  *                       needs `localhost`)
  */
-function buildSshCommand(sshHost: string, stepyardArgs: string[]): [string, string[]] {
+function buildSshCommand(sshHost: string, stepyardArgs: string[], env: NodeJS.ProcessEnv): [string, string[]] {
   const forward = (process.env.STEPYARD_SSH_ENV_FORWARD || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
   const exports: string[] = [];
+  for (const name of ['STEPYARD_DASHBOARD_RUN_ID', 'STEPYARD_DISPATCH_LOG_PATH']) {
+    const value = env[name];
+    if (value != null) {
+      exports.push(`${name}=${shellQuote(value)}`);
+    }
+  }
   for (const entry of forward) {
     const [target, source] = entry.includes(':') ? entry.split(':', 2) : [entry, entry];
     const value = process.env[source];
@@ -529,6 +627,19 @@ function buildSshCommand(sshHost: string, stepyardArgs: string[]): [string, stri
     `bash -lc ${shellQuote(remoteCmd)}`,
   ];
   return ['ssh', sshArgs];
+}
+
+async function markDispatchFailed(runId: string, message: string): Promise<void> {
+  try {
+    await pool.query(
+      `UPDATE workflow_runs
+       SET status = 'dispatch_failed', error = $2, updated_at = NOW()
+       WHERE run_id = $1 AND event_version = 0`,
+      [runId, message],
+    );
+  } catch (err) {
+    logger.warn({ err, runId }, 'Failed to mark dispatch as failed');
+  }
 }
 
 function shellQuote(value: string): string {

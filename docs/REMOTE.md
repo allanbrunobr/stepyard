@@ -115,10 +115,10 @@ new `minion-sandbox:latest` container appear briefly in Portainer.
 ## Remote logs
 
 `stepyard remote logs <run_id>` opens an authenticated SSE stream to
-`/api/workflows/:run_id/logs/stream`. The stream emits dashboard snapshots:
-run status plus the current step rows. It intentionally does **not** stream raw
-host process stdout/stderr; the dashboard event model is the source of truth.
-Use `stepyard remote status` to find the latest `run_id`.
+`/api/workflows/:run_id/logs/stream`. The dispatch API pre-generates the
+dashboard `run_id`, records a placeholder row, and links that row to the
+detached process log. The stream emits both sanitized process-log chunks and
+dashboard snapshots: run status plus the current step rows.
 
 ## Security notes
 
