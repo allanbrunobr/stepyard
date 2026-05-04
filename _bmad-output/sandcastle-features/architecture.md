@@ -663,10 +663,16 @@ async fn cancel_step(&mut self, signal: &str) -> Result<(), EngineError> {
 }
 
 // YAML-safe template substitution — party-mode compliant
-fn substitute_placeholder(doc: &str, key: &str, value: &str) -> Result<String, TemplateError> {
-    let escaped = serde_yaml::to_string(&value)?;
-    Ok(doc.replace(&format!("{{{{{key}}}}}"), escaped.trim_end()))
-}
+use std::collections::HashMap;
+
+use stepyard_core::template::substitute_workflow_vars;
+
+let vars = HashMap::from([("BRANCH_NAME".to_string(), "feat/work".to_string())]);
+let rendered = substitute_workflow_vars(
+    "branch_name: {{BRANCH_NAME}}\n",
+    &vars,
+    "workflow.yaml",
+)?;
 
 // Time-determinism in tests — Rule 7a compliant (virtual time)
 #[tokio::test(start_paused = true)]
