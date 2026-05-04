@@ -4,8 +4,9 @@ import { PageLayout } from '@/components/layout/PageLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusBadge } from '@/components/shared/StatusBadge';
+import { WorkflowArtifacts } from '@/components/workflow/WorkflowArtifacts';
 import { StepTimeline } from '@/components/workflow/StepTimeline';
-import { useWorkflowDetail } from '@/hooks/use-workflows';
+import { useWorkflowArtifacts, useWorkflowDetail } from '@/hooks/use-workflows';
 import { formatTimestamp, formatDuration, formatCost } from '@/lib/format';
 
 export function WorkflowDetailPage() {
@@ -14,6 +15,11 @@ export function WorkflowDetailPage() {
   const location = useLocation();
 
   const { data, isLoading, error } = useWorkflowDetail(runId!);
+  const {
+    data: artifactData,
+    isLoading: artifactsLoading,
+    error: artifactsError,
+  } = useWorkflowArtifacts(runId!);
   const run = data?.data;
 
   function handleBack() {
@@ -104,6 +110,12 @@ export function WorkflowDetailPage() {
               )}
             </CardContent>
           </Card>
+
+          <WorkflowArtifacts
+            artifacts={artifactData?.data ?? []}
+            isLoading={artifactsLoading}
+            error={artifactsError instanceof Error ? artifactsError : null}
+          />
 
           <h2 className="text-lg font-semibold mb-4">Execution Steps</h2>
           <StepTimeline steps={run.steps ?? []} />

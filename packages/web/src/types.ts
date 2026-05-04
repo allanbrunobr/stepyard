@@ -27,3 +27,13 @@ export interface WorkflowStep {
   sandboxed?: boolean;
   error?: string;
 }
+
+export interface WorkflowArtifact {
+  artifact_id: string;
+  run_id: string;
+  name: string;
+  content_type?: string;
+  size_bytes: number;
+  created_at: string;
+  download_url: string;
+}

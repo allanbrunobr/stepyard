@@ -149,6 +149,9 @@ curl -L -H "Authorization: Bearer $API_SECRET" \
   -o report.zip
 ```
 
+Uploads require the same Bearer secret as dispatch. Artifact listing and
+download follow the dashboard's current read-endpoint model: access is
+controlled by the dashboard/network boundary, not by a browser-visible token.
 Artifacts are stored on the API host under `STEPYARD_ARTIFACT_DIR`, defaulting
 to `/tmp/stepyard-artifacts`. The server never uses the submitted filename as a
 filesystem path; it stores bytes under a generated artifact id and keeps the
@@ -203,5 +206,6 @@ exist on the host after the sandbox lifecycle copies changed files back.
 - **5.4 follow-up** — true warm sandbox pool. This requires a worker/queue,
   container leases, workspace reset semantics, and secret-isolation rules; it is
   not safe to bolt onto the current detached `POST /dispatch` flow.
-- **5.5 follow-up** — richer artifact UX in the dashboard. The API and workflow
-  upload hook exist; the React UI can still add first-class artifact browsing.
+- **5.5 follow-up** — authenticated dashboard sessions. Artifact reads follow
+  the existing dashboard read model until the dashboard grows login/session
+  auth.
