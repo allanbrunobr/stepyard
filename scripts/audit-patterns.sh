@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Round 3 Story 5 — pattern audits (G1, G2, G3 blocking + G5 warning-only).
+# Round 3 Story 5 — pattern audits (G1, G2, G3 blocking + G5/Rule7a warning-only).
 #
 # Source-of-truth regexes: _bmad-output/sandcastle-features/architecture.md §G-gates.
 # Re-copy here verbatim — if architecture.md changes, update both sides in lockstep
@@ -11,14 +11,15 @@
 # makes the audit measure production code only.
 #
 # Exit codes:
-#   0 — all blocking gates clean (G5 warnings are informational, never fail CI).
+#   0 — all blocking gates clean (warnings are informational, never fail CI).
 #   1 — at least one of G1/G2/G3 matched in Rust source.
 #   2 — ripgrep not on PATH.
 #
 # G4 (emit-before-IO) runs as a separate `cargo xtask audit-emit-before-io` step
 # because it needs an AST walker, not a regex; G6 (Send-future compile check) is
 # enforced by per-crate `assert_send` tests at compile time and has no runtime
-# gate here.
+# gate here. Rule 7a is warning-only while the existing real-sleep baseline is
+# burned down in follow-up PRs.
 
 set -uo pipefail
 
@@ -117,6 +118,17 @@ run_gate \
     "G5" "Other(...) construction outside classifier modules" "warn" \
     '(TerminationReason|SandboxError)::Other\s*\(' \
     '!**/*_errors.rs'
+
+# --- Rule 7a: real sleep in integration tests (warning-only) ------------------
+# Timing-sensitive async tests should use virtual time (`tokio::time::pause` +
+# `advance`) instead of real sleeps. Existing integration tests still contain a
+# baseline of real sleeps, so this starts warning-only. Scope is intentionally
+# limited to `tests/**/*.rs`; scanning `#[cfg(test)]` blocks inside production
+# modules needs a real parser or a separate allowlist pass.
+run_gate \
+    "Rule7a" "tokio::time::sleep in integration tests" "warn" \
+    '^\s*(?!//).*tokio::time::sleep\s*\(' \
+    '**/tests/**/*.rs'
 
 # --- Summary ------------------------------------------------------------------
 if [[ "${BLOCKING_FAILED}" -ne 0 ]]; then
