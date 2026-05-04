@@ -45,6 +45,10 @@
 //! * Control-flow insensitive: an emit on only one branch of an `if` still
 //!   counts as "before" in lexical order even if the runtime path does not
 //!   reach it.
+//! * Explicit opt-outs are line-local: a sandbox await is ignored only when a
+//!   nearby preceding comment contains `audit: emit-before-io exempt` and a
+//!   `reason:` clause. This is for wrapper functions whose caller owns the
+//!   persistence boundary.
 //!
 //! Each of these produces either false positives (flagged-OK code) or false
 //! negatives (missed drift) that a reviewer can resolve by reading the
@@ -176,8 +180,9 @@ fn walk_file(path: &Path, findings: &mut Vec<Finding>) {
     let mut collector = FnBodyCollector { bodies: Vec::new() };
     collector.visit_file(&file);
 
+    let lines: Vec<&str> = src.lines().collect();
     for body in collector.bodies {
-        check_body(path, body, findings);
+        check_body(path, &lines, body, findings);
     }
 }
 
@@ -205,7 +210,7 @@ impl<'ast> Visit<'ast> for FnBodyCollector<'ast> {
     }
 }
 
-fn check_body(path: &Path, body: &Block, findings: &mut Vec<Finding>) {
+fn check_body(path: &Path, lines: &[&str], body: &Block, findings: &mut Vec<Finding>) {
     let mut emits = EmitLineCollector { lines: Vec::new() };
     emits.visit_block(body);
 
@@ -214,7 +219,7 @@ fn check_body(path: &Path, body: &Block, findings: &mut Vec<Finding>) {
 
     for site in sandbox.sites {
         let has_earlier_emit = emits.lines.iter().any(|&l| l < site.line);
-        if !has_earlier_emit {
+        if !has_earlier_emit && !has_explicit_exemption(lines, site.line) {
             findings.push(Finding {
                 file: path.to_path_buf(),
                 line: site.line,
@@ -222,6 +227,19 @@ fn check_body(path: &Path, body: &Block, findings: &mut Vec<Finding>) {
             });
         }
     }
+}
+
+fn has_explicit_exemption(lines: &[&str], line: usize) -> bool {
+    // `line` is 1-indexed from proc-macro2 spans. Check the current line and
+    // the few preceding lines so comments can sit above a chained call whose
+    // `.await` appears several lines later.
+    let zero_based = line.saturating_sub(1);
+    let start = zero_based.saturating_sub(4);
+    lines
+        .get(start..=zero_based.min(lines.len().saturating_sub(1)))
+        .unwrap_or(&[])
+        .iter()
+        .any(|line| line.contains("audit: emit-before-io exempt") && line.contains("reason:"))
 }
 
 struct EmitLineCollector {
