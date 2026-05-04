@@ -132,8 +132,7 @@ dashboard snapshots: run status plus the current step rows.
 The Dashboard API accepts authenticated per-run artifacts through
 `POST /api/workflows/:run_id/artifacts`. The first implementation is an API
 contract: upload JSON with a plain filename and base64 content, then list or
-download the artifact from the same run. Container-side automatic upload hooks
-remain a follow-up.
+download the artifact from the same run.
 
 ```bash
 CONTENT=$(base64 -i report.zip | tr -d '\n')
@@ -155,6 +154,24 @@ to `/tmp/stepyard-artifacts`. The server never uses the submitted filename as a
 filesystem path; it stores bytes under a generated artifact id and keeps the
 original name only as metadata/download presentation. Uploads are capped by
 `STEPYARD_ARTIFACT_MAX_BYTES`, defaulting to 10 MiB.
+
+Workflow YAML can also ask the dashboard subscriber to upload files after the
+run reaches `WorkflowCompleted`:
+
+```yaml
+config:
+  events:
+    dashboard:
+      url: http://host.docker.internal:3001/api/events
+      secret: ${DASHBOARD_API_SECRET}
+      artifacts:
+        - reports/report.zip
+        - coverage/lcov.info
+```
+
+Artifact paths are resolved by the engine process after sandbox copy-back. In
+remote repo-mode runs, use paths inside the checked-out workspace that will
+exist on the host after the sandbox lifecycle copies changed files back.
 
 ## Security notes
 
@@ -186,5 +203,5 @@ original name only as metadata/download presentation. Uploads are capped by
 - **5.4 follow-up** — true warm sandbox pool. This requires a worker/queue,
   container leases, workspace reset semantics, and secret-isolation rules; it is
   not safe to bolt onto the current detached `POST /dispatch` flow.
-- **5.5 follow-up** — automatic container-side artifact upload wiring. The API
-  contract exists; the sandbox/engine still needs a first-class upload hook.
+- **5.5 follow-up** — richer artifact UX in the dashboard. The API and workflow
+  upload hook exist; the React UI can still add first-class artifact browsing.

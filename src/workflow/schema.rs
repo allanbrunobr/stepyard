@@ -93,6 +93,11 @@ pub struct DashboardConfig {
     pub url: String,
     /// Bearer token for API authentication
     pub secret: Option<String>,
+    /// Files to upload to the dashboard as workflow artifacts after the run
+    /// reaches WorkflowCompleted. Paths are resolved relative to the engine
+    /// process CWD unless absolute.
+    #[serde(default)]
+    pub artifacts: Vec<String>,
 }
 
 /// Named scope (sub-workflow)
