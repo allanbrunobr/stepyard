@@ -29,6 +29,7 @@ const EventSchema = z.object({
   started_at: z.string(),
   finished_at: z.string().optional(),
   error: z.string().optional(),
+  dispatch_log_path: z.string().optional(),
   event_version: z.number().int().min(1).default(1),
   steps: z.array(StepSchema).optional(),
 });
@@ -71,8 +72,9 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
     const upsertResult = await client.query(
       `INSERT INTO workflow_runs (
         run_id, user_name, workflow, target, repo, status,
-        duration_ms, total_tokens, cost_usd, started_at, finished_at, error, event_version, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+        duration_ms, total_tokens, cost_usd, started_at, finished_at, error,
+        dispatch_log_path, event_version, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
       ON CONFLICT (run_id) DO UPDATE SET
         user_name = EXCLUDED.user_name,
         workflow = EXCLUDED.workflow,
@@ -85,6 +87,7 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
         started_at = EXCLUDED.started_at,
         finished_at = EXCLUDED.finished_at,
         error = EXCLUDED.error,
+        dispatch_log_path = COALESCE(EXCLUDED.dispatch_log_path, workflow_runs.dispatch_log_path),
         event_version = EXCLUDED.event_version,
         updated_at = NOW()
       WHERE workflow_runs.event_version < EXCLUDED.event_version
@@ -94,6 +97,7 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
         data.repo ?? null, data.status, data.duration_ms ?? null,
         data.total_tokens ?? null, data.cost_usd ?? null,
         data.started_at, data.finished_at ?? null, data.error ?? null,
+        data.dispatch_log_path ?? null,
         data.event_version,
       ]
     );
