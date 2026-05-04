@@ -32,6 +32,7 @@
 //! unit suite.
 
 use std::collections::HashMap;
+use std::future::pending;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -92,38 +93,19 @@ impl StepExecutor for UnreachableExecutor {
     }
 }
 
-/// Slow chat client: sleeps cooperatively for `delay` then returns a
-/// canned reply. Uses `tokio::time::sleep` (NOT `std::thread::sleep`)
-/// so the timeout arm of `tokio::select!` can drop this future and
-/// cancel the sleep — std::thread::sleep would block the runtime
-/// thread and the select would never resolve the timeout branch even
-/// after `step.timeout` elapsed.
+/// Blocking chat client: enters the provider call and never resolves.
+/// The timeout arm of `tokio::select!` must drop this future and
+/// surface the configured step timeout.
 #[derive(Debug)]
-struct SlowChatClient {
-    reply: String,
-    delay: Duration,
-}
-
-impl SlowChatClient {
-    fn new(reply: impl Into<String>, delay: Duration) -> Self {
-        Self {
-            reply: reply.into(),
-            delay,
-        }
-    }
-}
+struct BlockingChatClient;
 
 #[async_trait]
-impl ChatClient for SlowChatClient {
+impl ChatClient for BlockingChatClient {
     async fn complete(
         &self,
         _req: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, ChatClientError> {
-        tokio::time::sleep(self.delay).await;
-        Ok(ChatCompletionResponse {
-            content: self.reply.clone(),
-            ..Default::default()
-        })
+        pending().await
     }
 }
 
@@ -181,18 +163,14 @@ async fn chat_step_timeout_emits_started_user_turn_timeout_failed_in_order() {
             .await
             .expect("session");
 
-        // 50ms timeout vs 5s provider sleep — the timeout arm wins by
-        // ~100x. Tolerance is high enough for CI noise but small enough
-        // to keep the test fast.
+        // 50ms timeout vs a provider future that never resolves: the
+        // timeout arm must win and drop the provider call.
         let mut step = Step::chat("ask", "Hello").with_timeout(Duration::from_millis(50));
         step.chat_session = Some("shared".into());
         let wf = Workflow::new("chat-timeout", vec![step]);
 
         let config = HarnessConfig {
-            chat_client: Some(Arc::new(SlowChatClient::new(
-                "should never be appended",
-                Duration::from_secs(5),
-            ))),
+            chat_client: Some(Arc::new(BlockingChatClient)),
             ..Default::default()
         };
 
