@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from 'fs';
+import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, join } from 'path';
 import { pool } from '../db';
 import { logger } from '../logger';
@@ -320,6 +320,64 @@ function sanitizeLogText(input: string): string {
   return output;
 }
 
+const UUID_PARAM = z.string().uuid();
+const DEFAULT_ARTIFACT_MAX_BYTES = 10 * 1024 * 1024;
+
+const artifactUploadSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine((v) => v === basename(v) && !v.includes('/') && !v.includes('..') && !/[\x00-\x1f\x7f]/.test(v), {
+      message: 'name must be a plain filename without path separators, traversal, or control characters',
+    }),
+  content_base64: z.string(),
+  content_type: z
+    .string()
+    .min(1)
+    .max(200)
+    .refine((v) => !/[\r\n]/.test(v), { message: 'content_type must not contain CR/LF' })
+    .optional(),
+});
+
+function artifactRoot(): string {
+  return process.env.STEPYARD_ARTIFACT_DIR || '/tmp/stepyard-artifacts';
+}
+
+function artifactMaxBytes(): number {
+  const raw = process.env.STEPYARD_ARTIFACT_MAX_BYTES;
+  if (!raw) return DEFAULT_ARTIFACT_MAX_BYTES;
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ARTIFACT_MAX_BYTES;
+}
+
+function artifactPath(runId: string, artifactId: string): string {
+  return join(artifactRoot(), runId, `${artifactId}.bin`);
+}
+
+function artifactDownloadUrl(runId: string, artifactId: string): string {
+  return `/api/workflows/${runId}/artifacts/${artifactId}`;
+}
+
+function decodeBase64(input: string): Buffer | null {
+  const normalized = input.replace(/\s/g, '');
+  if (normalized.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
+    return null;
+  }
+
+  const buffer = Buffer.from(normalized, 'base64');
+  if (buffer.toString('base64').replace(/=+$/, '') !== normalized.replace(/=+$/, '')) {
+    return null;
+  }
+  return buffer;
+}
+
+function attachmentHeader(name: string): string {
+  const fallback = name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
 workflowsRouter.get('/workflows/:runId/logs/stream', requireAuth, async (req: Request, res: Response) => {
   const runId = String(req.params.runId);
 
@@ -402,6 +460,162 @@ workflowsRouter.get('/workflows/:runId/logs/stream', requireAuth, async (req: Re
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to open workflow log stream' } });
     } else {
       writeSse(res, 'error', { code: 'INTERNAL_ERROR', message: 'Failed to open workflow log stream' });
+      res.end();
+    }
+  }
+});
+
+// --- Workflow artifacts (registered BEFORE :runId to avoid param conflict) ---
+
+workflowsRouter.get('/workflows/:runId/artifacts', requireAuth, async (req: Request, res: Response) => {
+  const runId = UUID_PARAM.safeParse(req.params.runId);
+  if (!runId.success) {
+    res.status(400).json({ error: { code: 'VALIDATION_FAILED', message: 'Invalid run id' } });
+    return;
+  }
+
+  try {
+    const runResult = await pool.query('SELECT 1 FROM workflow_runs WHERE run_id = $1', [runId.data]);
+    if (runResult.rows.length === 0) {
+      res.status(404).json({ error: { code: 'NOT_FOUND', message: `Workflow run ${runId.data} not found` } });
+      return;
+    }
+
+    const result = await pool.query(
+      `SELECT artifact_id, run_id, name, content_type, size_bytes, created_at
+       FROM workflow_artifacts
+       WHERE run_id = $1
+       ORDER BY created_at ASC`,
+      [runId.data],
+    );
+
+    res.json({
+      data: result.rows.map((row) => ({
+        ...row,
+        download_url: artifactDownloadUrl(row.run_id, row.artifact_id),
+      })),
+    });
+  } catch (err) {
+    logger.error(err, 'Failed to list workflow artifacts');
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to list workflow artifacts' } });
+  }
+});
+
+workflowsRouter.post('/workflows/:runId/artifacts', requireAuth, async (req: Request, res: Response) => {
+  const runId = UUID_PARAM.safeParse(req.params.runId);
+  if (!runId.success) {
+    res.status(400).json({ error: { code: 'VALIDATION_FAILED', message: 'Invalid run id' } });
+    return;
+  }
+
+  const parsed = artifactUploadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: { code: 'VALIDATION_FAILED', message: 'Invalid artifact payload', details: parsed.error.issues },
+    });
+    return;
+  }
+
+  const content = decodeBase64(parsed.data.content_base64);
+  if (!content) {
+    res.status(400).json({ error: { code: 'VALIDATION_FAILED', message: 'content_base64 is not valid base64' } });
+    return;
+  }
+
+  const maxBytes = artifactMaxBytes();
+  if (content.length > maxBytes) {
+    res.status(413).json({
+      error: {
+        code: 'ARTIFACT_TOO_LARGE',
+        message: `Artifact exceeds ${maxBytes} byte limit`,
+      },
+    });
+    return;
+  }
+
+  const artifactId = randomUUID();
+  const dir = join(artifactRoot(), runId.data);
+  const storagePath = artifactPath(runId.data, artifactId);
+
+  try {
+    const runResult = await pool.query('SELECT 1 FROM workflow_runs WHERE run_id = $1', [runId.data]);
+    if (runResult.rows.length === 0) {
+      res.status(404).json({ error: { code: 'NOT_FOUND', message: `Workflow run ${runId.data} not found` } });
+      return;
+    }
+
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(storagePath, content, { flag: 'wx' });
+
+    const result = await pool.query(
+      `INSERT INTO workflow_artifacts (
+         artifact_id, run_id, name, content_type, size_bytes, storage_path, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       RETURNING artifact_id, run_id, name, content_type, size_bytes, created_at`,
+      [
+        artifactId,
+        runId.data,
+        parsed.data.name,
+        parsed.data.content_type ?? 'application/octet-stream',
+        content.length,
+        storagePath,
+      ],
+    );
+
+    const row = result.rows[0];
+    res.status(201).json({
+      data: {
+        ...row,
+        download_url: artifactDownloadUrl(row.run_id, row.artifact_id),
+      },
+    });
+  } catch (err) {
+    try { if (existsSync(storagePath)) unlinkSync(storagePath); } catch {}
+    logger.error(err, 'Failed to store workflow artifact');
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to store workflow artifact' } });
+  }
+});
+
+workflowsRouter.get('/workflows/:runId/artifacts/:artifactId', requireAuth, async (req: Request, res: Response) => {
+  const runId = UUID_PARAM.safeParse(req.params.runId);
+  const artifactId = UUID_PARAM.safeParse(req.params.artifactId);
+  if (!runId.success || !artifactId.success) {
+    res.status(400).json({ error: { code: 'VALIDATION_FAILED', message: 'Invalid run id or artifact id' } });
+    return;
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT name, content_type, size_bytes, storage_path
+       FROM workflow_artifacts
+       WHERE run_id = $1 AND artifact_id = $2`,
+      [runId.data, artifactId.data],
+    );
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Artifact not found' } });
+      return;
+    }
+
+    const artifact = result.rows[0];
+    if (!existsSync(artifact.storage_path)) {
+      res.status(404).json({ error: { code: 'ARTIFACT_FILE_MISSING', message: 'Artifact file is missing on disk' } });
+      return;
+    }
+    const fileStat = statSync(artifact.storage_path);
+    if (!fileStat.isFile()) {
+      res.status(404).json({ error: { code: 'ARTIFACT_FILE_MISSING', message: 'Artifact file is missing on disk' } });
+      return;
+    }
+
+    res.setHeader('Content-Type', artifact.content_type ?? 'application/octet-stream');
+    res.setHeader('Content-Length', String(fileStat.size));
+    res.setHeader('Content-Disposition', attachmentHeader(artifact.name));
+    createReadStream(artifact.storage_path).pipe(res);
+  } catch (err) {
+    logger.error(err, 'Failed to download workflow artifact');
+    if (!res.headersSent) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to download workflow artifact' } });
+    } else {
       res.end();
     }
   }
