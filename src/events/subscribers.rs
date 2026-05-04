@@ -1,4 +1,5 @@
 use std::io::Write as _;
+use std::path::Path;
 use std::sync::Mutex;
 
 use super::{Event, EventSubscriber};
@@ -127,12 +128,14 @@ pub struct DashboardSubscriber {
     repo: Option<String>,
     user_name: String,
     dispatch_log_path: Option<String>,
+    artifact_paths: Vec<String>,
     #[allow(dead_code)]
     sandbox_mode: String,
     state: Mutex<DashboardState>,
 }
 
 impl DashboardSubscriber {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         url: impl Into<String>,
         secret: Option<String>,
@@ -141,6 +144,7 @@ impl DashboardSubscriber {
         repo: Option<String>,
         user_name: impl Into<String>,
         sandbox_mode: impl Into<String>,
+        artifact_paths: Vec<String>,
     ) -> Self {
         Self {
             url: url.into(),
@@ -152,6 +156,7 @@ impl DashboardSubscriber {
             repo,
             user_name: user_name.into(),
             dispatch_log_path: std::env::var("STEPYARD_DISPATCH_LOG_PATH").ok(),
+            artifact_paths,
             sandbox_mode: sandbox_mode.into(),
             state: Mutex::new(DashboardState {
                 steps: Vec::new(),
@@ -273,6 +278,8 @@ impl EventSubscriber for DashboardSubscriber {
                 let payload = self.build_payload(*duration_ms, *timestamp);
                 let url = self.url.clone();
                 let secret = self.secret.clone();
+                let run_id = self.run_id.clone();
+                let artifact_paths = self.artifact_paths.clone();
 
                 let handle = tokio::spawn(async move {
                     let client = reqwest::Client::new();
@@ -298,6 +305,17 @@ impl EventSubscriber for DashboardSubscriber {
                         Err(e) => {
                             tracing::warn!(url = %url, error = %e, "Dashboard: HTTP POST failed");
                         }
+                    }
+
+                    if !artifact_paths.is_empty() {
+                        upload_dashboard_artifacts(
+                            &client,
+                            &url,
+                            secret.as_deref(),
+                            &run_id,
+                            &artifact_paths,
+                        )
+                        .await;
                     }
                 });
                 // Store handle so flush() can await it
@@ -353,6 +371,92 @@ impl EventSubscriber for DashboardSubscriber {
     }
 }
 
+fn dashboard_artifacts_url(events_url: &str, run_id: &str) -> String {
+    let trimmed = events_url.trim_end_matches('/');
+    let api_base = trimmed.strip_suffix("/events").unwrap_or(trimmed);
+    format!("{api_base}/workflows/{run_id}/artifacts")
+}
+
+async fn upload_dashboard_artifacts(
+    client: &reqwest::Client,
+    events_url: &str,
+    secret: Option<&str>,
+    run_id: &str,
+    paths: &[String],
+) {
+    let url = dashboard_artifacts_url(events_url, run_id);
+    for raw_path in paths {
+        let path = Path::new(raw_path);
+        let name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(name) if !name.is_empty() => name,
+            _ => {
+                tracing::warn!(path = %raw_path, "Dashboard: artifact path has no valid filename");
+                continue;
+            }
+        };
+
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::warn!(path = %raw_path, error = %e, "Dashboard: artifact read failed");
+                continue;
+            }
+        };
+
+        let payload = serde_json::json!({
+            "name": name,
+            "content_base64": base64_encode(&bytes),
+            "content_type": "application/octet-stream",
+        });
+        let mut req = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&payload);
+        if let Some(token) = secret {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    tracing::info!(url = %url, path = %raw_path, status = %status, "Dashboard: artifact uploaded");
+                } else {
+                    let body = resp.text().await.unwrap_or_default();
+                    tracing::warn!(url = %url, path = %raw_path, status = %status, body = %body, "Dashboard: artifact upload rejected");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(url = %url, path = %raw_path, error = %e, "Dashboard: artifact upload failed");
+            }
+        }
+    }
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
 impl DashboardSubscriber {
     /// Wait for the pending dashboard POST to complete.
     /// Call this before process exit to ensure the event is delivered.
@@ -365,5 +469,31 @@ impl DashboardSubscriber {
         if let Some(h) = handle {
             let _ = h.await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64_encode, dashboard_artifacts_url};
+
+    #[test]
+    fn derives_artifact_url_from_events_endpoint() {
+        assert_eq!(
+            dashboard_artifacts_url("http://localhost:3001/api/events", "run-1"),
+            "http://localhost:3001/api/workflows/run-1/artifacts"
+        );
+        assert_eq!(
+            dashboard_artifacts_url("http://localhost:3001/api/events/", "run-1"),
+            "http://localhost:3001/api/workflows/run-1/artifacts"
+        );
+    }
+
+    #[test]
+    fn base64_encoder_matches_standard_fixtures() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"hello world"), "aGVsbG8gd29ybGQ=");
     }
 }

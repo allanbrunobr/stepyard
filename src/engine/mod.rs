@@ -246,6 +246,7 @@ impl Engine {
                     repo_name,
                     user_name.clone(),
                     sandbox_str,
+                    dashboard_cfg.artifacts.clone(),
                 )));
                 tracing::info!(url = %dashboard_cfg.url, user = %user_name, "Registered dashboard event subscriber");
             }
