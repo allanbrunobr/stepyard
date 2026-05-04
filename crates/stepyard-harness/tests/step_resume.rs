@@ -6,10 +6,11 @@
 
 use std::sync::Arc;
 
-use stepyard_harness::{Engine, HarnessConfig, Step, StepOutcome, Workflow};
-use stepyard_sandbox_orchestrator::{MockLifecycle, SandboxLifecycle};
-use stepyard_session::{migrate, Session, SessionStatus};
 use sqlx::postgres::PgPoolOptions;
+use stepyard_harness::{Engine, HarnessConfig, Step, StepExecutor, StepOutcome, Workflow};
+use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
+use stepyard_session::{migrate, Session, SessionStatus};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -138,9 +139,7 @@ async fn resume_after_process_crash_continues_from_last_completed_step() {
             let events = e2.session().replay().await.expect("replay");
             let started = events
                 .iter()
-                .filter(|e| {
-                    e.payload.get("event").and_then(|v| v.as_str()) == Some("step_started")
-                })
+                .filter(|e| e.payload.get("event").and_then(|v| v.as_str()) == Some("step_started"))
                 .count();
             let completed = events
                 .iter()
@@ -188,31 +187,28 @@ async fn cancel_from_another_task_stops_workflow_and_marks_session_cancelled() {
 async fn cancel_from_another_task_during_long_running_step() {
     // AC: "um step em execucao + cancel de outra task -> StepFailed ou
     // Cancelled + session.status = cancelled". We use a StepExecutor that
-    // blocks briefly, and another tokio task flips the cancel token. By
-    // the time step() returns, the cancel has been observed either
-    // before/during/after exec — the engine must end with session status
+    // blocks after signalling that execution has started, and another tokio
+    // task flips the cancel token. By the time step() returns, the cancel has
+    // been observed during exec — the engine must end with session status
     // Cancelled.
     db_test!(pool, {
         use async_trait::async_trait;
-        use stepyard_harness::StepExecutor;
-        use stepyard_sandbox_orchestrator::{ExecOutput, SandboxError};
         use std::collections::HashMap;
-        use std::time::Duration;
 
-        struct SlowExec;
+        struct BlockingExec {
+            entered: Arc<Notify>,
+        }
+
         #[async_trait]
-        impl StepExecutor for SlowExec {
+        impl StepExecutor for BlockingExec {
             async fn execute(
                 &self,
                 _sid: Uuid,
                 _step: &stepyard_harness::Step,
             ) -> Result<ExecOutput, SandboxError> {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                Ok(ExecOutput {
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    exit_code: 0,
-                })
+                self.entered.notify_one();
+                std::future::pending::<()>().await;
+                unreachable!("pending never resolves")
             }
 
             async fn execute_with_env(
@@ -229,7 +225,10 @@ async fn cancel_from_another_task_during_long_running_step() {
             .await
             .expect("new");
         let lifecycle: Arc<dyn SandboxLifecycle> = Arc::new(MockLifecycle::new());
-        let exec: Arc<dyn StepExecutor> = Arc::new(SlowExec);
+        let exec_entered = Arc::new(Notify::new());
+        let exec: Arc<dyn StepExecutor> = Arc::new(BlockingExec {
+            entered: Arc::clone(&exec_entered),
+        });
         let mut engine = Engine::with_executor(
             HarnessConfig::default(),
             session,
@@ -240,12 +239,14 @@ async fn cancel_from_another_task_during_long_running_step() {
         let cancel = engine.cancel_token();
         let sid = engine.session().id();
 
-        // Another task cancels after 50ms — the first step's exec is
-        // still running.
+        // Another task cancels once the first step's exec future is known to
+        // be running. This avoids a real sleep while still proving mid-step
+        // cancellation.
         tokio::spawn({
             let cancel = cancel.clone();
+            let exec_entered = Arc::clone(&exec_entered);
             async move {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                exec_entered.notified().await;
                 cancel.cancel();
             }
         });
