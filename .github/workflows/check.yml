@@ -74,10 +74,11 @@ jobs:
       # Round 3 Story 5 — architecture §G-gates.
       #
       # `scripts/audit-patterns.sh` runs the ripgrep-based gates:
-      #   G1 env-value leak         (blocking)
-      #   G2 secret field via %      (blocking)
-      #   G3 shell-string joining    (blocking)
+      #   G1 env-value leak          (blocking)
+      #   G2 secret field via %       (blocking)
+      #   G3 shell-string joining     (blocking)
       #   G5 Other(...) outside classifier (warning-only, exits 0 with WARN lines)
+      #   Rule7a real sleep in tests  (warning-only baseline)
       #
       # `cargo xtask audit-emit-before-io` runs the G4 syn AST walker as a
       # warning-first baseline. It exits 0 today; `continue-on-error: true`
@@ -93,7 +94,7 @@ jobs:
           fi
           rg --version
 
-      - name: Pattern audits (G1/G2/G3 blocking, G5 warning-only)
+      - name: Pattern audits (G1/G2/G3 blocking, warning baselines)
         run: scripts/audit-patterns.sh
 
       - name: Emit-before-IO audit (G4 warning-first baseline)
