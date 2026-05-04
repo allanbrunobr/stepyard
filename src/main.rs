@@ -83,8 +83,8 @@ async fn main() -> ExitCode {
                 Err(e) => {
                     // Round 3 Story 4: route the anyhow-chain rendering through
                     // `sanitize_human` so any raw stderr captured in a
-                    // `SandboxError::Other(String)` (or future classifier
-                    // payload) cannot smuggle ANSI escapes or bidi overrides
+                    // catch-all sandbox error (or future classifier payload)
+                    // cannot smuggle ANSI escapes or bidi overrides
                     // into the terminal. The red `error:` ANSI prefix is part
                     // of the CLI's own UI — kept verbatim, outside the sanitize
                     // pass — so only the untrusted error body is normalized.
