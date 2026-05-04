@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status:** Implemented on `main` via PR #61 (`640757c`) with follow-up CI and smoke coverage in PRs #62–#66. The task checkboxes below are preserved as the original execution plan, not as current open work.
+
 **Goal:** Refactor `stepyard-session` to be backend-agnostic via an `EventStore` trait, add `SqliteEventStore` as a compile-time alternative to the existing Postgres path, and verify byte-equivalent replay behavior across both backends.
 
 **Architecture:** Mutually-exclusive Cargo features `postgres` (default) and `sqlite` at the workspace root. The existing `Session` struct, currently bound to `PgPool`, is refactored to hold `Arc<dyn EventStore>`. The current Postgres SQL extracts into `PgEventStore`; a new `SqliteEventStore` implements the same trait. Migrations split into `migrations-pg/` and `migrations-sqlite/`. A CI matrix lane is added so both backends are tested every PR.

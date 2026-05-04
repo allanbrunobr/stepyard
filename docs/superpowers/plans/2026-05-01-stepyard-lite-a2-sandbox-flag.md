@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status:** Implemented on `main` via PR #61 (`640757c`) and locked with additional runtime/profile coverage in PR #65 (`77465c8`). The task checkboxes below are preserved as the original execution plan, not as current open work.
+
 **Goal:** Add a value-typed `--sandbox-runtime <docker|local>` CLI flag (with `STEPYARD_SANDBOX` env fallback) that selects between `DockerLifecycle` and `LocalShellLifecycle` at run time, defaulting to `local` on the `sqlite` build profile and `docker` on `postgres`. The existing boolean `--no-sandbox` flag is kept as a legacy alias.
 
 **Architecture:** A small, self-contained CLI surface change. The wiring point already exists at `src/cli/commands.rs:237` (the `if sandbox_mode == SandboxMode::Disabled { LocalShell } else { Docker }` branch). This PR replaces that single decision with a dedicated `SandboxRuntime` enum resolved by precedence (CLI flag > env > profile default), threaded through to the existing branch. No new lifecycle code: `LocalShellLifecycle` is already exported from `stepyard-sandbox-orchestrator`.

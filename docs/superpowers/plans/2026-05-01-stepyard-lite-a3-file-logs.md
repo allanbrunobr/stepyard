@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status:** Implemented on `main` via PR #61 (`640757c`) and hardened by PR #64 (`678ef31`) and PR #66 (`04280fe`). The task checkboxes below are preserved as the original execution plan, not as current open work.
+
 **Goal:** Mirror every appended `SessionEvent` to a session-scoped JSONL file at `.stepyard/logs/<session_id>.jsonl`, append-only, always on with opt-out (`--no-file-logs` / `STEPYARD_NO_FILE_LOGS=1`). Failure to write the file degrades non-silently (one `Event::FileLogWriteFailed` is emitted to the underlying event store, the per-session mirror is then disabled), but never fails the originating step.
 
 **Architecture:** A `FileLogMirror` decorator that wraps `Arc<dyn EventStore>` and impls `EventStore` itself. In its `append`, it (1) delegates to the inner store, (2) on success serializes the resulting `SessionEvent` as a single JSON line and appends to `.stepyard/logs/<session_id>.jsonl`. A per-session "broken" flag (set after the first file IO failure) short-circuits further writes for that session. The factory from PR A1 (`build_store_from_env`) is extended to optionally wrap its return value with this decorator.
