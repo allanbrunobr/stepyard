@@ -135,6 +135,7 @@ struct DispatchRequest<'a> {
 
 #[derive(Debug, Deserialize)]
 struct DispatchResponse {
+    run_id: Option<String>,
     dispatched_at: String,
     pid: u32,
     workflow: String,
@@ -196,10 +197,11 @@ async fn exec_cmd(
         .with_context(|| format!("Unexpected response body: {}", text))?;
 
     println!(
-        "✓ Dispatched `{}` (target: {})\n  pid={}  dispatched_at={}\n  track: {}/workflows",
+        "✓ Dispatched `{}` (target: {})\n  pid={}  run_id={}  dispatched_at={}\n  track: {}/workflows",
         parsed.workflow,
         parsed.target,
         parsed.pid,
+        parsed.run_id.as_deref().unwrap_or("-"),
         parsed.dispatched_at,
         cfg.url.trim_end_matches('/')
     );
@@ -302,6 +304,11 @@ struct RemoteLogStep {
     error: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RemoteLogChunk {
+    text: String,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct SseEvent {
     event: String,
@@ -342,6 +349,11 @@ async fn logs_cmd(cfg: &RemoteConfig, run_id: &str) -> Result<()> {
                     let snapshot: RemoteLogSnapshot =
                         serde_json::from_str(&event.data).context("Invalid log snapshot JSON")?;
                     print_log_snapshot(&snapshot);
+                }
+                "log" => {
+                    let chunk: RemoteLogChunk =
+                        serde_json::from_str(&event.data).context("Invalid log chunk JSON")?;
+                    print!("{}", crate::display::sanitize_human(&chunk.text));
                 }
                 "done" => {
                     println!("stream closed: {}", event.data);

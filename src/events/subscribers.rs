@@ -126,6 +126,7 @@ pub struct DashboardSubscriber {
     target: String,
     repo: Option<String>,
     user_name: String,
+    dispatch_log_path: Option<String>,
     #[allow(dead_code)]
     sandbox_mode: String,
     state: Mutex<DashboardState>,
@@ -144,11 +145,13 @@ impl DashboardSubscriber {
         Self {
             url: url.into(),
             secret,
-            run_id: uuid::Uuid::new_v4().to_string(),
+            run_id: std::env::var("STEPYARD_DASHBOARD_RUN_ID")
+                .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string()),
             workflow_name: workflow_name.into(),
             target: target.into(),
             repo,
             user_name: user_name.into(),
+            dispatch_log_path: std::env::var("STEPYARD_DISPATCH_LOG_PATH").ok(),
             sandbox_mode: sandbox_mode.into(),
             state: Mutex::new(DashboardState {
                 steps: Vec::new(),
@@ -160,7 +163,11 @@ impl DashboardSubscriber {
     }
 
     /// Build the complete payload for POST /api/events
-    fn build_payload(&self, duration_ms: u64, finished_at: chrono::DateTime<chrono::Utc>) -> serde_json::Value {
+    fn build_payload(
+        &self,
+        duration_ms: u64,
+        finished_at: chrono::DateTime<chrono::Utc>,
+    ) -> serde_json::Value {
         let state = self.state.lock().unwrap();
         let total_tokens: u64 = state
             .steps
@@ -191,6 +198,9 @@ impl DashboardSubscriber {
         if let Some(ref repo) = self.repo {
             payload["repo"] = serde_json::json!(repo);
         }
+        if let Some(ref dispatch_log_path) = self.dispatch_log_path {
+            payload["dispatch_log_path"] = serde_json::json!(dispatch_log_path);
+        }
         payload
     }
 }
@@ -202,11 +212,26 @@ impl EventSubscriber for DashboardSubscriber {
                 let mut state = self.state.lock().unwrap();
                 state.started_at = Some(*timestamp);
             }
-            Event::StepStarted { step_name, step_type, .. } => {
+            Event::StepStarted {
+                step_name,
+                step_type,
+                ..
+            } => {
                 let mut state = self.state.lock().unwrap();
-                state.pending_steps.insert(step_name.clone(), step_type.clone());
+                state
+                    .pending_steps
+                    .insert(step_name.clone(), step_type.clone());
             }
-            Event::StepCompleted { step_name, step_type, duration_ms, input_tokens, output_tokens, cost_usd: _, sandboxed, .. } => {
+            Event::StepCompleted {
+                step_name,
+                step_type,
+                duration_ms,
+                input_tokens,
+                output_tokens,
+                cost_usd: _,
+                sandboxed,
+                ..
+            } => {
                 let mut state = self.state.lock().unwrap();
                 state.pending_steps.remove(step_name);
                 state.steps.push(TrackedStep {
@@ -220,7 +245,14 @@ impl EventSubscriber for DashboardSubscriber {
                     error: None,
                 });
             }
-            Event::StepFailed { step_name, step_type, error, duration_ms, sandboxed, .. } => {
+            Event::StepFailed {
+                step_name,
+                step_type,
+                error,
+                duration_ms,
+                sandboxed,
+                ..
+            } => {
                 let mut state = self.state.lock().unwrap();
                 state.pending_steps.remove(step_name);
                 state.steps.push(TrackedStep {
@@ -234,7 +266,10 @@ impl EventSubscriber for DashboardSubscriber {
                     error: Some(error.clone()),
                 });
             }
-            Event::WorkflowCompleted { duration_ms, timestamp } => {
+            Event::WorkflowCompleted {
+                duration_ms,
+                timestamp,
+            } => {
                 let payload = self.build_payload(*duration_ms, *timestamp);
                 let url = self.url.clone();
                 let secret = self.secret.clone();
