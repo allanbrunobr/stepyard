@@ -104,8 +104,10 @@ fn run_lite_workflow(
     cwd: &Path,
     db_path: &Path,
     tenant: &str,
+    sandbox_runtime: Option<&str>,
     extra_args: &[&str],
     no_file_logs_env: Option<&str>,
+    sandbox_env: Option<&str>,
 ) {
     let workflow_path = fixture("hello-world-cmd.yaml");
     let mut args = vec![
@@ -113,9 +115,11 @@ fn run_lite_workflow(
         workflow_path.to_str().expect("workflow path is utf-8"),
         "--engine",
         "v2",
-        "--sandbox-runtime",
-        "local",
     ];
+    if let Some(runtime) = sandbox_runtime {
+        args.push("--sandbox-runtime");
+        args.push(runtime);
+    }
     args.extend_from_slice(extra_args);
 
     let mut command = Command::cargo_bin("stepyard").expect("stepyard binary");
@@ -133,6 +137,14 @@ fn run_lite_workflow(
             command.env_remove("STEPYARD_NO_FILE_LOGS");
         }
     }
+    match sandbox_env {
+        Some(value) => {
+            command.env("STEPYARD_SANDBOX", value);
+        }
+        None => {
+            command.env_remove("STEPYARD_SANDBOX");
+        }
+    }
 
     command.assert().success();
 }
@@ -145,7 +157,15 @@ async fn sqlite_lite_cli_runs_local_sandbox_and_writes_file_log() {
     let db_path = cwd.path().join("sessions.db");
     let tenant = format!("lite-smoke-{}", Uuid::new_v4());
 
-    run_lite_workflow(cwd.path(), &db_path, &tenant, &[], None);
+    run_lite_workflow(
+        cwd.path(),
+        &db_path,
+        &tenant,
+        Some("local"),
+        &[],
+        None,
+        None,
+    );
 
     assert!(
         db_path.is_file(),
@@ -206,7 +226,15 @@ async fn sqlite_lite_cli_no_file_logs_flag_suppresses_file_mirror_only() {
     let db_path = cwd.path().join("sessions.db");
     let tenant = format!("lite-smoke-{}", Uuid::new_v4());
 
-    run_lite_workflow(cwd.path(), &db_path, &tenant, &["--no-file-logs"], None);
+    run_lite_workflow(
+        cwd.path(),
+        &db_path,
+        &tenant,
+        Some("local"),
+        &["--no-file-logs"],
+        None,
+        None,
+    );
 
     assert!(
         db_path.is_file(),
@@ -236,7 +264,15 @@ async fn sqlite_lite_cli_no_file_logs_env_suppresses_file_mirror_only() {
     let db_path = cwd.path().join("sessions.db");
     let tenant = format!("lite-smoke-{}", Uuid::new_v4());
 
-    run_lite_workflow(cwd.path(), &db_path, &tenant, &[], Some("1"));
+    run_lite_workflow(
+        cwd.path(),
+        &db_path,
+        &tenant,
+        Some("local"),
+        &[],
+        Some("1"),
+        None,
+    );
 
     assert!(
         db_path.is_file(),
@@ -255,5 +291,55 @@ async fn sqlite_lite_cli_no_file_logs_env_suppresses_file_mirror_only() {
                 .is_some_and(|event| event == "workflow_completed")
         }),
         "SQLite event store should still record workflow completion"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_lite_cli_profile_default_uses_local_runtime() {
+    let cwd = tempfile::tempdir().expect("tempdir");
+    init_minimal_git_repo(cwd.path());
+
+    let db_path = cwd.path().join("sessions.db");
+    let tenant = format!("lite-smoke-{}", Uuid::new_v4());
+
+    run_lite_workflow(cwd.path(), &db_path, &tenant, None, &[], None, None);
+
+    assert!(
+        read_sqlite_payloads(&db_path).await.iter().any(|payload| {
+            payload
+                .get("event")
+                .and_then(Value::as_str)
+                .is_some_and(|event| event == "workflow_completed")
+        }),
+        "SQLite profile should default to LocalShell and complete without Docker"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_lite_cli_stepyard_sandbox_env_selects_local_runtime() {
+    let cwd = tempfile::tempdir().expect("tempdir");
+    init_minimal_git_repo(cwd.path());
+
+    let db_path = cwd.path().join("sessions.db");
+    let tenant = format!("lite-smoke-{}", Uuid::new_v4());
+
+    run_lite_workflow(
+        cwd.path(),
+        &db_path,
+        &tenant,
+        None,
+        &[],
+        None,
+        Some("local"),
+    );
+
+    assert!(
+        read_sqlite_payloads(&db_path).await.iter().any(|payload| {
+            payload
+                .get("event")
+                .and_then(Value::as_str)
+                .is_some_and(|event| event == "workflow_completed")
+        }),
+        "STEPYARD_SANDBOX=local should select LocalShell and complete without Docker"
     );
 }
