@@ -235,6 +235,111 @@ workflowsRouter.get('/workflows/distinct', async (_req: Request, res: Response) 
   }
 });
 
+// --- GET /workflows/:runId/logs/stream (SSE snapshots for remote CLI) ---
+
+const TERMINAL_STATUSES = new Set(['completed', 'success', 'failed', 'cancelled', 'canceled']);
+
+interface WorkflowSnapshot {
+  run: Record<string, unknown>;
+  steps: Record<string, unknown>[];
+}
+
+async function loadWorkflowSnapshot(runId: string): Promise<WorkflowSnapshot | null> {
+  const runResult = await pool.query('SELECT * FROM workflow_runs WHERE run_id = $1', [runId]);
+  if (runResult.rows.length === 0) {
+    return null;
+  }
+
+  const stepsResult = await pool.query(
+    'SELECT * FROM workflow_steps WHERE run_id = $1 ORDER BY id',
+    [runId],
+  );
+
+  return {
+    run: runResult.rows[0],
+    steps: stepsResult.rows,
+  };
+}
+
+function writeSse(res: Response, event: string, data: unknown): void {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+workflowsRouter.get('/workflows/:runId/logs/stream', requireAuth, async (req: Request, res: Response) => {
+  const runId = String(req.params.runId);
+
+  try {
+    const initial = await loadWorkflowSnapshot(runId);
+    if (!initial) {
+      res.status(404).json({ error: { code: 'NOT_FOUND', message: `Workflow run ${runId} not found` } });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    let seq = 0;
+    let lastPayload = '';
+    const emitSnapshot = async (): Promise<boolean> => {
+      const snapshot = await loadWorkflowSnapshot(runId);
+      if (!snapshot) {
+        writeSse(res, 'error', { code: 'NOT_FOUND', message: `Workflow run ${runId} not found` });
+        return true;
+      }
+
+      const payload = JSON.stringify(snapshot);
+      if (payload !== lastPayload) {
+        lastPayload = payload;
+        writeSse(res, 'snapshot', { seq: ++seq, ...snapshot });
+      } else {
+        writeSse(res, 'ping', { seq });
+      }
+
+      const status = String(snapshot.run.status ?? '').toLowerCase();
+      if (TERMINAL_STATUSES.has(status)) {
+        writeSse(res, 'done', { seq, status });
+        return true;
+      }
+
+      return false;
+    };
+
+    if (await emitSnapshot()) {
+      res.end();
+      return;
+    }
+
+    const interval = setInterval(() => {
+      emitSnapshot()
+        .then((done) => {
+          if (done) {
+            clearInterval(interval);
+            res.end();
+          }
+        })
+        .catch((err) => {
+          logger.error(err, 'Failed to stream workflow logs');
+          writeSse(res, 'error', { code: 'INTERNAL_ERROR', message: 'Failed to stream workflow logs' });
+          clearInterval(interval);
+          res.end();
+        });
+    }, 1000);
+
+    req.on('close', () => clearInterval(interval));
+  } catch (err) {
+    logger.error(err, 'Failed to open workflow log stream');
+    if (!res.headersSent) {
+      res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to open workflow log stream' } });
+    } else {
+      writeSse(res, 'error', { code: 'INTERNAL_ERROR', message: 'Failed to open workflow log stream' });
+      res.end();
+    }
+  }
+});
+
 // --- GET /workflows/:runId (detail with steps) ---
 
 workflowsRouter.get('/workflows/:runId', async (req: Request, res: Response) => {

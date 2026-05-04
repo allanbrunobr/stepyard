@@ -12,6 +12,7 @@
 //! Story 5.2 (Epic 5 — Remote-First Execution).
 
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -98,8 +99,8 @@ fn load_config() -> Result<RemoteConfig> {
     }
     let body = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
-    let cfg: RemoteConfig = toml::from_str(&body)
-        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    let cfg: RemoteConfig =
+        toml::from_str(&body).with_context(|| format!("Failed to parse {}", path.display()))?;
     if cfg.url.is_empty() || cfg.secret.is_empty() {
         bail!("url and secret must be set in {}", path.display());
     }
@@ -151,7 +152,7 @@ pub async fn run(args: RemoteArgs) -> Result<()> {
             target,
         } => exec_cmd(&cfg, workflow, repo, branch, vars, target).await,
         RemoteCommand::Status { workflow, limit } => status_cmd(&cfg, workflow, limit).await,
-        RemoteCommand::Logs { run_id } => logs_cmd(&cfg, &run_id),
+        RemoteCommand::Logs { run_id } => logs_cmd(&cfg, &run_id).await,
     }
 }
 
@@ -238,7 +239,11 @@ async fn status_cmd(cfg: &RemoteConfig, workflow: Option<String>, limit: u32) ->
         .with_context(|| format!("HTTP GET {} failed", url))?;
 
     if !res.status().is_success() {
-        bail!("Status query failed ({}): {}", res.status(), res.text().await.unwrap_or_default());
+        bail!(
+            "Status query failed ({}): {}",
+            res.status(),
+            res.text().await.unwrap_or_default()
+        );
     }
 
     let body: WorkflowListResponse = res.json().await.context("Invalid list response JSON")?;
@@ -252,7 +257,11 @@ async fn status_cmd(cfg: &RemoteConfig, workflow: Option<String>, limit: u32) ->
     );
     for entry in body.data {
         let target = entry.target.unwrap_or_default();
-        let target = if target.len() > 18 { &target[..18] } else { &target };
+        let target = if target.len() > 18 {
+            &target[..18]
+        } else {
+            &target
+        };
         let workflow = if entry.workflow.len() > 22 {
             &entry.workflow[..22]
         } else {
@@ -266,15 +275,157 @@ async fn status_cmd(cfg: &RemoteConfig, workflow: Option<String>, limit: u32) ->
     Ok(())
 }
 
-fn logs_cmd(cfg: &RemoteConfig, run_id: &str) -> Result<()> {
+#[derive(Debug, Deserialize)]
+struct RemoteLogSnapshot {
+    seq: u64,
+    run: RemoteLogRun,
+    #[serde(default)]
+    steps: Vec<RemoteLogStep>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RemoteLogRun {
+    workflow: String,
+    target: Option<String>,
+    status: String,
+    started_at: String,
+    finished_at: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RemoteLogStep {
+    step_name: String,
+    step_type: Option<String>,
+    status: String,
+    duration_ms: Option<u64>,
+    error: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SseEvent {
+    event: String,
+    data: String,
+}
+
+async fn logs_cmd(cfg: &RemoteConfig, run_id: &str) -> Result<()> {
     let base = cfg.url.trim_end_matches('/');
-    // TODO (Story 5.3): stream SSE from /api/workflows/:run_id/logs/stream
-    println!(
-        "Log streaming lands in Story 5.3. For now, open the dashboard:\n  {}/workflows",
-        base
-    );
-    println!("Run id: {}", run_id);
+    let url = format!("{base}/api/workflows/{run_id}/logs/stream");
+    let client = reqwest::Client::new();
+    let mut res = client
+        .get(&url)
+        .bearer_auth(&cfg.secret)
+        .send()
+        .await
+        .with_context(|| format!("HTTP GET {} failed", url))?;
+
+    if !res.status().is_success() {
+        bail!(
+            "Log stream failed ({}): {}",
+            res.status(),
+            res.text().await.unwrap_or_default()
+        );
+    }
+
+    println!("streaming remote run {run_id}");
+    let mut buffer = String::new();
+    while let Some(chunk) = res
+        .chunk()
+        .await
+        .with_context(|| format!("HTTP stream {} failed", url))?
+    {
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        let events = drain_sse_events(&mut buffer);
+        for event in events {
+            match event.event.as_str() {
+                "snapshot" => {
+                    let snapshot: RemoteLogSnapshot =
+                        serde_json::from_str(&event.data).context("Invalid log snapshot JSON")?;
+                    print_log_snapshot(&snapshot);
+                }
+                "done" => {
+                    println!("stream closed: {}", event.data);
+                    return Ok(());
+                }
+                "error" => bail!("remote log stream error: {}", event.data),
+                "ping" => {}
+                _ => {}
+            }
+        }
+        io::stdout().flush().ok();
+    }
+
     Ok(())
+}
+
+fn drain_sse_events(buffer: &mut String) -> Vec<SseEvent> {
+    let normalized = buffer.replace("\r\n", "\n");
+    let mut parts: Vec<&str> = normalized.split("\n\n").collect();
+    let tail = parts.pop().unwrap_or_default().to_string();
+    let events = parts
+        .into_iter()
+        .filter_map(parse_sse_event)
+        .collect::<Vec<_>>();
+    *buffer = tail;
+    events
+}
+
+fn parse_sse_event(frame: &str) -> Option<SseEvent> {
+    let mut event = "message".to_string();
+    let mut data = Vec::new();
+
+    for line in frame.lines() {
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event = value.trim_start().to_string();
+        } else if let Some(value) = line.strip_prefix("data:") {
+            data.push(value.trim_start().to_string());
+        }
+    }
+
+    if data.is_empty() {
+        return None;
+    }
+
+    Some(SseEvent {
+        event,
+        data: data.join("\n"),
+    })
+}
+
+fn print_log_snapshot(snapshot: &RemoteLogSnapshot) {
+    let target = snapshot.run.target.as_deref().unwrap_or("-");
+    let finished = snapshot.run.finished_at.as_deref().unwrap_or("-");
+    println!(
+        "\n[{}] {} target={} status={} started={} finished={}",
+        snapshot.seq,
+        snapshot.run.workflow,
+        target,
+        snapshot.run.status,
+        snapshot.run.started_at,
+        finished
+    );
+
+    for step in &snapshot.steps {
+        let kind = step.step_type.as_deref().unwrap_or("-");
+        let duration = step
+            .duration_ms
+            .map(|ms| format!("{ms}ms"))
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "  - {:<24} {:<10} {:<10} {}",
+            step.step_name, kind, step.status, duration
+        );
+        if let Some(error) = &step.error {
+            println!("    error: {error}");
+        }
+    }
+
+    if let Some(error) = &snapshot.run.error {
+        println!("run error: {error}");
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -332,5 +483,31 @@ mod tests {
         assert!(json.get("repo").is_none());
         assert!(json.get("branch").is_none());
         assert!(json.get("vars").is_none());
+    }
+
+    #[test]
+    fn drain_sse_events_keeps_partial_tail() {
+        let mut buffer = "event: snapshot\ndata: {\"seq\":1}\n\n event".to_string();
+        let events = drain_sse_events(&mut buffer);
+        assert_eq!(
+            events,
+            vec![SseEvent {
+                event: "snapshot".into(),
+                data: "{\"seq\":1}".into(),
+            }]
+        );
+        assert_eq!(buffer, " event");
+    }
+
+    #[test]
+    fn parse_sse_event_joins_multiline_data() {
+        let event = parse_sse_event("event: error\ndata: first\ndata: second").unwrap();
+        assert_eq!(
+            event,
+            SseEvent {
+                event: "error".into(),
+                data: "first\nsecond".into(),
+            }
+        );
     }
 }
