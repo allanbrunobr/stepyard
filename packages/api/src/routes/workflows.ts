@@ -467,7 +467,7 @@ workflowsRouter.get('/workflows/:runId/logs/stream', requireAuth, async (req: Re
 
 // --- Workflow artifacts (registered BEFORE :runId to avoid param conflict) ---
 
-workflowsRouter.get('/workflows/:runId/artifacts', requireAuth, async (req: Request, res: Response) => {
+workflowsRouter.get('/workflows/:runId/artifacts', async (req: Request, res: Response) => {
   const runId = UUID_PARAM.safeParse(req.params.runId);
   if (!runId.success) {
     res.status(400).json({ error: { code: 'VALIDATION_FAILED', message: 'Invalid run id' } });
@@ -576,7 +576,7 @@ workflowsRouter.post('/workflows/:runId/artifacts', requireAuth, async (req: Req
   }
 });
 
-workflowsRouter.get('/workflows/:runId/artifacts/:artifactId', requireAuth, async (req: Request, res: Response) => {
+workflowsRouter.get('/workflows/:runId/artifacts/:artifactId', async (req: Request, res: Response) => {
   const runId = UUID_PARAM.safeParse(req.params.runId);
   const artifactId = UUID_PARAM.safeParse(req.params.artifactId);
   if (!runId.success || !artifactId.success) {

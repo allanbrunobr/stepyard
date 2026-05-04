@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api-client';
-import type { WorkflowRun, WorkflowStep } from '../types';
+import type { WorkflowArtifact, WorkflowRun, WorkflowStep } from '../types';
 
 interface PaginationMeta {
   total: number;
@@ -16,6 +16,10 @@ interface WorkflowListResponse {
 
 interface WorkflowDetailResponse {
   data: WorkflowRun & { steps: WorkflowStep[] };
+}
+
+interface WorkflowArtifactsResponse {
+  data: WorkflowArtifact[];
 }
 
 interface DistinctValuesResponse {
@@ -60,6 +64,14 @@ export function useWorkflowDetail(runId: string) {
   return useQuery<WorkflowDetailResponse>({
     queryKey: ['workflow', runId],
     queryFn: () => apiFetch<WorkflowDetailResponse>(`/workflows/${runId}`),
+    enabled: !!runId,
+  });
+}
+
+export function useWorkflowArtifacts(runId: string) {
+  return useQuery<WorkflowArtifactsResponse>({
+    queryKey: ['workflow', runId, 'artifacts'],
+    queryFn: () => apiFetch<WorkflowArtifactsResponse>(`/workflows/${runId}/artifacts`),
     enabled: !!runId,
   });
 }
