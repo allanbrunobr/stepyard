@@ -136,6 +136,9 @@ jobs:
       - name: Check SQLite Lite CLI profile
         run: cargo check -p stepyard-engine --no-default-features --features sqlite
 
+      - name: Run SQLite Lite CLI e2e smoke
+        run: cargo test -p stepyard-engine --test cli_lite_smoke --no-default-features --features sqlite
+
       - name: Test SQLite session backend
         run: cargo test -p stepyard-session --no-default-features --features sqlite
 
