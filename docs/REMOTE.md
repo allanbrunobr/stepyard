@@ -127,6 +127,35 @@ dashboard `run_id`, records a placeholder row, and links that row to the
 detached process log. The stream emits both sanitized process-log chunks and
 dashboard snapshots: run status plus the current step rows.
 
+## Remote artifacts
+
+The Dashboard API accepts authenticated per-run artifacts through
+`POST /api/workflows/:run_id/artifacts`. The first implementation is an API
+contract: upload JSON with a plain filename and base64 content, then list or
+download the artifact from the same run. Container-side automatic upload hooks
+remain a follow-up.
+
+```bash
+CONTENT=$(base64 -i report.zip | tr -d '\n')
+curl -H "Authorization: Bearer $API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"report.zip\",\"content_base64\":\"$CONTENT\",\"content_type\":\"application/zip\"}" \
+  "$API_URL/api/workflows/$RUN_ID/artifacts"
+
+curl -H "Authorization: Bearer $API_SECRET" \
+  "$API_URL/api/workflows/$RUN_ID/artifacts"
+
+curl -L -H "Authorization: Bearer $API_SECRET" \
+  "$API_URL/api/workflows/$RUN_ID/artifacts/$ARTIFACT_ID" \
+  -o report.zip
+```
+
+Artifacts are stored on the API host under `STEPYARD_ARTIFACT_DIR`, defaulting
+to `/tmp/stepyard-artifacts`. The server never uses the submitted filename as a
+filesystem path; it stores bytes under a generated artifact id and keeps the
+original name only as metadata/download presentation. Uploads are capped by
+`STEPYARD_ARTIFACT_MAX_BYTES`, defaulting to 10 MiB.
+
 ## Security notes
 
 - **API secret**: `API_SECRET` in `.env` is the Bearer token for all dispatch
@@ -157,4 +186,5 @@ dashboard snapshots: run status plus the current step rows.
 - **5.4 follow-up** — true warm sandbox pool. This requires a worker/queue,
   container leases, workspace reset semantics, and secret-isolation rules; it is
   not safe to bolt onto the current detached `POST /dispatch` flow.
-- **5.5** — upload arbitrary artifacts from the container back to the dashboard
+- **5.5 follow-up** — automatic container-side artifact upload wiring. The API
+  contract exists; the sandbox/engine still needs a first-class upload hook.
