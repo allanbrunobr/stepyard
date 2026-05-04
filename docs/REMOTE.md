@@ -40,7 +40,7 @@ Create `~/.stepyard/remote.toml`:
 ```toml
 url = "http://187.45.254.82:3001"
 secret = "<API_SECRET from dashboard .env on the VPS>"
-# default_repo = "allanbrunobr/stepyard"   # optional — used when --repo omitted
+default_repo = "allanbrunobr/stepyard"   # used when --repo omitted
 ```
 
 Then:
@@ -55,6 +55,13 @@ stepyard remote status --workflow fix-issue
 
 stepyard remote logs <run_id>
 ```
+
+Remote dispatch is repo-mode by default: every run must provide `--repo` or
+`default_repo`. The API rejects repo-less dispatches because that path depends
+on a host workspace mounted/copied into a per-run sandbox, which is not a stable
+remote contract. Operators can temporarily restore the old behavior with
+`STEPYARD_DISPATCH_ALLOW_LOCAL_WORKSPACE=true`, but that is an explicit
+compatibility escape hatch, not the supported remote mode.
 
 ## VPS deployment (Dashboard API)
 
@@ -147,5 +154,7 @@ dashboard snapshots: run status plus the current step rows.
 
 ## What's next (deferred to later stories)
 
-- **5.4** — warm sandbox pool on the VPS to eliminate 60-90s startup
+- **5.4 follow-up** — true warm sandbox pool. This requires a worker/queue,
+  container leases, workspace reset semantics, and secret-isolation rules; it is
+  not safe to bolt onto the current detached `POST /dispatch` flow.
 - **5.5** — upload arbitrary artifacts from the container back to the dashboard

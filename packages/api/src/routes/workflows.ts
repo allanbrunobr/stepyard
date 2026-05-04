@@ -19,6 +19,11 @@ function requireAuth(req: Request, res: Response, next: Function) {
   next();
 }
 
+function envFlag(name: string): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
 // TODO (post-MVP): Add auth middleware for read endpoints
 // For PoC, access is controlled at network/firewall level on the VPS
 // workflowsRouter.use(requireAuth);
@@ -462,6 +467,17 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
   }
 
   const { workflow, target, repo, branch, vars } = parsed.data;
+  if (!repo && !envFlag('STEPYARD_DISPATCH_ALLOW_LOCAL_WORKSPACE')) {
+    res.status(400).json({
+      error: {
+        code: 'REPO_REQUIRED',
+        message:
+          'Remote dispatch requires repo (OWNER/REPO). Set default_repo in remote.toml, pass --repo, or explicitly enable STEPYARD_DISPATCH_ALLOW_LOCAL_WORKSPACE=true on the API host.',
+      },
+    });
+    return;
+  }
+
   const workflowsDir = process.env.STEPYARD_WORKFLOWS_DIR || '/root/.stepyard/workflows';
   const workflowFile = join(workflowsDir, `${workflow}.yaml`);
 
