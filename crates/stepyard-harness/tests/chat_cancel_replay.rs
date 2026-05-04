@@ -29,8 +29,8 @@
 //! Skipped gracefully when `STEPYARD_HARNESS_DATABASE_URL` is unset.
 
 use std::collections::HashMap;
+use std::future::pending;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
@@ -40,7 +40,7 @@ use stepyard_harness::{
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionEvent};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -87,36 +87,23 @@ impl StepExecutor for UnreachableExecutor {
     }
 }
 
-/// Slow chat client — same shape as `chat_timeout_replay::SlowChatClient`,
+/// Blocking chat client — same shape as `chat_timeout_replay::BlockingChatClient`,
 /// duplicated rather than shared because the integration test files
 /// build as separate test crates and cross-file `use` would require an
 /// extra mod-path or a `tests/common/` helper.
 #[derive(Debug)]
-struct SlowChatClient {
-    reply: String,
-    delay: Duration,
-}
-
-impl SlowChatClient {
-    fn new(reply: impl Into<String>, delay: Duration) -> Self {
-        Self {
-            reply: reply.into(),
-            delay,
-        }
-    }
+struct BlockingChatClient {
+    entered: Arc<Notify>,
 }
 
 #[async_trait]
-impl ChatClient for SlowChatClient {
+impl ChatClient for BlockingChatClient {
     async fn complete(
         &self,
         _req: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse, ChatClientError> {
-        tokio::time::sleep(self.delay).await;
-        Ok(ChatCompletionResponse {
-            content: self.reply.clone(),
-            ..Default::default()
-        })
+        self.entered.notify_one();
+        pending().await
     }
 }
 
@@ -170,23 +157,20 @@ async fn chat_step_cancel_token_wins_against_slow_provider() {
         step.chat_session = Some("shared".into());
         let wf = Workflow::new("chat-cancel", vec![step]);
 
+        let provider_entered = Arc::new(Notify::new());
         let config = HarnessConfig {
-            chat_client: Some(Arc::new(SlowChatClient::new(
-                "should never be appended",
-                Duration::from_secs(5),
-            ))),
+            chat_client: Some(Arc::new(BlockingChatClient {
+                entered: Arc::clone(&provider_entered),
+            })),
             ..Default::default()
         };
 
         let mut engine =
             Engine::with_executor(config, session, wf, lifecycle(), unreachable_executor());
 
-        // The agent path's cancel future polls `is_cancelled()` every
-        // 100ms (engine.rs:1268-1272). 200ms gives one full poll cycle
-        // of headroom after the flip — well below the 5s provider sleep.
         let token = engine.cancel_token();
         let trigger = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            provider_entered.notified().await;
             token.cancel();
         });
 
@@ -233,13 +217,13 @@ async fn chat_step_shutdown_broadcast_wins_against_slow_provider() {
         let shutdown_tx = Arc::new(tx);
         let shutdown_signal: Arc<OnceLock<String>> = Arc::new(OnceLock::new());
 
+        let provider_entered = Arc::new(Notify::new());
         let config = HarnessConfig {
             shutdown_tx: shutdown_tx.clone(),
             shutdown_signal: shutdown_signal.clone(),
-            chat_client: Some(Arc::new(SlowChatClient::new(
-                "should never be appended",
-                Duration::from_secs(5),
-            ))),
+            chat_client: Some(Arc::new(BlockingChatClient {
+                entered: Arc::clone(&provider_entered),
+            })),
             ..Default::default()
         };
 
@@ -252,7 +236,7 @@ async fn chat_step_shutdown_broadcast_wins_against_slow_provider() {
         let tx_for_fire = shutdown_tx.clone();
         let slot_for_fire = shutdown_signal.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            provider_entered.notified().await;
             let _ = slot_for_fire.set("sigterm".into());
             let _ = tx_for_fire.send(());
         });
