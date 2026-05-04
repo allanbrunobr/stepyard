@@ -100,6 +100,43 @@ async fn read_sqlite_payloads(db_path: &Path) -> Vec<Value> {
         .collect()
 }
 
+fn run_lite_workflow(
+    cwd: &Path,
+    db_path: &Path,
+    tenant: &str,
+    extra_args: &[&str],
+    no_file_logs_env: Option<&str>,
+) {
+    let workflow_path = fixture("hello-world-cmd.yaml");
+    let mut args = vec![
+        "execute",
+        workflow_path.to_str().expect("workflow path is utf-8"),
+        "--engine",
+        "v2",
+        "--sandbox-runtime",
+        "local",
+    ];
+    args.extend_from_slice(extra_args);
+
+    let mut command = Command::cargo_bin("stepyard").expect("stepyard binary");
+    command
+        .args(args)
+        .current_dir(cwd)
+        .env("STEPYARD_SQLITE_PATH", db_path)
+        .env("STEPYARD_TENANT", tenant);
+
+    match no_file_logs_env {
+        Some(value) => {
+            command.env("STEPYARD_NO_FILE_LOGS", value);
+        }
+        None => {
+            command.env_remove("STEPYARD_NO_FILE_LOGS");
+        }
+    }
+
+    command.assert().success();
+}
+
 #[tokio::test]
 async fn sqlite_lite_cli_runs_local_sandbox_and_writes_file_log() {
     let cwd = tempfile::tempdir().expect("tempdir");
@@ -108,24 +145,7 @@ async fn sqlite_lite_cli_runs_local_sandbox_and_writes_file_log() {
     let db_path = cwd.path().join("sessions.db");
     let tenant = format!("lite-smoke-{}", Uuid::new_v4());
 
-    Command::cargo_bin("stepyard")
-        .expect("stepyard binary")
-        .args([
-            "execute",
-            fixture("hello-world-cmd.yaml")
-                .to_str()
-                .expect("workflow path is utf-8"),
-            "--engine",
-            "v2",
-            "--sandbox-runtime",
-            "local",
-        ])
-        .current_dir(cwd.path())
-        .env("STEPYARD_SQLITE_PATH", &db_path)
-        .env("STEPYARD_TENANT", &tenant)
-        .env_remove("STEPYARD_NO_FILE_LOGS")
-        .assert()
-        .success();
+    run_lite_workflow(cwd.path(), &db_path, &tenant, &[], None);
 
     assert!(
         db_path.is_file(),
@@ -175,5 +195,65 @@ async fn sqlite_lite_cli_runs_local_sandbox_and_writes_file_log() {
                 .is_some_and(|stdout| stdout.contains("Hello from v2 engine"))
         }),
         "expected cmd stdout snapshot in sqlite payloads"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_lite_cli_no_file_logs_flag_suppresses_file_mirror_only() {
+    let cwd = tempfile::tempdir().expect("tempdir");
+    init_minimal_git_repo(cwd.path());
+
+    let db_path = cwd.path().join("sessions.db");
+    let tenant = format!("lite-smoke-{}", Uuid::new_v4());
+
+    run_lite_workflow(cwd.path(), &db_path, &tenant, &["--no-file-logs"], None);
+
+    assert!(
+        db_path.is_file(),
+        "expected sqlite DB at {}",
+        db_path.display()
+    );
+    assert!(
+        !cwd.path().join(".stepyard").join("logs").exists(),
+        "--no-file-logs should suppress the JSONL mirror"
+    );
+    assert!(
+        read_sqlite_payloads(&db_path).await.iter().any(|payload| {
+            payload
+                .get("event")
+                .and_then(Value::as_str)
+                .is_some_and(|event| event == "workflow_completed")
+        }),
+        "SQLite event store should still record workflow completion"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_lite_cli_no_file_logs_env_suppresses_file_mirror_only() {
+    let cwd = tempfile::tempdir().expect("tempdir");
+    init_minimal_git_repo(cwd.path());
+
+    let db_path = cwd.path().join("sessions.db");
+    let tenant = format!("lite-smoke-{}", Uuid::new_v4());
+
+    run_lite_workflow(cwd.path(), &db_path, &tenant, &[], Some("1"));
+
+    assert!(
+        db_path.is_file(),
+        "expected sqlite DB at {}",
+        db_path.display()
+    );
+    assert!(
+        !cwd.path().join(".stepyard").join("logs").exists(),
+        "STEPYARD_NO_FILE_LOGS=1 should suppress the JSONL mirror"
+    );
+    assert!(
+        read_sqlite_payloads(&db_path).await.iter().any(|payload| {
+            payload
+                .get("event")
+                .and_then(Value::as_str)
+                .is_some_and(|event| event == "workflow_completed")
+        }),
+        "SQLite event store should still record workflow completion"
     );
 }
