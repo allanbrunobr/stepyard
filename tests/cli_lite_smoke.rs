@@ -8,6 +8,7 @@
 #![cfg(feature = "sqlite")]
 
 use std::path::{Path, PathBuf};
+use std::process::Command as StdCommand;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -19,6 +20,32 @@ fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("workflows")
         .join(name)
+}
+
+fn run_git(cwd: &Path, args: &[&str]) {
+    let output = StdCommand::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("spawn git {args:?}: {e}"));
+    assert!(
+        output.status.success(),
+        "git {args:?} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn init_minimal_git_repo(path: &Path) {
+    run_git(path, &["init"]);
+    run_git(
+        path,
+        &["config", "user.email", "lite-smoke@example.invalid"],
+    );
+    run_git(path, &["config", "user.name", "Lite Smoke"]);
+    std::fs::write(path.join("README.md"), "lite smoke\n").expect("write README");
+    run_git(path, &["add", "README.md"]);
+    run_git(path, &["commit", "-m", "initial"]);
 }
 
 fn only_jsonl_file(log_dir: &Path) -> PathBuf {
@@ -77,6 +104,8 @@ async fn read_sqlite_payloads(db_path: &Path) -> Vec<Value> {
 #[tokio::test]
 async fn sqlite_lite_cli_runs_local_sandbox_and_writes_file_log() {
     let cwd = tempfile::tempdir().expect("tempdir");
+    init_minimal_git_repo(cwd.path());
+
     let db_path = cwd.path().join("sessions.db");
     let tenant = format!("lite-smoke-{}", Uuid::new_v4());
 
