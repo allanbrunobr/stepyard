@@ -12,18 +12,16 @@
 //! broadcast arm is the only way the `tokio::select!` in `Engine::step` can
 //! resolve.
 //!
-//! Runs on real tokio time — the sqlx `PgPool` connect timeout is a tokio
-//! timer that never resolves while the clock is paused, so we cannot use
-//! `start_paused`. Same Rule 7a deviation already documented in
-//! `step_timeout.rs`.
+//! Uses `Notify` instead of real sleeps: the test fires the broadcast only
+//! after the executor future has entered the step body.
 //!
 //! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use async_trait::async_trait;
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
     Engine, EngineError, HarnessConfig, Signal, Step, StepExecutor, TerminationReason, Workflow,
 };
@@ -31,8 +29,7 @@ use stepyard_sandbox_orchestrator::{
     ExecOutput, MockCall, MockLifecycle, SandboxError, SandboxLifecycle,
 };
 use stepyard_session::{migrate, Session, SessionStatus};
-use sqlx::postgres::PgPoolOptions;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -49,15 +46,14 @@ async fn pool() -> Option<sqlx::PgPool> {
 /// Executor whose `execute` future never resolves. The step can only leave
 /// the select via the cancel, timeout, or shutdown-broadcast branches —
 /// this test engineers the last to fire first.
-struct BlockingExecutor;
+struct BlockingExecutor {
+    entered: Arc<Notify>,
+}
 
 #[async_trait]
 impl StepExecutor for BlockingExecutor {
-    async fn execute(
-        &self,
-        _session_id: Uuid,
-        _step: &Step,
-    ) -> Result<ExecOutput, SandboxError> {
+    async fn execute(&self, _session_id: Uuid, _step: &Step) -> Result<ExecOutput, SandboxError> {
+        self.entered.notify_one();
         std::future::pending::<()>().await;
         unreachable!("pending never resolves")
     }
@@ -107,12 +103,15 @@ async fn shutdown_broadcast_emits_signal_received_destroys_sandbox_and_returns_s
     };
 
     let lifecycle: Arc<dyn SandboxLifecycle> = mock.clone();
+    let executor_entered = Arc::new(Notify::new());
     let mut engine = Engine::with_executor(
         config,
         session,
         workflow,
         lifecycle,
-        Arc::new(BlockingExecutor),
+        Arc::new(BlockingExecutor {
+            entered: Arc::clone(&executor_entered),
+        }),
     );
 
     // Fire the broadcast shortly after `step()` starts, mirroring
@@ -124,7 +123,7 @@ async fn shutdown_broadcast_emits_signal_received_destroys_sandbox_and_returns_s
     let tx_for_fire = shutdown_tx.clone();
     let slot_for_fire = shutdown_signal.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        executor_entered.notified().await;
         let _ = slot_for_fire.set("sigterm".into());
         let _ = tx_for_fire.send(());
     });
