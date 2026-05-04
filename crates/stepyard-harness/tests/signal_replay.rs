@@ -9,16 +9,15 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use async_trait::async_trait;
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
     Engine, EngineError, HarnessConfig, Step, StepExecutor, StepOutcome, Workflow,
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session};
-use sqlx::postgres::PgPoolOptions;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -34,11 +33,14 @@ async fn pool() -> Option<sqlx::PgPool> {
 
 /// Executor whose `execute` future never resolves — forces the broadcast
 /// branch to be the only way out of `Engine::step`.
-struct BlockingExecutor;
+struct BlockingExecutor {
+    entered: Arc<Notify>,
+}
 
 #[async_trait]
 impl StepExecutor for BlockingExecutor {
     async fn execute(&self, _session_id: Uuid, _step: &Step) -> Result<ExecOutput, SandboxError> {
+        self.entered.notify_one();
         std::future::pending::<()>().await;
         unreachable!("pending never resolves")
     }
@@ -63,7 +65,10 @@ async fn reloaded_signalled_session_refuses_to_advance() {
     let tenant = format!("reload-signal-{}", Uuid::new_v4());
     let workflow = Workflow::new(
         "reload-signal-wf".to_string(),
-        vec![Step::cmd("blocked".to_string(), "sleep forever".to_string())],
+        vec![Step::cmd(
+            "blocked".to_string(),
+            "sleep forever".to_string(),
+        )],
     );
 
     let mock: Arc<MockLifecycle> = Arc::new(MockLifecycle::new());
@@ -84,12 +89,15 @@ async fn reloaded_signalled_session_refuses_to_advance() {
     };
 
     let lifecycle: Arc<dyn SandboxLifecycle> = mock.clone();
+    let executor_entered = Arc::new(Notify::new());
     let mut engine1 = Engine::with_executor(
         config,
         session,
         workflow.clone(),
         lifecycle.clone(),
-        Arc::new(BlockingExecutor),
+        Arc::new(BlockingExecutor {
+            entered: Arc::clone(&executor_entered),
+        }),
     );
 
     // Fire the broadcast shortly after `step()` starts, mirroring
@@ -97,7 +105,7 @@ async fn reloaded_signalled_session_refuses_to_advance() {
     let tx_for_fire = shutdown_tx.clone();
     let slot_for_fire = shutdown_signal.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        executor_entered.notified().await;
         let _ = slot_for_fire.set("sigterm".into());
         let _ = tx_for_fire.send(());
     });
@@ -136,7 +144,9 @@ async fn reloaded_signalled_session_refuses_to_advance() {
         reloaded,
         workflow,
         lifecycle,
-        Arc::new(BlockingExecutor),
+        Arc::new(BlockingExecutor {
+            entered: Arc::new(Notify::new()),
+        }),
     );
 
     // The reloaded engine's step() must hit the progress.has_failure
