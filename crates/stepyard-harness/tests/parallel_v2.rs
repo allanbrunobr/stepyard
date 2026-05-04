@@ -18,6 +18,7 @@
 //! `tests/scope_replay.rs`); without it each test silently skips.
 
 use std::collections::HashMap;
+use std::future::pending;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -30,7 +31,7 @@ use stepyard_harness::{
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionEvent};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Notify};
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -99,8 +100,10 @@ fn echo_executor() -> Arc<dyn StepExecutor> {
     Arc::new(EchoExecutor)
 }
 
-#[derive(Default, Clone)]
-struct BlockingExecutor;
+#[derive(Clone)]
+struct BlockingExecutor {
+    entered: Arc<Notify>,
+}
 
 #[async_trait]
 impl StepExecutor for BlockingExecutor {
@@ -115,17 +118,13 @@ impl StepExecutor for BlockingExecutor {
         _step: &Step,
         _env: &HashMap<String, String>,
     ) -> Result<ExecOutput, SandboxError> {
-        tokio::time::sleep(Duration::from_secs(3600)).await;
-        Ok(ExecOutput {
-            stdout: "late\n".into(),
-            stderr: String::new(),
-            exit_code: 0,
-        })
+        self.entered.notify_one();
+        pending().await
     }
 }
 
-fn blocking_executor() -> Arc<dyn StepExecutor> {
-    Arc::new(BlockingExecutor)
+fn blocking_executor(entered: Arc<Notify>) -> Arc<dyn StepExecutor> {
+    Arc::new(BlockingExecutor { entered })
 }
 
 fn fixture_path() -> std::path::PathBuf {
@@ -516,16 +515,17 @@ async fn parallel_cancel_aborts_in_flight_sub_steps() {
             vec![Step::cmd("slow", "sleep forever")],
         );
 
+        let executor_entered = Arc::new(Notify::new());
         let mut engine = Engine::with_executor(
             HarnessConfig::default(),
             session,
             wf,
             lifecycle(),
-            blocking_executor(),
+            blocking_executor(Arc::clone(&executor_entered)),
         );
         let token = engine.cancel_token();
         let trigger = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            executor_entered.notified().await;
             token.cancel();
         });
 
@@ -579,12 +579,18 @@ async fn parallel_shutdown_aborts_in_flight_sub_steps() {
             ..Default::default()
         };
 
-        let mut engine =
-            Engine::with_executor(config, session, wf, lifecycle(), blocking_executor());
+        let executor_entered = Arc::new(Notify::new());
+        let mut engine = Engine::with_executor(
+            config,
+            session,
+            wf,
+            lifecycle(),
+            blocking_executor(Arc::clone(&executor_entered)),
+        );
         let tx_for_fire = shutdown_tx.clone();
         let slot_for_fire = shutdown_signal.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            executor_entered.notified().await;
             let _ = slot_for_fire.set("sigterm".into());
             let _ = tx_for_fire.send(());
         });
@@ -638,7 +644,7 @@ async fn parallel_sub_step_timeout_fails_container_before_completion() {
             session,
             wf,
             lifecycle(),
-            blocking_executor(),
+            blocking_executor(Arc::new(Notify::new())),
         );
         let result = engine.resume().await;
         match result {
