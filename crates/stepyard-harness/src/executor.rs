@@ -21,11 +21,7 @@ pub trait StepExecutor: Send + Sync {
     /// Run `step` for `session_id`. Implementations are responsible for
     /// spinning up / reusing a sandbox and translating `step.command` into
     /// a real execution.
-    async fn execute(
-        &self,
-        session_id: Uuid,
-        step: &Step,
-    ) -> Result<ExecOutput, SandboxError>;
+    async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError>;
 
     /// Run `step` for `session_id` with a resolved env map. Required — no
     /// default impl, because a default that delegates to [`execute`]
@@ -52,11 +48,9 @@ impl SandboxStepExecutor {
 
 #[async_trait]
 impl StepExecutor for SandboxStepExecutor {
-    async fn execute(
-        &self,
-        session_id: Uuid,
-        step: &Step,
-    ) -> Result<ExecOutput, SandboxError> {
+    async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
+        // audit: emit-before-io exempt - reason: SandboxStepExecutor is a
+        // low-level runner; Engine::step emits StepStarted before invoking it.
         let sandbox = self.lifecycle.reuse_or_create(session_id).await?;
         sandbox.exec(&step.command).await
     }
@@ -71,6 +65,8 @@ impl StepExecutor for SandboxStepExecutor {
         // Sandbox handle — the lifecycle::exec_with_env path uses the
         // SandboxId derived from session_id (harness convention), so we do
         // not need the handle's exec_fn here.
+        // audit: emit-before-io exempt - reason: SandboxStepExecutor is a
+        // low-level runner; Engine::step emits StepStarted before invoking it.
         let _sandbox = self.lifecycle.reuse_or_create(session_id).await?;
         let sandbox_id = SandboxId::from(session_id);
         // D7/NFR-argv: step.command is wrapped as `sh -c <command>` argv.
@@ -81,6 +77,8 @@ impl StepExecutor for SandboxStepExecutor {
             env: env.clone(),
             idle_timeout: step.idle_timeout,
         };
+        // audit: emit-before-io exempt - reason: SandboxStepExecutor is a
+        // low-level runner; Engine::step emits StepStarted before invoking it.
         self.lifecycle
             .exec_with_options(&sandbox_id, &argv, &opts)
             .await
@@ -200,11 +198,7 @@ mod send_check {
     fn assert_send_future<F: std::future::Future + Send>(_: F) {}
 
     #[allow(dead_code)]
-    fn execute_future_is_send(
-        executor: &dyn StepExecutor,
-        session_id: Uuid,
-        step: &Step,
-    ) {
+    fn execute_future_is_send(executor: &dyn StepExecutor, session_id: Uuid, step: &Step) {
         assert_send_future(executor.execute(session_id, step));
     }
 
