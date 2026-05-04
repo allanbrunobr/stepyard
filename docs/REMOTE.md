@@ -9,6 +9,8 @@ on the VPS.
 Introduced by **Epic 5 — Remote-First Execution**:
 - Story 5.1 — `POST /api/workflows/dispatch` on the Dashboard API
 - Story 5.2 — `stepyard remote` subcommand on the local CLI
+- Story 5.3 — `GET /api/workflows/:run_id/logs/stream` SSE snapshots consumed
+  by `stepyard remote logs`
 
 ## Architecture
 
@@ -51,7 +53,7 @@ stepyard remote exec my-workflow --var foo=1 --var bar=two -- target-value
 stepyard remote status --limit 5
 stepyard remote status --workflow fix-issue
 
-stepyard remote logs <run_id>    # stub until Story 5.3
+stepyard remote logs <run_id>
 ```
 
 ## VPS deployment (Dashboard API)
@@ -110,6 +112,14 @@ stepyard remote status --limit 1
 You should see the run in the dashboard at `http://<vps>:5173/workflows` and a
 new `minion-sandbox:latest` container appear briefly in Portainer.
 
+## Remote logs
+
+`stepyard remote logs <run_id>` opens an authenticated SSE stream to
+`/api/workflows/:run_id/logs/stream`. The stream emits dashboard snapshots:
+run status plus the current step rows. It intentionally does **not** stream raw
+host process stdout/stderr; the dashboard event model is the source of truth.
+Use `stepyard remote status` to find the latest `run_id`.
+
 ## Security notes
 
 - **API secret**: `API_SECRET` in `.env` is the Bearer token for all dispatch
@@ -137,6 +147,5 @@ new `minion-sandbox:latest` container appear briefly in Portainer.
 
 ## What's next (deferred to later stories)
 
-- **5.3** — log streaming via SSE from the host to the local CLI
 - **5.4** — warm sandbox pool on the VPS to eliminate 60-90s startup
 - **5.5** — upload arbitrary artifacts from the container back to the dashboard
