@@ -7,6 +7,7 @@
 //! `tests/gate_replay.rs` so CI without a database sidecar stays green.
 
 use std::collections::HashMap;
+use std::future::pending;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -130,10 +131,10 @@ impl ChatClient for MockChatClient {
     }
 }
 
-/// Slow executor: blocks for 200ms before returning. Used by the
-/// scoped-cmd timeout attribution test — the body cmd's `timeout:`
-/// fires well before this returns, so the `TimedOut` branch of
-/// `execute_cmd_with_select` is exercised deterministically.
+/// Blocking executor used by the scoped-cmd timeout attribution test.
+/// The body cmd's `timeout:` fires while this future stays pending, so
+/// the `TimedOut` branch of `execute_cmd_with_select` is exercised
+/// deterministically.
 #[derive(Default, Clone)]
 struct SleepExecutor;
 
@@ -150,12 +151,7 @@ impl StepExecutor for SleepExecutor {
         _step: &Step,
         _env: &HashMap<String, String>,
     ) -> Result<ExecOutput, SandboxError> {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        Ok(ExecOutput {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-        })
+        pending().await
     }
 }
 
