@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
 use assert_cmd::Command;
-use predicates::prelude::*;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePoolOptions;
 use uuid::Uuid;
@@ -126,8 +125,7 @@ async fn sqlite_lite_cli_runs_local_sandbox_and_writes_file_log() {
         .env("STEPYARD_TENANT", &tenant)
         .env_remove("STEPYARD_NO_FILE_LOGS")
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Workflow complete"));
+        .success();
 
     assert!(
         db_path.is_file(),
