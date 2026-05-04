@@ -102,8 +102,28 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
         }
     }
 
-    // Cancel the victim a beat in so at least one real step has run.
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    // Cancel the victim after it has emitted at least one event. Polling
+    // the event store makes the mid-flight handoff deterministic without
+    // baking in a wall-clock delay.
+    let victim_id = victim_session_id.expect("victim session id");
+    let victim_uuid = *victim_id.as_uuid();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event_count = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM session_events WHERE session_id = $1",
+            )
+            .bind(victim_uuid)
+            .fetch_one(&pool)
+            .await
+            .expect("victim event count");
+            if event_count > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("victim emitted at least one event before cancel");
     cancel_token_for_victim.unwrap().cancel();
 
     // Collect outcomes.
@@ -179,7 +199,7 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
     // StepCompleted) + 1 WorkflowCompleted = 12 events.
     let completed_lens: Vec<usize> = per_session
         .iter()
-        .filter(|(sid, _)| Some(**sid) != victim_session_id.map(|s| *s.as_uuid()))
+        .filter(|(sid, _)| **sid != victim_uuid)
         .map(|(_, events)| events.len())
         .collect();
     assert_eq!(
@@ -197,7 +217,7 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
     // The victim — at least a workflow_started, then variable steps, ended
     // by cancellation (session status = cancelled, no workflow_completed
     // at the end).
-    let victim_events = &per_session[victim_session_id.unwrap().as_uuid()];
+    let victim_events = &per_session[&victim_uuid];
     let last_event = &victim_events.last().unwrap().1;
     assert_ne!(
         last_event, "workflow_completed",
@@ -207,7 +227,7 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
     let victim_status = sqlx::query_scalar::<_, String>(
         "SELECT status FROM sessions WHERE id = $1",
     )
-    .bind(victim_session_id.unwrap().as_uuid())
+    .bind(victim_uuid)
     .fetch_one(&pool)
     .await
     .expect("victim status");
@@ -233,8 +253,6 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
     .fetch_all(&pool)
     .await
     .expect("statuses");
-    let victim_id = victim_session_id.unwrap();
-    let victim_uuid = *victim_id.as_uuid();
     for (sid, status) in statuses {
         if sid == victim_uuid {
             assert_eq!(status, "cancelled", "victim must be cancelled");
