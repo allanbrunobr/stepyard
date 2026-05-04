@@ -144,10 +144,8 @@ mod tests {
             TerminationReason::SignalReceived(Signal::Sigterm).to_string(),
             "signal received: sigterm"
         );
-        assert_eq!(
-            TerminationReason::Other("disk full".into()).to_string(),
-            "disk full"
-        );
+        let other_reason = TerminationReason::Other;
+        assert_eq!(other_reason("disk full".into()).to_string(), "disk full");
     }
 
     #[test]
