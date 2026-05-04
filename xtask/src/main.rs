@@ -29,11 +29,8 @@
 //! 3. For each sandbox IO site, warns if NO emit/persist line appears at a
 //!    strictly-smaller line number in the same function body.
 //!
-//! This is a warning-first baseline, not a blocker. `cargo xtask
-//! audit-emit-before-io` always exits 0; CI wires it with `continue-on-error:
-//! true`. The goal is an honest record of current drift, not a quality gate
-//! — that graduation to blocking is a later story once the findings have
-//! been triaged.
+//! `cargo xtask audit-emit-before-io` exits non-zero on findings. Historical
+//! drift was burned down before this gate graduated to blocking.
 //!
 //! # Known limitations (v1)
 //!
@@ -103,7 +100,7 @@ fn run_emit_before_io() -> ExitCode {
 
     for f in &findings {
         eprintln!(
-            "WARN G4: {}:{}: `self.{}.{}().await` has no `self.emit(...)` or \
+            "FAIL G4: {}:{}: `self.{}.{}().await` has no `self.emit(...)` or \
              `self.session.append(...)` at an earlier line in the same fn body",
             f.file.display(),
             f.line,
@@ -116,14 +113,16 @@ fn run_emit_before_io() -> ExitCode {
         eprintln!("audit-emit-before-io: 0 findings.");
     } else {
         eprintln!(
-            "audit-emit-before-io: {} finding(s) — warning-first baseline, NOT blocking.",
+            "audit-emit-before-io: {} finding(s) — fix or add an explicit audited exemption.",
             findings.len()
         );
     }
 
-    // Warning-first: always exit 0. The CI step wires `continue-on-error: true`
-    // belt-and-braces, but the xtask itself does not gate merges today.
-    ExitCode::SUCCESS
+    if findings.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 // --- Walker -----------------------------------------------------------------

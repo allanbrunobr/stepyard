@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Round 3 Story 5 — pattern audits (G1, G2, G3 blocking + G5/Rule7a warning-only).
+# Round 3 Story 5 — pattern audits (blocking).
 #
 # Source-of-truth regexes: _bmad-output/sandcastle-features/architecture.md §G-gates.
 # Re-copy here verbatim — if architecture.md changes, update both sides in lockstep
@@ -11,15 +11,14 @@
 # makes the audit measure production code only.
 #
 # Exit codes:
-#   0 — all blocking gates clean (warnings are informational, never fail CI).
-#   1 — at least one of G1/G2/G3 matched in Rust source.
+#   0 — all gates clean.
+#   1 — at least one gate matched in Rust source.
 #   2 — ripgrep not on PATH.
 #
 # G4 (emit-before-IO) runs as a separate `cargo xtask audit-emit-before-io` step
 # because it needs an AST walker, not a regex; G6 (Send-future compile check) is
 # enforced by per-crate `assert_send` tests at compile time and has no runtime
-# gate here. Rule 7a is warning-only while the existing real-sleep baseline is
-# burned down in follow-up PRs.
+# gate here.
 
 set -uo pipefail
 
@@ -105,28 +104,22 @@ run_gate \
     'Command::new\(\s*"(sh|bash|zsh|dash)"\s*\)[\s\S]{0,200}\.arg\(\s*"-c"\s*\)' \
     '!**/injection_negative.rs'
 
-# --- G5: Other(...) construction outside classifier (warning-only) ------------
+# --- G5: Other(...) construction outside classifier (blocking) ----------------
 # Only `*_errors.rs` modules are allowed to construct `SandboxError::Other` or
-# `TerminationReason::Other` — the discipline from Story 4. Two known false
-# positives today that we deliberately accept (documented in the Story 5 PR):
-#   * src/main.rs — the inline `//` doc comment on the sanitize_human call
-#     cites `SandboxError::Other(String)` as prose, not a construction site.
-#   * crates/stepyard-core/src/error.rs — a unit test that asserts the Display
-#     impl of `TerminationReason::Other("disk full")`. Test-only construction is
-#     fine; a future refinement can scope this warning to non-test code.
+# `TerminationReason::Other` — the discipline from Story 4. This graduated from
+# warning-only after the false-positive baseline was burned down.
 run_gate \
-    "G5" "Other(...) construction outside classifier modules" "warn" \
+    "G5" "Other(...) construction outside classifier modules" "block" \
     '(TerminationReason|SandboxError)::Other\s*\(' \
     '!**/*_errors.rs'
 
-# --- Rule 7a: real sleep in integration tests (warning-only) ------------------
+# --- Rule 7a: real sleep in integration tests (blocking) ----------------------
 # Timing-sensitive async tests should use virtual time (`tokio::time::pause` +
-# `advance`) instead of real sleeps. Existing integration tests still contain a
-# baseline of real sleeps, so this starts warning-only. Scope is intentionally
-# limited to `tests/**/*.rs`; scanning `#[cfg(test)]` blocks inside production
-# modules needs a real parser or a separate allowlist pass.
+# `advance`) or deterministic handshakes instead of real sleeps. Scope is
+# intentionally limited to `tests/**/*.rs`; scanning `#[cfg(test)]` blocks
+# inside production modules needs a real parser or a separate allowlist pass.
 run_gate \
-    "Rule7a" "tokio::time::sleep in integration tests" "warn" \
+    "Rule7a" "tokio::time::sleep in integration tests" "block" \
     '^\s*(?!//).*tokio::time::sleep\s*\(' \
     '**/tests/**/*.rs'
 
