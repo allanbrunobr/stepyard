@@ -24,8 +24,47 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs-only change
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          docs_only=true
+          changed="$(git diff --name-only "$base" "$head")"
+          if [[ -z "$changed" ]]; then
+            docs_only=false
+          else
+            while IFS= read -r path; do
+              case "$path" in
+                *.md|docs/*|_bmad-output/*|.hive/*|AGENTS.md|PROMPT.md|features.md)
+                  ;;
+                *)
+                  docs_only=false
+                  ;;
+              esac
+            done <<< "$changed"
+          fi
+
+          echo "$changed"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+      - name: Skip Rust checks for docs-only change
+        if: steps.changes.outputs.docs_only == 'true'
+        run: echo "Only docs/planning files changed; skipping Rust build/test/clippy/audits."
 
       - name: Install Rust toolchain
+        if: steps.changes.outputs.docs_only != 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -37,6 +76,7 @@ jobs:
       # removing pre-installed Android SDK / .NET / Haskell / Boost /
       # Swift tooling we never use here.
       - name: Free disk space
+        if: steps.changes.outputs.docs_only != 'true'
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false
@@ -53,6 +93,7 @@ jobs:
       # the cleanup step to build from scratch; keeping `target/` out of the
       # cache makes CI slower but predictable.
       - name: Cache Cargo registry
+        if: steps.changes.outputs.docs_only != 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -63,12 +104,15 @@ jobs:
             ${{ runner.os }}-cargo-registry-v2-
 
       - name: Build workspace
+        if: steps.changes.outputs.docs_only != 'true'
         run: cargo build --workspace --all-targets
 
       - name: Run tests
+        if: steps.changes.outputs.docs_only != 'true'
         run: cargo test --workspace
 
       - name: Clippy (deny warnings)
+        if: steps.changes.outputs.docs_only != 'true'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       # Round 3 Story 5 — architecture §G-gates.
@@ -85,6 +129,7 @@ jobs:
       # `audit: emit-before-io exempt - reason: ...` comment when their caller
       # owns the persistence boundary.
       - name: Ensure ripgrep is installed
+        if: steps.changes.outputs.docs_only != 'true'
         run: |
           if ! command -v rg >/dev/null 2>&1; then
             sudo apt-get update
@@ -93,9 +138,11 @@ jobs:
           rg --version
 
       - name: Pattern audits (blocking)
+        if: steps.changes.outputs.docs_only != 'true'
         run: scripts/audit-patterns.sh
 
       - name: Emit-before-IO audit (G4 blocking)
+        if: steps.changes.outputs.docs_only != 'true'
         run: cargo xtask audit-emit-before-io
 
   sqlite-lite-smoke:
@@ -104,13 +151,53 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs-only change
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          docs_only=true
+          changed="$(git diff --name-only "$base" "$head")"
+          if [[ -z "$changed" ]]; then
+            docs_only=false
+          else
+            while IFS= read -r path; do
+              case "$path" in
+                *.md|docs/*|_bmad-output/*|.hive/*|AGENTS.md|PROMPT.md|features.md)
+                  ;;
+                *)
+                  docs_only=false
+                  ;;
+              esac
+            done <<< "$changed"
+          fi
+
+          echo "$changed"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+      - name: Skip SQLite checks for docs-only change
+        if: steps.changes.outputs.docs_only == 'true'
+        run: echo "Only docs/planning files changed; skipping SQLite Lite Rust checks."
 
       - name: Install Rust toolchain
+        if: steps.changes.outputs.docs_only != 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
 
       - name: Free disk space
+        if: steps.changes.outputs.docs_only != 'true'
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false
@@ -122,6 +209,7 @@ jobs:
           swap-storage: false
 
       - name: Cache Cargo registry
+        if: steps.changes.outputs.docs_only != 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -132,13 +220,17 @@ jobs:
             ${{ runner.os }}-cargo-registry-v2-
 
       - name: Check SQLite Lite CLI profile
+        if: steps.changes.outputs.docs_only != 'true'
         run: cargo check -p stepyard-engine --no-default-features --features sqlite
 
       - name: Run SQLite Lite CLI e2e smoke
+        if: steps.changes.outputs.docs_only != 'true'
         run: cargo test -p stepyard-engine --test cli_lite_smoke --no-default-features --features sqlite
 
       - name: Test SQLite session backend
+        if: steps.changes.outputs.docs_only != 'true'
         run: cargo test -p stepyard-session --no-default-features --features sqlite
 
       - name: Clippy SQLite session backend
+        if: steps.changes.outputs.docs_only != 'true'
         run: cargo clippy -p stepyard-session --all-targets --no-default-features --features sqlite -- -D warnings
