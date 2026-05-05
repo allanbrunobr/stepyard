@@ -95,6 +95,10 @@ pub enum SandboxError {
     #[error("sandbox idle for {idle_ms}ms — terminated by orchestrator")]
     IdleTimeout { idle_ms: u64 },
 
+    /// The selected sandbox backend does not support TTY-forwarded exec.
+    #[error("interactive exec is not supported by this sandbox backend")]
+    InteractiveNotSupported,
+
     /// Catch-all for invariants the orchestrator detects at runtime.
     #[error("invalid state: {0}")]
     InvalidState(String),
