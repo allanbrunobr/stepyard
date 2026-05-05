@@ -160,7 +160,7 @@ pub struct ExecuteArgs {
     pub no_sandbox: bool,
 
     /// Select the sandbox runtime. Overrides STEPYARD_SANDBOX.
-    #[arg(long = "sandbox-runtime", value_enum, value_name = "docker|local")]
+    #[arg(long = "sandbox-runtime", value_enum, value_name = "docker|local|podman")]
     pub sandbox_runtime: Option<SandboxRuntime>,
 
     /// Disable `.stepyard/logs/<session_id>.jsonl` file mirroring.
@@ -290,7 +290,7 @@ async fn execute_v2(
         RunContext as HarnessRunContext, StepOutcome, TerminationReason,
     };
     use stepyard_sandbox_orchestrator::{
-        DockerLifecycle, GitWorktreeManager, LocalShellLifecycle, SandboxLifecycle,
+        DockerLifecycle, GitWorktreeManager, LocalShellLifecycle, PodmanLifecycle, SandboxLifecycle,
     };
 
     let mut harness_workflow = harness_adapter::adapt(&workflow)
@@ -344,6 +344,10 @@ async fn execute_v2(
             Arc::new(LocalShellLifecycle::new())
         }
         SandboxRuntime::Docker => Arc::new(DockerLifecycle::default()),
+        SandboxRuntime::Podman if sandbox_mode == SandboxMode::Disabled => {
+            Arc::new(LocalShellLifecycle::new())
+        }
+        SandboxRuntime::Podman => Arc::new(PodmanLifecycle::default()),
     };
 
     let config = HarnessConfig {
@@ -526,14 +530,22 @@ pub async fn execute(
     if args.no_sandbox && args.sandbox_runtime.is_some() {
         tracing::warn!("--no-sandbox was also provided; --sandbox-runtime takes precedence");
     }
+    if args.engine == "v1" && sandbox_runtime == SandboxRuntime::Podman {
+        bail!("--sandbox-runtime podman currently requires --engine v2");
+    }
+    let explicit_runtime_overrides_no_sandbox =
+        args.no_sandbox && args.sandbox_runtime.is_some();
     let effective_sandbox_mode = match sandbox_runtime {
         SandboxRuntime::Local => SandboxMode::Disabled,
-        SandboxRuntime::Docker => sandbox_mode,
+        SandboxRuntime::Docker | SandboxRuntime::Podman if explicit_runtime_overrides_no_sandbox => {
+            SandboxMode::FullWorkflow
+        }
+        SandboxRuntime::Docker | SandboxRuntime::Podman => sandbox_mode,
     };
 
-    // Validate Docker availability if sandbox mode is active
+    // Validate container runtime availability if sandbox mode is active
     if effective_sandbox_mode != SandboxMode::Disabled {
-        if let Err(e) = sandbox::require_docker().await {
+        if let Err(e) = sandbox::require_runtime(sandbox_runtime).await {
             if args.json {
                 let json = serde_json::json!({
                     "error": e.to_string(),
@@ -552,6 +564,7 @@ pub async fn execute(
     validate_environment(
         &workflow,
         effective_sandbox_mode != SandboxMode::Disabled,
+        sandbox_runtime,
         args.json,
     )
     .await?;
@@ -660,6 +673,7 @@ pub async fn execute(
 async fn validate_environment(
     workflow: &crate::workflow::schema::WorkflowDef,
     sandbox_enabled: bool,
+    sandbox_runtime: SandboxRuntime,
     json_mode: bool,
 ) -> anyhow::Result<()> {
     let mut warnings: Vec<String> = Vec::new();
@@ -727,7 +741,7 @@ async fn validate_environment(
     }
 
     // ── Check Docker image exists; auto-build if missing ──────────────
-    if sandbox_enabled {
+    if sandbox_enabled && sandbox_runtime == SandboxRuntime::Docker {
         let image = {
             let cfg = crate::sandbox::SandboxConfig::from_global_config(&workflow.config.global);
             cfg.image().to_string()

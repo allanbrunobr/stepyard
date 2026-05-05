@@ -25,11 +25,12 @@ use tokio::sync::broadcast;
 \x1b[1mRequirements:\x1b[0m
   • ANTHROPIC_API_KEY   — required for AI steps (chat, map)
   • gh auth login       — required for GitHub-based workflows (GH_TOKEN auto-detected)
-  • Docker Desktop      — required for --sandbox mode (creates isolated containers)
+  • Docker or Podman    — required for container sandbox mode
 
 \x1b[1mExamples:\x1b[0m
   stepyard execute workflows/code-review.yaml -- 42        Review PR #42 (sandbox on by default)
   stepyard execute workflows/fix-issue.yaml -- 123         Fix issue #123
+  stepyard execute my-workflow.yaml --sandbox-runtime podman -- main   Run with Podman
   stepyard execute my-workflow.yaml --no-sandbox -- main   Run without Docker sandbox
   stepyard list                                            List available workflows
   stepyard init my-workflow --template code-review         Create a new workflow
@@ -209,5 +210,23 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn execute_accepts_podman_sandbox_runtime() {
+        let cli = Cli::try_parse_from([
+            "stepyard",
+            "execute",
+            "--sandbox-runtime",
+            "podman",
+            "workflow.yaml",
+        ])
+        .expect("podman runtime should parse");
+        match cli.command {
+            Command::Execute(args) => {
+                assert_eq!(args.sandbox_runtime, Some(crate::sandbox::SandboxRuntime::Podman));
+            }
+            _ => panic!("expected execute command"),
+        }
     }
 }
