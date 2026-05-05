@@ -1,9 +1,9 @@
-/// Docker Sandbox Integration
+/// Sandbox runtime integration
 ///
 /// Provides three sandbox modes:
 ///
 /// **Mode 1 — Full Workflow** (`--sandbox` CLI flag):
-///   Creates a Docker container, copies workspace, executes all steps inside,
+///   Creates a container, copies workspace, executes all steps inside,
 ///   copies results back, and destroys the container.
 ///
 /// **Mode 2 — Agent Only** (`config.agent.sandbox: true`):
@@ -14,7 +14,8 @@
 ///   lists, and resource limits (CPUs, memory). Equivalent to Mode 1 with
 ///   explicit configuration.
 ///
-/// **Requirements**: Docker Desktop 4.40+ must be installed and running.
+/// **Requirements**: the selected container runtime (`docker` or `podman`) must
+/// be installed and reachable.
 pub mod config;
 pub mod docker;
 pub mod proxy;
@@ -25,6 +26,7 @@ pub use docker::DockerSandbox;
 pub use runtime::{resolve_runtime, SandboxRuntime};
 
 use anyhow::{bail, Result};
+use tokio::process::Command;
 
 /// Determine the sandbox mode from workflow config and CLI flags.
 pub fn resolve_mode(
@@ -73,6 +75,37 @@ pub async fn require_docker() -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Validate that the selected sandbox runtime is available.
+pub async fn require_runtime(runtime: SandboxRuntime) -> Result<()> {
+    match runtime {
+        SandboxRuntime::Local => Ok(()),
+        SandboxRuntime::Docker => require_docker().await,
+        SandboxRuntime::Podman => {
+            let available = Command::new("podman")
+                .args(["info"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if !available {
+                bail!(
+                    "Podman sandbox is not available.\n\
+                     \n\
+                     Requirements:\n\
+                     • podman must be installed and in PATH\n\
+                     • podman system must be initialized and reachable\n\
+                     \n\
+                     To use Docker instead, pass --sandbox-runtime=docker. \
+                     To disable sandboxing, pass --sandbox-runtime=local."
+                );
+            }
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]

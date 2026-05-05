@@ -5,6 +5,7 @@ use clap::ValueEnum;
 pub enum SandboxRuntime {
     Docker,
     Local,
+    Podman,
 }
 
 impl SandboxRuntime {
@@ -19,7 +20,7 @@ impl SandboxRuntime {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
-    #[error("invalid STEPYARD_SANDBOX value `{0}` (expected `docker` or `local`)")]
+    #[error("invalid STEPYARD_SANDBOX value `{0}` (expected `docker`, `local`, or `podman`)")]
     InvalidEnv(String),
 }
 
@@ -47,6 +48,7 @@ pub(crate) fn resolve_runtime_inner(
         return match raw.as_str() {
             "docker" => Ok(SandboxRuntime::Docker),
             "local" => Ok(SandboxRuntime::Local),
+            "podman" => Ok(SandboxRuntime::Podman),
             other => Err(ResolveError::InvalidEnv(other.to_string())),
         };
     }
@@ -88,8 +90,14 @@ mod tests {
     #[test]
     fn invalid_env_errors() {
         assert!(matches!(
-            resolve_runtime_inner(None, Some("podman".to_string()), false),
+            resolve_runtime_inner(None, Some("native".to_string()), false),
             Err(ResolveError::InvalidEnv(_))
         ));
+    }
+
+    #[test]
+    fn env_accepts_podman() {
+        let got = resolve_runtime_inner(None, Some("podman".to_string()), false).unwrap();
+        assert_eq!(got, SandboxRuntime::Podman);
     }
 }
