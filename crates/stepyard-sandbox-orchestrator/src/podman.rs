@@ -294,6 +294,21 @@ impl SandboxLifecycle for PodmanLifecycle {
         })
     }
 
+    async fn exec_interactive(
+        &self,
+        id: &SandboxId,
+        cmd: &[String],
+    ) -> Result<i32, SandboxError> {
+        let name = Self::container_name(*id.as_uuid());
+        let args = exec_interactive_args(&name, cmd);
+        let status = Command::new(PODMAN)
+            .args(&args)
+            .status()
+            .await
+            .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
+        Ok(status.code().unwrap_or(-1))
+    }
+
     async fn reuse_or_create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
         self.reuse_or_create_with_options(session_id, &CreateOptions::default())
             .await
@@ -320,6 +335,12 @@ impl SandboxLifecycle for PodmanLifecycle {
     }
 }
 
+fn exec_interactive_args(name: &str, cmd: &[String]) -> Vec<String> {
+    let mut args = vec!["exec".to_string(), "-it".to_string(), name.to_string()];
+    args.extend(cmd.iter().cloned());
+    args
+}
+
 struct PodmanExec {
     container_name: String,
 }
@@ -338,5 +359,20 @@ impl ExecFn for PodmanExec {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             exit_code: output.status.code().unwrap_or(-1),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exec_interactive_args_use_tty_flag_before_container() {
+        let cmd = vec!["sh".to_string()];
+
+        assert_eq!(
+            exec_interactive_args("minion-session-abc", &cmd),
+            vec!["exec", "-it", "minion-session-abc", "sh"]
+        );
     }
 }

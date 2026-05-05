@@ -203,6 +203,24 @@ pub struct ExecuteArgs {
 }
 
 #[derive(Args)]
+pub struct ExecArgs {
+    /// Attach this process's terminal to the sandbox command.
+    #[arg(long)]
+    pub interactive: bool,
+
+    /// Select the sandbox runtime. Defaults the same way as execute.
+    #[arg(long = "sandbox-runtime", value_enum, value_name = "docker|local|podman")]
+    pub sandbox_runtime: Option<SandboxRuntime>,
+
+    /// Session UUID whose sandbox should receive the interactive exec.
+    pub session_id: uuid::Uuid,
+
+    /// Command to run inside the sandbox. Defaults to `sh`.
+    #[arg(last = true)]
+    pub command: Vec<String>,
+}
+
+#[derive(Args)]
 pub struct ValidateArgs {
     /// Path to the workflow YAML file
     pub workflow: PathBuf,
@@ -493,6 +511,39 @@ fn create_options_from_global_config(
             deny: cfg.network.deny,
         },
     }
+}
+
+pub async fn exec(args: ExecArgs) -> anyhow::Result<()> {
+    if !args.interactive {
+        bail!("stepyard exec currently supports only --interactive");
+    }
+
+    let sandbox_runtime = sandbox::resolve_runtime(args.sandbox_runtime, false)?;
+    if sandbox_runtime == SandboxRuntime::Local {
+        bail!("--sandbox-runtime local does not support interactive exec; use docker or podman");
+    }
+    sandbox::require_runtime(sandbox_runtime).await?;
+
+    use stepyard_sandbox_orchestrator::{
+        DockerLifecycle, PodmanLifecycle, SandboxId, SandboxLifecycle,
+    };
+
+    let lifecycle: Arc<dyn SandboxLifecycle> = match sandbox_runtime {
+        SandboxRuntime::Docker => Arc::new(DockerLifecycle::default()),
+        SandboxRuntime::Podman => Arc::new(PodmanLifecycle::default()),
+        SandboxRuntime::Local => unreachable!("local runtime rejected above"),
+    };
+    let cmd = if args.command.is_empty() {
+        vec!["sh".to_string()]
+    } else {
+        args.command
+    };
+    let sandbox_id = SandboxId::from(args.session_id);
+    let status = lifecycle.exec_interactive(&sandbox_id, &cmd).await?;
+    if status != 0 {
+        bail!("interactive exec exited with status {status}");
+    }
+    Ok(())
 }
 
 pub async fn execute(
