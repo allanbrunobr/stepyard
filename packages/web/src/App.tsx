@@ -6,6 +6,8 @@ import { WorkflowLogPage } from './pages/Workflows/WorkflowLogPage';
 import { WorkflowDetailPage } from './pages/WorkflowDetail/WorkflowDetailPage';
 import { DevelopersPage } from './pages/Developers';
 import { CostsPage } from './pages/Costs';
+import { LoginPage } from './pages/Login/LoginPage';
+import { useAuthSession } from './hooks/use-auth';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -16,19 +18,35 @@ const queryClient = new QueryClient({
   },
 });
 
+function AuthenticatedApp() {
+  const { data, isLoading } = useAuthSession();
+
+  if (isLoading) {
+    return <div className="min-h-screen flex items-center justify-center text-muted-foreground">Loading...</div>;
+  }
+
+  if (!data?.authenticated) {
+    return <LoginPage />;
+  }
+
+  return (
+    <Layout>
+      <Routes>
+        <Route path="/" element={<OverviewPage />} />
+        <Route path="/workflows" element={<WorkflowLogPage />} />
+        <Route path="/workflows/:runId" element={<WorkflowDetailPage />} />
+        <Route path="/developers" element={<DevelopersPage />} />
+        <Route path="/costs" element={<CostsPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Layout>
+  );
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<OverviewPage />} />
-          <Route path="/workflows" element={<WorkflowLogPage />} />
-          <Route path="/workflows/:runId" element={<WorkflowDetailPage />} />
-          <Route path="/developers" element={<DevelopersPage />} />
-          <Route path="/costs" element={<CostsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Layout>
+      <AuthenticatedApp />
     </QueryClientProvider>
   );
 }
