@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::docker_errors::{classify_create_stderr, classify_destroy_stderr};
 use crate::sandbox::{ExecFn, ExecOutput, Sandbox, SandboxError, SandboxId, SandboxState};
-use crate::{ExecOptions, SandboxLifecycle};
+use crate::{CreateOptions, ExecOptions, SandboxLifecycle};
 
 const PODMAN: &str = "podman";
 
@@ -70,20 +70,44 @@ impl PodmanLifecycle {
 #[async_trait]
 impl SandboxLifecycle for PodmanLifecycle {
     async fn create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
+        self.create_with_options(session_id, &CreateOptions::default())
+            .await
+    }
+
+    async fn create_with_options(
+        &self,
+        session_id: Uuid,
+        opts: &CreateOptions,
+    ) -> Result<Sandbox, SandboxError> {
         let name = Self::container_name(session_id);
-        let output = Command::new(PODMAN)
-            .args([
-                "run",
-                "-d",
-                "--name",
-                &name,
-                "--label",
-                &format!("session_id={session_id}"),
-                &self.config.image,
-                &self.config.shell,
-                "-c",
-                "trap : TERM INT; sleep infinity & wait",
-            ])
+        let image = opts.image.as_deref().unwrap_or(&self.config.image);
+
+        let mut command = Command::new(PODMAN);
+        command
+            .args(["run", "-d", "--name", &name])
+            .arg("--label")
+            .arg(format!("session_id={session_id}"));
+        for volume in &opts.volumes {
+            command.arg("-v").arg(volume);
+        }
+        if let Some(cpus) = opts.cpus {
+            command.arg("--cpus").arg(cpus.to_string());
+        }
+        if let Some(memory) = &opts.memory {
+            command.arg("--memory").arg(memory);
+        }
+        for dns in &opts.dns {
+            command.arg("--dns").arg(dns);
+        }
+        if !opts.network.allow.is_empty() || !opts.network.deny.is_empty() {
+            command.args(["--network", "bridge"]);
+        }
+        command
+            .arg(image)
+            .arg(&self.config.shell)
+            .args(["-c", "trap : TERM INT; sleep infinity & wait"]);
+
+        let output = command
             .output()
             .await
             .map_err(|e| SandboxError::BackendUnavailable(e.to_string()))?;
@@ -271,6 +295,15 @@ impl SandboxLifecycle for PodmanLifecycle {
     }
 
     async fn reuse_or_create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
+        self.reuse_or_create_with_options(session_id, &CreateOptions::default())
+            .await
+    }
+
+    async fn reuse_or_create_with_options(
+        &self,
+        session_id: Uuid,
+        opts: &CreateOptions,
+    ) -> Result<Sandbox, SandboxError> {
         let name = Self::container_name(session_id);
         if Self::find_container(&name).await?.is_some() {
             return Ok(Sandbox {
@@ -283,7 +316,7 @@ impl SandboxLifecycle for PodmanLifecycle {
                 }),
             });
         }
-        self.create(session_id).await
+        self.create_with_options(session_id, opts).await
     }
 }
 

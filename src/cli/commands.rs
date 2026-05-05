@@ -290,7 +290,8 @@ async fn execute_v2(
         RunContext as HarnessRunContext, StepOutcome, TerminationReason,
     };
     use stepyard_sandbox_orchestrator::{
-        DockerLifecycle, GitWorktreeManager, LocalShellLifecycle, PodmanLifecycle, SandboxLifecycle,
+        DockerLifecycle, GitWorktreeManager, LocalShellLifecycle, PodmanLifecycle,
+        SandboxLifecycle,
     };
 
     let mut harness_workflow = harness_adapter::adapt(&workflow)
@@ -354,6 +355,7 @@ async fn execute_v2(
         tenant_id: std::env::var("STEPYARD_TENANT").unwrap_or_else(|_| "default".into()),
         shutdown_tx,
         shutdown_signal,
+        create_options: create_options_from_global_config(&workflow.config.global),
         // Production chat dispatch (PR 5c commit 3b of #31). The harness'
         // `Engine::run_chat_step` falls back to a typed `StepFailed`
         // (`ChatExecError::NoClientConfigured`) when this is `None`; CLI
@@ -473,6 +475,23 @@ async fn execute_v2(
                 std::process::exit(1);
             }
         }
+    }
+}
+
+fn create_options_from_global_config(
+    global_config: &HashMap<String, serde_yaml::Value>,
+) -> stepyard_sandbox_orchestrator::CreateOptions {
+    let cfg = crate::sandbox::SandboxConfig::from_global_config(global_config);
+    stepyard_sandbox_orchestrator::CreateOptions {
+        image: cfg.image,
+        volumes: cfg.volumes,
+        cpus: cfg.resources.cpus,
+        memory: cfg.resources.memory,
+        dns: cfg.dns,
+        network: stepyard_sandbox_orchestrator::NetworkOptions {
+            allow: cfg.network.allow,
+            deny: cfg.network.deny,
+        },
     }
 }
 
@@ -1583,6 +1602,38 @@ mod tests {
         assert_eq!(resolved["FOO"], "bar");
         assert_eq!(resolved["BAZ"], "qux");
         assert_eq!(resolved["ONLY"], "x");
+    }
+
+    #[test]
+    fn create_options_from_global_config_maps_sandbox_fields() {
+        let global = serde_yaml::from_str(
+            r#"
+sandbox:
+  image: "toolbox:latest"
+  volumes:
+    - "/host:/container:ro"
+  resources:
+    cpus: 2.5
+    memory: "3g"
+  dns:
+    - "1.1.1.1"
+  network:
+    allow:
+      - "api.anthropic.com"
+    deny:
+      - "0.0.0.0/0"
+"#,
+        )
+        .expect("global config");
+
+        let got = create_options_from_global_config(&global);
+        assert_eq!(got.image.as_deref(), Some("toolbox:latest"));
+        assert_eq!(got.volumes, ["/host:/container:ro"]);
+        assert_eq!(got.cpus, Some(2.5));
+        assert_eq!(got.memory.as_deref(), Some("3g"));
+        assert_eq!(got.dns, ["1.1.1.1"]);
+        assert_eq!(got.network.allow, ["api.anthropic.com"]);
+        assert_eq!(got.network.deny, ["0.0.0.0/0"]);
     }
 
     #[test]
