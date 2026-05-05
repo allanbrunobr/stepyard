@@ -162,6 +162,20 @@ pub trait SandboxLifecycle: Send + Sync {
         self.exec_with_env(id, cmd, &opts.env).await
     }
 
+    /// Execute `cmd` with the caller's terminal attached to the sandbox.
+    ///
+    /// Defaulting to [`SandboxError::InteractiveNotSupported`] keeps this
+    /// additive for non-container backends. Docker/Podman override it with
+    /// `exec -it` so operators can debug a live session without bypassing
+    /// the sandbox lifecycle abstraction.
+    async fn exec_interactive(
+        &self,
+        _id: &SandboxId,
+        _cmd: &[String],
+    ) -> Result<i32, SandboxError> {
+        Err(SandboxError::InteractiveNotSupported)
+    }
+
     /// Return the live sandbox for this session if one already exists,
     /// otherwise create a new one. The default impl just calls `create` —
     /// backends that care about reuse (Docker) override it.
@@ -251,6 +265,15 @@ mod send_check {
     }
 
     #[allow(dead_code)]
+    fn exec_interactive_future_is_send(
+        lifecycle: &dyn SandboxLifecycle,
+        id: &SandboxId,
+        cmd: &[String],
+    ) {
+        assert_send_future(lifecycle.exec_interactive(id, cmd));
+    }
+
+    #[allow(dead_code)]
     fn reuse_or_create_future_is_send(
         lifecycle: &dyn SandboxLifecycle,
         session_id: Uuid,
@@ -330,5 +353,19 @@ mod tests {
             .expect("default exec_with_options");
 
         assert_eq!(*lifecycle.recorded_env.lock().await, Some(env));
+    }
+
+    #[tokio::test]
+    async fn exec_interactive_default_impl_is_not_supported() {
+        let lifecycle = EnvOnlyLifecycle::default();
+        let id = SandboxId::new();
+        let cmd = vec!["sh".to_string()];
+
+        let err = lifecycle
+            .exec_interactive(&id, &cmd)
+            .await
+            .expect_err("default interactive exec should be unsupported");
+
+        assert!(matches!(err, SandboxError::InteractiveNotSupported));
     }
 }

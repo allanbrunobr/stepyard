@@ -31,6 +31,7 @@ use tokio::sync::broadcast;
   stepyard execute workflows/code-review.yaml -- 42        Review PR #42 (sandbox on by default)
   stepyard execute workflows/fix-issue.yaml -- 123         Fix issue #123
   stepyard execute my-workflow.yaml --sandbox-runtime podman -- main   Run with Podman
+  stepyard exec --interactive <session-id>            Open a shell in a live sandbox
   stepyard execute my-workflow.yaml --no-sandbox -- main   Run without Docker sandbox
   stepyard list                                            List available workflows
   stepyard init my-workflow --template code-review         Create a new workflow
@@ -46,6 +47,8 @@ pub struct Cli {
 enum Command {
     /// Run a workflow
     Execute(commands::ExecuteArgs),
+    /// Execute a command inside a live sandbox session
+    Exec(commands::ExecArgs),
     /// Validate a workflow YAML without running
     Validate(commands::ValidateArgs),
     /// List available workflows (current dir, ./workflows/, ~/.stepyard/workflows/)
@@ -136,6 +139,7 @@ impl Cli {
     ) -> anyhow::Result<()> {
         match self.command {
             Command::Execute(args) => commands::execute(args, shutdown_tx, shutdown_signal).await,
+            Command::Exec(args) => commands::exec(args).await,
             Command::Validate(args) => commands::validate(args).await,
             Command::List => commands::list().await,
             Command::Init(args) => commands::init(args).await,
@@ -227,6 +231,22 @@ mod tests {
                 assert_eq!(args.sandbox_runtime, Some(crate::sandbox::SandboxRuntime::Podman));
             }
             _ => panic!("expected execute command"),
+        }
+    }
+
+    #[test]
+    fn exec_accepts_interactive_session_id() {
+        let session_id = "550e8400-e29b-41d4-a716-446655440000";
+        let cli = Cli::try_parse_from(["stepyard", "exec", "--interactive", session_id])
+            .expect("interactive exec should parse");
+
+        match cli.command {
+            Command::Exec(args) => {
+                assert!(args.interactive);
+                assert_eq!(args.session_id.to_string(), session_id);
+                assert!(args.command.is_empty());
+            }
+            _ => panic!("expected exec command"),
         }
     }
 }

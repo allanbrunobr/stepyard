@@ -137,4 +137,4 @@
 ## Feature 27: TTY Forwarding via exec_interactive Default-Impl Method
 - Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.3] As a DevOps engineer, I want a new exec_interactive default-impl on SandboxLifecycle (Err(InteractiveNotSupported) by default) overridden by DockerLifecycle/PodmanLifecycle to use docker/podman exec -it for TTY-forwarded sessions, exposed via stepyard exec --interactive <session-id>, so that I can debug a running session interactively without bypassing stepyard's container abstraction. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 26
-- Status: pending
+- Status: done

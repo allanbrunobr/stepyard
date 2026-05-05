@@ -46,6 +46,10 @@ pub enum MockCall {
         cmd: Vec<String>,
         opts: ExecOptions,
     },
+    ExecInteractive {
+        id: SandboxId,
+        cmd: Vec<String>,
+    },
     ReuseOrCreate {
         session_id: Uuid,
     },
@@ -191,6 +195,18 @@ impl SandboxLifecycle for MockLifecycle {
         })
     }
 
+    async fn exec_interactive(
+        &self,
+        id: &SandboxId,
+        cmd: &[String],
+    ) -> Result<i32, SandboxError> {
+        self.calls.lock().await.push(MockCall::ExecInteractive {
+            id: *id,
+            cmd: cmd.to_vec(),
+        });
+        Ok(0)
+    }
+
     async fn reuse_or_create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
         self.calls
             .lock()
@@ -308,5 +324,23 @@ mod tests {
         assert_eq!(recorded.0, id);
         assert_eq!(recorded.1, cmd);
         assert_eq!(recorded.2, opts);
+    }
+
+    #[tokio::test]
+    async fn exec_interactive_records_command() {
+        let mock = MockLifecycle::new();
+        let id = SandboxId::new();
+        let cmd = vec!["sh".to_string()];
+
+        let status = mock
+            .exec_interactive(&id, &cmd)
+            .await
+            .expect("mock interactive exec");
+
+        assert_eq!(status, 0);
+        assert_eq!(
+            mock.calls().await,
+            vec![MockCall::ExecInteractive { id, cmd }]
+        );
     }
 }
