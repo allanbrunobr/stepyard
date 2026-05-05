@@ -10,8 +10,8 @@ use std::time::Instant;
 use chrono::Utc;
 use stepyard_core::{ChatMessage, Event, Signal, StepOutputSnapshot};
 use stepyard_sandbox_orchestrator::{
-    BranchStrategy, SandboxError, SandboxLifecycle, WorkflowOutcome, Workspace, WorkspaceError,
-    WorkspaceManager,
+    BranchStrategy, CreateOptions, SandboxError, SandboxLifecycle, WorkflowOutcome, Workspace,
+    WorkspaceError, WorkspaceManager,
 };
 use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
 use tokio::sync::broadcast;
@@ -102,6 +102,9 @@ pub struct HarnessConfig {
     /// before any engine spawns, mirroring `shutdown_tx`).
     #[serde(skip, default)]
     pub chat_client: Option<Arc<dyn ChatClient>>,
+    /// Structured sandbox creation options derived from workflow sandbox config.
+    #[serde(skip, default)]
+    pub create_options: CreateOptions,
 }
 
 impl Default for HarnessConfig {
@@ -112,6 +115,7 @@ impl Default for HarnessConfig {
             shutdown_grace_s: default_shutdown_grace_s(),
             shutdown_signal: default_shutdown_signal(),
             chat_client: None,
+            create_options: CreateOptions::default(),
         }
     }
 }
@@ -252,7 +256,10 @@ impl Engine {
         workflow: Workflow,
         lifecycle: Arc<dyn SandboxLifecycle>,
     ) -> Self {
-        let executor = Arc::new(SandboxStepExecutor::new(lifecycle.clone()));
+        let executor = Arc::new(
+            SandboxStepExecutor::new(lifecycle.clone())
+                .with_create_options(config.create_options.clone()),
+        );
         Self::with_executor(config, session, workflow, lifecycle, executor)
     }
 
