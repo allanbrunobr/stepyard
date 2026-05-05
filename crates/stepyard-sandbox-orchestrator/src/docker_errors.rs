@@ -50,7 +50,7 @@ pub(crate) fn classify_create_stderr(stderr: &[u8]) -> SandboxError {
 /// to remove a container that is already gone is not an error.
 pub(crate) fn classify_destroy_stderr(stderr: &[u8]) -> Option<SandboxError> {
     let raw = lossy_truncated(stderr);
-    if raw.contains("No such container") {
+    if raw.contains("No such container") || raw.contains("no container with name or ID") {
         return None;
     }
     if is_daemon_unreachable(&raw) {
@@ -169,6 +169,14 @@ mod tests {
         // an already-gone container is not an error because
         // `SandboxLifecycle::destroy*` is contractually idempotent.
         let out = classify_destroy_stderr(b"Error: No such container: minion-session-abc123");
+        assert!(out.is_none(), "expected idempotent swallow, got {out:?}");
+    }
+
+    #[test]
+    fn destroy_podman_no_such_container_returns_none_for_idempotency() {
+        let out = classify_destroy_stderr(
+            b"Error: no container with name or ID minion-session-abc123 found: no such container",
+        );
         assert!(out.is_none(), "expected idempotent swallow, got {out:?}");
     }
 

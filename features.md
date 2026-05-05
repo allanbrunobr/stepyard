@@ -125,9 +125,9 @@
 - Status: done
 
 ## Feature 25: Implement PodmanLifecycle to Validate Multi-Provider Support via Existing Trait
-- Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.1] As a platform operator, I want a PodmanLifecycle struct implementing the existing SandboxLifecycle trait (without changing the trait) shippable as an alternate provider via --sandbox-provider <docker|podman> CLI flag, so that Docker-restricted hosts can run stepyard via Podman and we prove the trait supports multiple providers without abstraction-layer redesign. Source: _bmad-output/sandcastle-features/epics.md
+- Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.1] As a platform operator, I want a PodmanLifecycle struct implementing the existing SandboxLifecycle trait (without changing the trait) shippable as an alternate provider via the existing --sandbox-runtime <docker|local|podman> CLI flag, so that Docker-restricted hosts can run stepyard via Podman and we prove the trait supports multiple providers without abstraction-layer redesign. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 24
-- Status: pending
+- Status: done
 
 ## Feature 26: Add CreateOptions Struct and create_with_options Default-Impl Method
 - Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.2] As a workflow author, I want a CreateOptions struct (volume mounts, resource limits, network policy) passed to a new create_with_options default-impl on SandboxLifecycle with workflow YAML sandbox: { volumes, limits, network } support, so that providers accept rich creation config without breaking the existing create signature. Source: _bmad-output/sandcastle-features/epics.md

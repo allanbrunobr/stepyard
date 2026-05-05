@@ -51,7 +51,7 @@ Every changed file is reviewed with **language-specific criteria** (Python gets 
 |-------------|---------------|-------|
 | **Rust toolchain** | [rustup.rs](https://rustup.rs) | For `cargo install` |
 | **ANTHROPIC_API_KEY** | [console.anthropic.com](https://console.anthropic.com) | `export ANTHROPIC_API_KEY="sk-ant-..."` |
-| **Docker Desktop** | [docker.com](https://www.docker.com/products/docker-desktop/) | Sandbox runs workflows in isolation |
+| **Docker or Podman** | [docker.com](https://www.docker.com/products/docker-desktop/) / [podman.io](https://podman.io/) | Sandbox runs workflows in isolation |
 | **gh CLI** | [cli.github.com](https://cli.github.com) | `gh auth login` — GH_TOKEN is auto-detected |
 
 ## Quick Start
@@ -127,6 +127,7 @@ API keys **never enter the container**. Stepyard runs a host-side reverse proxy 
 stepyard execute code-review.yaml -- 42        # Sandbox ON (default)
 stepyard execute code-review.yaml --no-sandbox -- 42  # Run locally instead
 stepyard execute code-review.yaml --sandbox-runtime local -- 42  # Force LocalShell runtime
+stepyard execute code-review.yaml --sandbox-runtime podman -- 42 # Use Podman instead of Docker
 ```
 
 ## Security Model
@@ -168,8 +169,8 @@ stepyard execute <workflow.yaml> [flags] -- [target]
 
 | Flag | Description |
 |------|-------------|
-| `--no-sandbox` | Disable Docker sandbox (sandbox is ON by default) |
-| `--sandbox-runtime docker\|local` | Select Docker or LocalShell runtime. Overrides `STEPYARD_SANDBOX`. |
+| `--no-sandbox` | Disable container sandboxing (sandbox is ON by default) |
+| `--sandbox-runtime docker\|local\|podman` | Select Docker, LocalShell, or Podman runtime. Overrides `STEPYARD_SANDBOX`. |
 | `--no-file-logs` | Disable `.stepyard/logs/<session_id>.jsonl` mirroring for this run. |
 | `--verbose` | Show all step outputs |
 | `--quiet` | Only show errors |

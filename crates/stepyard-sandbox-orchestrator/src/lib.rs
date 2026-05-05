@@ -8,6 +8,7 @@
 //!
 //! * [`SandboxLifecycle`] — the trait the harness calls. Two impls ship here:
 //!   - [`DockerLifecycle`] — real Docker via the `docker` CLI subprocess.
+//!   - [`PodmanLifecycle`] — real Podman via the `podman` CLI subprocess.
 //!   - [`MockLifecycle`] — in-memory, zero daemon calls, used by tests.
 //! * [`Sandbox`] — an opaque handle returned by `create`. Holds the id,
 //!   provides `exec`, and goes to `Destroyed` once the orchestrator tears
@@ -27,6 +28,7 @@
 mod docker;
 mod docker_errors;
 mod local;
+mod podman;
 pub mod mock;
 mod sandbox;
 mod workspace;
@@ -34,6 +36,7 @@ mod workspace;
 pub use docker::{DockerLifecycle, DockerLifecycleConfig};
 pub use local::LocalShellLifecycle;
 pub use mock::{MockCall, MockLifecycle};
+pub use podman::{PodmanLifecycle, PodmanLifecycleConfig};
 pub use sandbox::{ExecOutput, Sandbox, SandboxError, SandboxId};
 pub use workspace::{
     BranchStrategy, FinalizeReport, GitWorktreeManager, PruneReport, PrunedWorkspace,
