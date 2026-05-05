@@ -132,7 +132,7 @@
 ## Feature 26: Add CreateOptions Struct and create_with_options Default-Impl Method
 - Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.2] As a workflow author, I want a CreateOptions struct (volume mounts, resource limits, network policy) passed to a new create_with_options default-impl on SandboxLifecycle with workflow YAML sandbox: { volumes, limits, network } support, so that providers accept rich creation config without breaking the existing create signature. Source: _bmad-output/sandcastle-features/epics.md
 - Dependencies: Feature 25
-- Status: pending
+- Status: done
 
 ## Feature 27: TTY Forwarding via exec_interactive Default-Impl Method
 - Description: [Epic 6: Multi-Provider & Interactive Sandboxes, Story 6.3] As a DevOps engineer, I want a new exec_interactive default-impl on SandboxLifecycle (Err(InteractiveNotSupported) by default) overridden by DockerLifecycle/PodmanLifecycle to use docker/podman exec -it for TTY-forwarded sessions, exposed via stepyard exec --interactive <session-id>, so that I can debug a running session interactively without bypassing stepyard's container abstraction. Source: _bmad-output/sandcastle-features/epics.md

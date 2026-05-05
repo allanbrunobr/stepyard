@@ -12,13 +12,17 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::sandbox::{ExecFn, ExecOutput, Sandbox, SandboxError, SandboxId, SandboxState};
-use crate::{ExecOptions, SandboxLifecycle};
+use crate::{CreateOptions, ExecOptions, SandboxLifecycle};
 
 /// One recorded interaction with the mock backend.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MockCall {
     Create {
         session_id: Uuid,
+    },
+    CreateWithOptions {
+        session_id: Uuid,
+        opts: CreateOptions,
     },
     Destroy {
         id: SandboxId,
@@ -44,6 +48,10 @@ pub enum MockCall {
     },
     ReuseOrCreate {
         session_id: Uuid,
+    },
+    ReuseOrCreateWithOptions {
+        session_id: Uuid,
+        opts: CreateOptions,
     },
 }
 
@@ -86,12 +94,8 @@ impl MockLifecycle {
     pub async fn set_exec_with_options_error(&self, err: SandboxError) {
         *self.exec_with_options_error.lock().await = Some(err);
     }
-}
 
-#[async_trait]
-impl SandboxLifecycle for MockLifecycle {
-    async fn create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
-        self.calls.lock().await.push(MockCall::Create { session_id });
+    fn make_sandbox(&self) -> Result<Sandbox, SandboxError> {
         let id = SandboxId::new();
         Ok(Sandbox {
             state: Arc::new(Mutex::new(SandboxState {
@@ -103,6 +107,26 @@ impl SandboxLifecycle for MockLifecycle {
                 overrides: self.exec_overrides.clone(),
             }),
         })
+    }
+}
+
+#[async_trait]
+impl SandboxLifecycle for MockLifecycle {
+    async fn create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
+        self.calls.lock().await.push(MockCall::Create { session_id });
+        self.make_sandbox()
+    }
+
+    async fn create_with_options(
+        &self,
+        session_id: Uuid,
+        opts: &CreateOptions,
+    ) -> Result<Sandbox, SandboxError> {
+        self.calls.lock().await.push(MockCall::CreateWithOptions {
+            session_id,
+            opts: opts.clone(),
+        });
+        self.make_sandbox()
     }
 
     async fn destroy(&self, id: &SandboxId) -> Result<(), SandboxError> {
@@ -173,6 +197,21 @@ impl SandboxLifecycle for MockLifecycle {
             .await
             .push(MockCall::ReuseOrCreate { session_id });
         self.create(session_id).await
+    }
+
+    async fn reuse_or_create_with_options(
+        &self,
+        session_id: Uuid,
+        opts: &CreateOptions,
+    ) -> Result<Sandbox, SandboxError> {
+        self.calls
+            .lock()
+            .await
+            .push(MockCall::ReuseOrCreateWithOptions {
+                session_id,
+                opts: opts.clone(),
+            });
+        self.create_with_options(session_id, opts).await
     }
 }
 

@@ -48,6 +48,32 @@ use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
 
+/// Network policy carried at sandbox creation time.
+///
+/// Docker/Podman support here is intentionally conservative: non-empty
+/// allow/deny lists select the default bridge network today. Fine-grained
+/// egress enforcement remains a provider-specific hardening layer.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NetworkOptions {
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+}
+
+/// Structured options used when creating a sandbox.
+///
+/// The default value preserves legacy behavior for callers that only know about
+/// [`SandboxLifecycle::create`]. Providers that override
+/// [`SandboxLifecycle::create_with_options`] may inspect these values.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CreateOptions {
+    pub image: Option<String>,
+    pub volumes: Vec<String>,
+    pub cpus: Option<f64>,
+    pub memory: Option<String>,
+    pub dns: Vec<String>,
+    pub network: NetworkOptions,
+}
+
 /// Structured execution options for sandbox backends.
 ///
 /// Story 5.1 adds this as a non-breaking extension point: existing
@@ -69,6 +95,19 @@ pub struct ExecOptions {
 pub trait SandboxLifecycle: Send + Sync {
     /// Create a brand-new sandbox for this `session_id`.
     async fn create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError>;
+
+    /// Create a brand-new sandbox with structured provider options.
+    ///
+    /// Default delegation preserves existing implementors and makes the method
+    /// additive. Providers that support resource limits, volumes, or network
+    /// shaping override this method.
+    async fn create_with_options(
+        &self,
+        session_id: Uuid,
+        _opts: &CreateOptions,
+    ) -> Result<Sandbox, SandboxError> {
+        self.create(session_id).await
+    }
 
     /// Tear down the sandbox with `id`. Safe to call on an already-destroyed
     /// sandbox — implementations should return `Ok(())` in that case.
@@ -129,6 +168,16 @@ pub trait SandboxLifecycle: Send + Sync {
     async fn reuse_or_create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
         self.create(session_id).await
     }
+
+    /// Return the live sandbox for this session if one already exists,
+    /// otherwise create a new one with the supplied options.
+    async fn reuse_or_create_with_options(
+        &self,
+        session_id: Uuid,
+        opts: &CreateOptions,
+    ) -> Result<Sandbox, SandboxError> {
+        self.create_with_options(session_id, opts).await
+    }
 }
 
 /// Round 3 Story 6 — compile-time `Send` checks for the
@@ -148,6 +197,15 @@ mod send_check {
     #[allow(dead_code)]
     fn create_future_is_send(lifecycle: &dyn SandboxLifecycle, session_id: Uuid) {
         assert_send_future(lifecycle.create(session_id));
+    }
+
+    #[allow(dead_code)]
+    fn create_with_options_future_is_send(
+        lifecycle: &dyn SandboxLifecycle,
+        session_id: Uuid,
+        opts: &CreateOptions,
+    ) {
+        assert_send_future(lifecycle.create_with_options(session_id, opts));
     }
 
     #[allow(dead_code)]
@@ -198,6 +256,15 @@ mod send_check {
         session_id: Uuid,
     ) {
         assert_send_future(lifecycle.reuse_or_create(session_id));
+    }
+
+    #[allow(dead_code)]
+    fn reuse_or_create_with_options_future_is_send(
+        lifecycle: &dyn SandboxLifecycle,
+        session_id: Uuid,
+        opts: &CreateOptions,
+    ) {
+        assert_send_future(lifecycle.reuse_or_create_with_options(session_id, opts));
     }
 }
 

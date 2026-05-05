@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use stepyard_sandbox_orchestrator::{
-    ExecOptions, ExecOutput, SandboxError, SandboxId, SandboxLifecycle,
+    CreateOptions, ExecOptions, ExecOutput, SandboxError, SandboxId, SandboxLifecycle,
 };
 use uuid::Uuid;
 
@@ -38,20 +38,33 @@ pub trait StepExecutor: Send + Sync {
 /// Default implementation — delegates to a [`SandboxLifecycle`].
 pub struct SandboxStepExecutor {
     lifecycle: Arc<dyn SandboxLifecycle>,
+    create_options: CreateOptions,
 }
 
 impl SandboxStepExecutor {
     pub fn new(lifecycle: Arc<dyn SandboxLifecycle>) -> Self {
-        Self { lifecycle }
+        Self {
+            lifecycle,
+            create_options: CreateOptions::default(),
+        }
+    }
+
+    pub fn with_create_options(mut self, create_options: CreateOptions) -> Self {
+        self.create_options = create_options;
+        self
     }
 }
 
 #[async_trait]
 impl StepExecutor for SandboxStepExecutor {
     async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
-        // audit: emit-before-io exempt - reason: SandboxStepExecutor is a
-        // low-level runner; Engine::step emits StepStarted before invoking it.
-        let sandbox = self.lifecycle.reuse_or_create(session_id).await?;
+        // SandboxStepExecutor is a low-level runner; Engine::step emits
+        // StepStarted before invoking it.
+        let sandbox = self
+            .lifecycle
+            // audit: emit-before-io exempt - reason: Engine emits StepStarted before this runner.
+            .reuse_or_create_with_options(session_id, &self.create_options)
+            .await?;
         sandbox.exec(&step.command).await
     }
 
@@ -65,9 +78,13 @@ impl StepExecutor for SandboxStepExecutor {
         // Sandbox handle — the lifecycle::exec_with_env path uses the
         // SandboxId derived from session_id (harness convention), so we do
         // not need the handle's exec_fn here.
-        // audit: emit-before-io exempt - reason: SandboxStepExecutor is a
-        // low-level runner; Engine::step emits StepStarted before invoking it.
-        let _sandbox = self.lifecycle.reuse_or_create(session_id).await?;
+        // SandboxStepExecutor is a low-level runner; Engine::step emits
+        // StepStarted before invoking it.
+        let _sandbox = self
+            .lifecycle
+            // audit: emit-before-io exempt - reason: Engine emits StepStarted before this runner.
+            .reuse_or_create_with_options(session_id, &self.create_options)
+            .await?;
         let sandbox_id = SandboxId::from(session_id);
         // D7/NFR-argv: step.command is wrapped as `sh -c <command>` argv.
         // The env pairs flow through structured ExecOptions — never
@@ -153,10 +170,16 @@ mod tests {
         // MockLifecycle records the exact options. If SandboxStepExecutor
         // ever drops env silently, MockCall::ExecWithOptions.opts.env will
         // diverge.
-        use stepyard_sandbox_orchestrator::MockCall;
+        use stepyard_sandbox_orchestrator::{CreateOptions, MockCall};
 
         let lifecycle: Arc<MockLifecycle> = Arc::new(MockLifecycle::new());
-        let executor = SandboxStepExecutor::new(lifecycle.clone());
+        let create_options = CreateOptions {
+            image: Some("custom:latest".to_string()),
+            volumes: vec!["/host:/container:ro".to_string()],
+            ..CreateOptions::default()
+        };
+        let executor = SandboxStepExecutor::new(lifecycle.clone())
+            .with_create_options(create_options.clone());
 
         let mut env = HashMap::new();
         env.insert("KEY".to_string(), "value".to_string());
@@ -169,6 +192,15 @@ mod tests {
             .expect("execute_with_env");
 
         let calls = lifecycle.calls().await;
+        let recorded_create_options = calls
+            .iter()
+            .find_map(|c| match c {
+                MockCall::ReuseOrCreateWithOptions { opts, .. } => Some(opts.clone()),
+                _ => None,
+            })
+            .expect("ReuseOrCreateWithOptions recorded");
+        assert_eq!(recorded_create_options, create_options);
+
         let recorded_env = calls
             .iter()
             .find_map(|c| match c {
