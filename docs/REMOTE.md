@@ -150,8 +150,8 @@ curl -L -H "Authorization: Bearer $API_SECRET" \
 ```
 
 Uploads require the same Bearer secret as dispatch. Artifact listing and
-download follow the dashboard's current read-endpoint model: access is
-controlled by the dashboard/network boundary, not by a browser-visible token.
+download are dashboard-read endpoints: browsers use the signed HTTP-only
+dashboard session cookie, while scripts may still use the Bearer secret.
 Artifacts are stored on the API host under `STEPYARD_ARTIFACT_DIR`, defaulting
 to `/tmp/stepyard-artifacts`. The server never uses the submitted filename as a
 filesystem path; it stores bytes under a generated artifact id and keeps the
@@ -178,8 +178,13 @@ exist on the host after the sandbox lifecycle copies changed files back.
 
 ## Security notes
 
-- **API secret**: `API_SECRET` in `.env` is the Bearer token for all dispatch
-  calls. Use a long random string. Never commit the `.env`.
+- **API secret**: `API_SECRET` in `.env` is the Bearer token for dispatch,
+  event, and artifact-upload calls. It is also the dashboard login secret; the
+  browser receives only a signed HTTP-only session cookie, not the raw secret.
+  Use a long random string. Never commit the `.env`.
+- **Dashboard cookie**: dashboard reads require login and use
+  `stepyard_dashboard_session` scoped to `/api`. Set
+  `DASHBOARD_COOKIE_SECURE=true` only when the dashboard is served over HTTPS.
 - **SSH key scope**: the dispatcher key is root-on-VPS. It can do anything root
   can do. Consider a dedicated `stepyard` user with only the permissions to run
   `stepyard execute` — a post-MVP hardening.
@@ -206,6 +211,6 @@ exist on the host after the sandbox lifecycle copies changed files back.
 - **5.4 follow-up** — true warm sandbox pool. This requires a worker/queue,
   container leases, workspace reset semantics, and secret-isolation rules; it is
   not safe to bolt onto the current detached `POST /dispatch` flow.
-- **5.5 follow-up** — authenticated dashboard sessions. Artifact reads follow
-  the existing dashboard read model until the dashboard grows login/session
-  auth.
+- **5.5 follow-up** — stronger dashboard access controls, including per-user
+  sessions or SSO. The current dashboard login is a shared-secret session
+  boundary around read endpoints.

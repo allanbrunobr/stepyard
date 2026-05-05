@@ -4,29 +4,16 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { basename, join } from 'path';
+import { requireAuth, requireDashboardAuth } from '../auth';
 import { pool } from '../db';
 import { logger } from '../logger';
 
 export const workflowsRouter = Router();
 
-function requireAuth(req: Request, res: Response, next: Function) {
-  const authHeader = req.headers.authorization;
-  const secret = process.env.API_SECRET;
-  if (!secret || !authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== secret) {
-    res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid or missing authorization' } });
-    return;
-  }
-  next();
-}
-
 function envFlag(name: string): boolean {
   const value = process.env[name]?.trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';
 }
-
-// TODO (post-MVP): Add auth middleware for read endpoints
-// For PoC, access is controlled at network/firewall level on the VPS
-// workflowsRouter.use(requireAuth);
 
 // --- Validation Schemas ---
 
@@ -97,7 +84,7 @@ function buildWhereClause(filters: {
 
 // --- CSV Export (registered BEFORE :run_id to avoid param conflict) ---
 
-workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => {
+workflowsRouter.get('/workflows/export', requireDashboardAuth, async (req: Request, res: Response) => {
 
   const parsed = listQuerySchema.omit({ page: true, limit: true, sort: true, order: true }).safeParse(req.query);
   if (!parsed.success) {
@@ -178,7 +165,7 @@ workflowsRouter.get('/workflows/export', async (req: Request, res: Response) => 
 
 // --- GET /workflows (paginated list) ---
 
-workflowsRouter.get('/workflows', async (req: Request, res: Response) => {
+workflowsRouter.get('/workflows', requireDashboardAuth, async (req: Request, res: Response) => {
 
   const parsed = listQuerySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -220,7 +207,7 @@ workflowsRouter.get('/workflows', async (req: Request, res: Response) => {
 
 // --- GET /workflows/distinct (for filter dropdowns) ---
 
-workflowsRouter.get('/workflows/distinct', async (_req: Request, res: Response) => {
+workflowsRouter.get('/workflows/distinct', requireDashboardAuth, async (_req: Request, res: Response) => {
   try {
     const [users, workflows, statuses] = await Promise.all([
       pool.query('SELECT DISTINCT user_name FROM workflow_runs ORDER BY user_name'),
@@ -378,7 +365,7 @@ function attachmentHeader(name: string): string {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
-workflowsRouter.get('/workflows/:runId/logs/stream', requireAuth, async (req: Request, res: Response) => {
+workflowsRouter.get('/workflows/:runId/logs/stream', requireDashboardAuth, async (req: Request, res: Response) => {
   const runId = String(req.params.runId);
 
   try {
@@ -467,7 +454,7 @@ workflowsRouter.get('/workflows/:runId/logs/stream', requireAuth, async (req: Re
 
 // --- Workflow artifacts (registered BEFORE :runId to avoid param conflict) ---
 
-workflowsRouter.get('/workflows/:runId/artifacts', async (req: Request, res: Response) => {
+workflowsRouter.get('/workflows/:runId/artifacts', requireDashboardAuth, async (req: Request, res: Response) => {
   const runId = UUID_PARAM.safeParse(req.params.runId);
   if (!runId.success) {
     res.status(400).json({ error: { code: 'VALIDATION_FAILED', message: 'Invalid run id' } });
@@ -576,7 +563,7 @@ workflowsRouter.post('/workflows/:runId/artifacts', requireAuth, async (req: Req
   }
 });
 
-workflowsRouter.get('/workflows/:runId/artifacts/:artifactId', async (req: Request, res: Response) => {
+workflowsRouter.get('/workflows/:runId/artifacts/:artifactId', requireDashboardAuth, async (req: Request, res: Response) => {
   const runId = UUID_PARAM.safeParse(req.params.runId);
   const artifactId = UUID_PARAM.safeParse(req.params.artifactId);
   if (!runId.success || !artifactId.success) {
@@ -623,7 +610,7 @@ workflowsRouter.get('/workflows/:runId/artifacts/:artifactId', async (req: Reque
 
 // --- GET /workflows/:runId (detail with steps) ---
 
-workflowsRouter.get('/workflows/:runId', async (req: Request, res: Response) => {
+workflowsRouter.get('/workflows/:runId', requireDashboardAuth, async (req: Request, res: Response) => {
 
   const { runId } = req.params;
 
