@@ -1,6 +1,15 @@
 # Configuration
 
-Workflow config resolves in four layers, from lowest to highest priority:
+This document describes how **`config:` keys inside a workflow YAML file** merge
+for each step. It is separate from the **config file stack** documented in the
+README (embedded defaults → `~/.stepyard/defaults.yaml` → `.stepyard/config.yaml`
+→ workflow `config:` → step-inline `config:`). File-level defaults supply base
+values; the four layers below decide how keys inside the workflow override each
+other at execution time.
+
+## Four layers inside a workflow
+
+Workflow step config resolves in four layers, from lowest to highest priority:
 
 1. **Global** — `config.global.*` (applies to every step)
 2. **Type** — `config.<step_type>.*` (applies to steps of that type)
@@ -120,8 +129,11 @@ Use `stepyard inspect <workflow.yaml>` to print the config resolved for every
 step (shows exactly which keys come from which layer).
 
 `--dry-run` also prints resolved config per step without executing anything.
+Requires `--engine v1` today — the v2 harness rejects `--dry-run`.
 
 ## See also
 
+- `README.md` — config **file** priority (embedded → user → project → workflow → step)
 - `YAML-SPEC.md` — overall workflow schema
 - `STEP-TYPES.md` — which config keys each step type honors
+- `DOCKER-SANDBOX.md` — sandbox and API proxy settings

@@ -65,6 +65,8 @@ brew install minion-engine
 
 #   (b) Pre-compiled binary (no Rust required) — see GitHub Releases
 #       https://github.com/allanbrunobr/stepyard/releases/latest
+#       Artifacts are named stepyard-<platform> (e.g. stepyard-linux-x86_64).
+#       The crate name minion-engine is historical; the CLI binary is stepyard.
 
 #   (c) From source (Rust toolchain required)
 cargo install minion-engine
@@ -114,13 +116,14 @@ Every workflow runs inside an isolated Docker container. Your project is copied 
 
 ### 🔐 Secure API Proxy
 
-API keys **never enter the container**. Stepyard runs a host-side reverse proxy that intercepts API calls from inside the sandbox and injects authentication headers on-the-fly:
+The real `ANTHROPIC_API_KEY` **never enters the container**. Stepyard runs a host-side reverse proxy that intercepts API calls from inside the sandbox and injects the real key on-the-fly:
 
 ![Secure API Proxy Mechanism](https://raw.githubusercontent.com/allanbrunobr/stepyard/main/docs/architecture-api-proxy.jpg)
 
-- The container only sees `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>`
-- `ANTHROPIC_API_KEY` stays on the host machine — never exposed as a container env var
-- Proxy starts automatically with the workflow and stops when it completes
+- The container receives a **per-session dummy token** as `ANTHROPIC_API_KEY` plus `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>`
+- The proxy validates that token and only forwards `/v1/*` paths to `api.anthropic.com`
+- If the proxy fails to start, the workflow aborts — there is no fallback that injects the real key
+- Proxy starts automatically for Docker/Podman sandboxes (v2 engine, default) and stops when the workflow completes
 - Zero configuration required — works out of the box with `cargo install`
 
 ```bash
@@ -134,8 +137,10 @@ stepyard execute code-review.yaml --sandbox-runtime podman -- 42 # Use Podman in
 
 | What | Where it lives |
 |------|----------------|
-| `ANTHROPIC_API_KEY` | Host machine only — never passed to the container |
-| API requests from inside sandbox | Intercepted by host proxy, auth header injected on-the-fly |
+| Real `ANTHROPIC_API_KEY` | Host machine only — proxy holds the secret |
+| Container `ANTHROPIC_API_KEY` | Per-session dummy token (not the real key) |
+| API requests from inside sandbox | Intercepted by host proxy; token validated; only `/v1/*` forwarded |
+| `agent` / `chat` steps (v2 default) | Run on the host — use the real key via normal env, not the sandbox proxy |
 | Project files | Copied into the container, isolated from your working directory |
 | Container lifecycle | Fresh container per run — destroyed on completion |
 
@@ -169,16 +174,19 @@ stepyard execute <workflow.yaml> [flags] -- [target]
 
 | Flag | Description |
 |------|-------------|
+| `--engine v1\|v2` | Workflow engine (`v2` default — session replay, crash recovery). `v1` is legacy. |
 | `--no-sandbox` | Disable container sandboxing (sandbox is ON by default) |
 | `--sandbox-runtime docker\|local\|podman` | Select Docker, LocalShell, or Podman runtime. Overrides `STEPYARD_SANDBOX`. |
 | `--no-file-logs` | Disable `.stepyard/logs/<session_id>.jsonl` mirroring for this run. |
 | `--verbose` | Show all step outputs |
 | `--quiet` | Only show errors |
 | `--json` | Output result as JSON |
-| `--dry-run` | Show what steps would run without executing |
+| `--dry-run` | Show what steps would run without executing (**v1 only** — v2 rejects this flag) |
 | `--var KEY=VALUE` | Set a workflow variable (repeatable) |
 | `--timeout SECONDS` | Override global timeout |
 | `--resume STEP` | Resume from a specific step |
+| `--branch-strategy STRATEGY` | Git branch strategy (`head`, `merge-to-head`, `named-branch:<name>`) |
+| `--repo OWNER/REPO` | Clone a GitHub repo into the sandbox instead of copying the host CWD |
 
 ```bash
 # Examples
@@ -246,12 +254,15 @@ stepyard config set global.timeout 600s              # Increase timeout
 stepyard config set agent.model claude-sonnet-4-20250514   # Change agent model
 ```
 
-**Config priority** (lowest → highest):
+**Config file priority** (lowest → highest) — where defaults come from before a workflow runs:
+
 1. **Embedded defaults** — compiled into the binary, always available
 2. **User-level** — `~/.stepyard/defaults.yaml` (created with `stepyard config init`)
 3. **Project-level** — `.stepyard/config.yaml` in your project root
 4. **Workflow YAML** — `config:` section in each workflow file
 5. **Step inline** — `config:` on individual steps
+
+Inside a workflow file, keys resolve in a separate four-layer model (global → type → pattern → step-inline). See [`docs/CONFIG.md`](docs/CONFIG.md).
 
 New users get sensible defaults automatically via `cargo install` — no config files needed.
 
@@ -262,6 +273,25 @@ stepyard setup
 ```
 
 Interactive setup wizard — checks requirements, configures API keys, and optionally sets up Slack bot credentials. Saves config to `~/.stepyard/config.toml`.
+
+### `stepyard session`
+
+List workflow sessions stored in PostgreSQL (requires the `postgres` build profile).
+
+```bash
+stepyard session list --status running
+stepyard session list --status completed --since 24h
+```
+
+### `stepyard remote`
+
+Dispatch workflows to a remote engine via the dashboard API. See [`docs/REMOTE.md`](docs/REMOTE.md).
+
+```bash
+stepyard remote exec fix-issue --repo owner/repo -- 42
+stepyard remote status
+stepyard remote logs <run-id>
+```
 
 ### `stepyard slack start` (requires `--features slack`)
 
@@ -314,6 +344,8 @@ steps:
 | `map` | Run a scope once per item in a list |
 | `parallel` | Run nested steps concurrently |
 | `call` | Invoke a scope once |
+| `template` | Render a prompt template file and store the result |
+| `script` | Evaluate an inline Rhai script |
 
 ## Template Variables
 
@@ -484,13 +516,39 @@ Then mention it:
 
 ---
 
+## Dashboard (optional)
+
+The repo includes a TypeScript dashboard for observing workflow runs, costs, and remote dispatch.
+
+```bash
+# Copy .env.example → .env, set API_SECRET, then:
+npm run dev          # Docker Compose: Postgres + API + web + LiteLLM
+npm run dev:api      # API only (port 3001)
+npm run dev:web      # Web only (port 5173)
+```
+
+- API: `packages/api` (Express + PostgreSQL)
+- Web: `packages/web` (React + Vite)
+- Remote dispatch and event ingestion: [`docs/REMOTE.md`](docs/REMOTE.md)
+
+Workflows can push completion events to the dashboard:
+
+```yaml
+config:
+  events:
+    dashboard:
+      url: "http://localhost:3001/api/events"
+      secret: "${DASHBOARD_API_SECRET}"
+```
+
 ## Documentation
 
 - [`docs/YAML-SPEC.md`](docs/YAML-SPEC.md) — full workflow format reference
 - [`docs/STEP-TYPES.md`](docs/STEP-TYPES.md) — every step type with examples
-- [`docs/CONFIG.md`](docs/CONFIG.md) — 4-layer config resolution
+- [`docs/CONFIG.md`](docs/CONFIG.md) — four-layer config resolution inside a workflow YAML
 - [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md) — sandbox modes, security, proxy
 - [`docs/EXAMPLES.md`](docs/EXAMPLES.md) — reference workflows and patterns
+- [`docs/REMOTE.md`](docs/REMOTE.md) — remote execution and dashboard dispatch
 
 ---
 
@@ -501,9 +559,23 @@ Issues and PRs are welcome. To run the project locally:
 ```bash
 git clone https://github.com/allanbrunobr/stepyard
 cd stepyard
-cargo build
-cargo test
+
+# Rust workspace (CLI + crates)
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+
+# TypeScript dashboard
+npm install
+npm run build --workspace @stepyard/api
+npm run test --workspace @stepyard/api
+npm run build --workspace @stepyard/web
+
+# Full dev stack (Postgres + API + web)
+npm run dev
 ```
+
+Many integration tests need PostgreSQL (`DATABASE_URL` or `STEPYARD_HARNESS_DATABASE_URL`). Docker tests are gated by `STEPYARD_TEST_DOCKER=1`.
 
 Workflow YAML files live in `workflows/` — the fastest way to contribute is adding or improving a workflow template. Language-specific prompt templates are in `prompts/`.
 
@@ -516,18 +588,25 @@ New crates or layers that flow user-supplied values into a subprocess command li
 ## Project Structure
 
 ```
-src/
-  cli/          # CLI commands (execute, validate, list, init, inspect, setup)
-  engine/       # Core engine — step execution, context, templates
-  workflow/     # YAML parsing, validation
-  steps/        # Step executors (cmd, agent, chat, gate, repeat, map, parallel)
-  sandbox/      # Docker sandbox management
-  prompts/      # Stack detection and prompt registry
-  config/       # 5-layer config resolution (embedded → user → project → workflow → step)
-  slack/        # Slack bot integration (optional, --features slack)
-  plugins/      # Dynamic plugin system
-workflows/      # Example workflow YAML files
-prompts/        # Language-specific prompt templates
+src/                          # CLI binary (stepyard) + legacy v1 engine
+  cli/                        # Commands (execute, validate, session, remote, setup, …)
+  engine/                     # Legacy v1 engine (use --engine v1)
+  workflow/                   # YAML parsing and validation
+  steps/                      # v1 step executors
+  sandbox/                    # v1 Docker sandbox + API proxy
+  prompts/                    # Stack detection and prompt registry
+  config/                     # Config file resolution (embedded → user → project → workflow)
+crates/
+  stepyard-core/              # Shared contracts (Event, EngineError)
+  stepyard-session/           # Append-only session log (PostgreSQL / SQLite)
+  stepyard-sandbox-orchestrator/  # v2 sandbox lifecycle (Docker, Podman, LocalShell)
+  stepyard-harness/           # v2 workflow engine (default)
+packages/
+  api/                        # Dashboard REST API (Express)
+  web/                        # Dashboard UI (React + Vite)
+workflows/                    # Example workflow YAML files
+prompts/                      # Language-specific prompt templates
+docs/                         # Detailed reference documentation
 ```
 
 ## License
