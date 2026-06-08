@@ -15,10 +15,15 @@ no partial state. Use `--no-sandbox` to run locally on the host instead.
 ## CLI flags
 
 ```bash
-stepyard execute workflow.yaml -- <target>               # sandboxed by default
+stepyard execute workflow.yaml -- <target>               # sandboxed by default (v2 engine)
 stepyard execute --no-sandbox workflow.yaml -- <target>  # run on host
 stepyard execute --repo OWNER/REPO workflow.yaml -- <target>  # clone repo inside the container
+stepyard execute --sandbox-runtime podman workflow.yaml -- <target>  # use Podman instead of Docker
+stepyard execute --engine v1 workflow.yaml -- <target>   # legacy engine (deprecated)
 ```
+
+The default engine is **v2** (`stepyard-harness` + `stepyard-sandbox-orchestrator`).
+Pass `--engine v1` only when you need the legacy monolithic engine.
 
 ## Sandbox modes
 
@@ -68,18 +73,48 @@ defaults. `from_global_config` parses the `config.global.sandbox` block.
 
 ## Secure API proxy
 
-When running `chat` steps in a sandbox, secrets (`ANTHROPIC_API_KEY`) stay on
-the host. The engine starts a small proxy ([`sandbox/proxy.rs`](../src/sandbox/proxy.rs))
-that the container reaches by URL only — the key is never copied into the
-container. This lets you run third-party code in the sandbox without exposing
-your API key.
+When a workflow runs inside a Docker/Podman sandbox and `ANTHROPIC_API_KEY` is
+set on the host, the real key **stays on the host**. The engine starts a small
+proxy ([`sandbox/proxy.rs`](../src/sandbox/proxy.rs) on v1;
+v2 wires the same proxy from `execute_v2` into sandbox cmd steps via
+`stepyard-harness`) that the container reaches by URL.
+
+**What the container sees:**
+
+| Variable | Value |
+|----------|-------|
+| `ANTHROPIC_BASE_URL` | `http://host.docker.internal:<port>` |
+| `ANTHROPIC_API_KEY` | Per-session **dummy token** (not the real key) |
+
+**What the proxy does:**
+
+1. Validates the dummy token on each request (`x-api-key` header)
+2. Forwards only `/v1/*` paths to `api.anthropic.com`
+3. Injects the real `ANTHROPIC_API_KEY` on the upstream request
+
+If the proxy fails to start, the workflow **aborts** — there is no fallback that
+injects the real key into the container.
+
+**v2 note:** `agent` and `chat` steps run on the **host** in the default v2
+engine; they use the real key from the host environment directly. The proxy
+applies to **sandbox cmd steps** (and v1 sandbox paths) that call the Anthropic
+API from inside the container.
 
 Architecture diagram: `docs/architecture-api-proxy.jpg`.
 
 ## Lifecycle
 
-1. `stepyard execute` starts
-2. If not `Disabled`, `sandbox_up()` creates the container
+**v2 engine (default):**
+
+1. `stepyard execute` starts; API proxy starts if sandbox + `ANTHROPIC_API_KEY`
+2. `SandboxLifecycle::reuse_or_create` creates or reuses a container per session
+3. Cmd steps run via `docker exec` with argv-only env injection; agent/chat run on the host
+4. `destroy_by_session` tears down the container when the workflow ends or is cancelled
+
+**v1 engine (`--engine v1`):**
+
+1. `stepyard execute` starts; API proxy starts if sandbox + `ANTHROPIC_API_KEY`
+2. `sandbox_up()` creates the container
 3. Steps execute (dispatched to host or container per mode)
 4. `sandbox_down()` destroys the container
 5. Cleanup runs even if a step fails
@@ -98,6 +133,8 @@ the name printed at startup.
 
 ## See also
 
+- [`README.md`](../README.md) — CLI flags, security model, dashboard setup
+- [`REMOTE.md`](REMOTE.md) — remote dispatch and VPS deployment
 - `YAML-SPEC.md` — workflow schema
 - `CONFIG.md` — how `config.global.sandbox` layers with step-inline overrides
 - Architecture image: `docs/architecture-docker-sandbox.jpg`

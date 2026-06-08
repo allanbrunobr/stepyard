@@ -190,8 +190,12 @@ exist on the host after the sandbox lifecycle copies changed files back.
   `stepyard execute` — a post-MVP hardening.
 - **GH_TOKEN**: stored in `.env` on the VPS and forwarded over SSH env. Needs
   at minimum `repo` scope for `--repo` mode clones. Rotate regularly.
-- **ANTHROPIC_API_KEY**: same story. The engine's secure API proxy keeps it on
-  the host during agent steps (never injected into the sandbox container).
+- **ANTHROPIC_API_KEY**: stored in `.env` on the VPS and forwarded to the host
+  engine over SSH. For sandbox cmd steps, the engine's API proxy keeps the
+  **real** key on the host — the container receives a per-session dummy token
+  as `ANTHROPIC_API_KEY` plus `ANTHROPIC_BASE_URL` pointing at the proxy. Agent
+  and chat steps (v2 default) run on the host and read the real key from env.
+  See [`DOCKER-SANDBOX.md`](DOCKER-SANDBOX.md#secure-api-proxy).
 - **Network exposure**: the dispatch endpoint runs on port 3001. If your VPS
   exposes this publicly, put it behind HTTPS (e.g. Caddy/nginx reverse proxy).
   Without TLS, `API_SECRET` is sent in the clear.
@@ -214,3 +218,9 @@ exist on the host after the sandbox lifecycle copies changed files back.
 - **5.5 follow-up** — stronger dashboard access controls, including per-user
   sessions or SSO. The current dashboard login is a shared-secret session
   boundary around read endpoints.
+
+## See also
+
+- [`DOCKER-SANDBOX.md`](DOCKER-SANDBOX.md) — sandbox modes and API proxy
+- [`README.md`](../README.md) — dashboard setup (`npm run dev`) and CLI overview
+- [`CONFIG.md`](CONFIG.md) — workflow `config:` layers and `events.dashboard`
