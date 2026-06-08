@@ -72,6 +72,8 @@ pub struct CreateOptions {
     pub memory: Option<String>,
     pub dns: Vec<String>,
     pub network: NetworkOptions,
+    /// Extra `--add-host` entries (e.g. `host.docker.internal:host-gateway`).
+    pub extra_hosts: Vec<String>,
 }
 
 /// Structured execution options for sandbox backends.

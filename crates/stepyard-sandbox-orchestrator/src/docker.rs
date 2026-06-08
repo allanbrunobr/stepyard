@@ -108,6 +108,9 @@ impl SandboxLifecycle for DockerLifecycle {
         for dns in &opts.dns {
             command.arg("--dns").arg(dns);
         }
+        for host in &opts.extra_hosts {
+            command.args(["--add-host", host]);
+        }
         if !opts.network.allow.is_empty() || !opts.network.deny.is_empty() {
             command.args(["--network", "bridge"]);
         }

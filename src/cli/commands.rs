@@ -192,13 +192,10 @@ pub struct ExecuteArgs {
     pub repo: Option<String>,
 
     /// Engine implementation to drive the workflow:
-    /// `v1` (default) — the legacy monolithic `Engine::run()` with all 9
-    /// step types (cmd, agent, chat, gate, repeat, map, parallel, call,
-    /// template, script).
-    /// `v2` — the new `stepyard_harness::Engine::resume()` step loop. Only
-    /// supports cmd steps in this release (Story 2.4); non-cmd workflows
-    /// exit non-zero with a clear error.
-    #[arg(long, value_name = "v1|v2", default_value = "v1")]
+    /// `v2` (default) — the `stepyard_harness::Engine` step loop with
+    /// session replay, crash recovery, and all supported step types.
+    /// `v1` — legacy monolithic `Engine::run()` (deprecated; will be removed).
+    #[arg(long, value_name = "v1|v2", default_value = "v2")]
     pub engine: String,
 }
 
@@ -304,8 +301,8 @@ async fn execute_v2(
     shutdown_signal: Arc<OnceLock<String>>,
 ) -> anyhow::Result<()> {
     use stepyard_harness::{
-        Defaults as HarnessDefaults, Engine as HarnessEngine, EngineError, HarnessConfig,
-        RunContext as HarnessRunContext, StepOutcome, TerminationReason,
+        AnthropicProxyEnv, Defaults as HarnessDefaults, Engine as HarnessEngine, EngineError,
+        HarnessConfig, RunContext as HarnessRunContext, StepOutcome, TerminationReason,
     };
     use stepyard_sandbox_orchestrator::{
         DockerLifecycle, GitWorktreeManager, LocalShellLifecycle, PodmanLifecycle,
@@ -369,11 +366,38 @@ async fn execute_v2(
         SandboxRuntime::Podman => Arc::new(PodmanLifecycle::default()),
     };
 
+    let mut create_options = create_options_from_global_config(&workflow.config.global);
+    let mut anthropic_proxy = None;
+    let mut api_proxy = None;
+    let uses_container_sandbox = sandbox_mode != SandboxMode::Disabled
+        && matches!(
+            sandbox_runtime,
+            SandboxRuntime::Docker | SandboxRuntime::Podman
+        );
+    // Docker/Podman with sandbox enabled: start the host API proxy so cmd steps
+    // inside the container never receive the real Anthropic key.
+    if uses_container_sandbox {
+        if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
+            let proxy = crate::sandbox::proxy::ApiProxy::start(api_key)
+                .await
+                .context("Failed to start API proxy for v2 sandbox")?;
+            create_options
+                .extra_hosts
+                .push("host.docker.internal:host-gateway".into());
+            anthropic_proxy = Some(AnthropicProxyEnv {
+                port: proxy.port(),
+                auth_token: proxy.auth_token().to_string(),
+            });
+            api_proxy = Some(proxy);
+        }
+    }
+
     let config = HarnessConfig {
         tenant_id: std::env::var("STEPYARD_TENANT").unwrap_or_else(|_| "default".into()),
         shutdown_tx,
         shutdown_signal,
-        create_options: create_options_from_global_config(&workflow.config.global),
+        create_options,
+        anthropic_proxy,
         // Production chat dispatch (PR 5c commit 3b of #31). The harness'
         // `Engine::run_chat_step` falls back to a typed `StepFailed`
         // (`ChatExecError::NoClientConfigured`) when this is `None`; CLI
@@ -474,6 +498,9 @@ async fn execute_v2(
                     pb.finish_and_clear();
                 }
                 display::workflow_done(wf_start.elapsed(), step_index);
+                if let Some(proxy) = api_proxy.take() {
+                    proxy.stop().await;
+                }
                 return Ok(());
             }
             StepOutcome::Cancelled => {
@@ -510,6 +537,7 @@ fn create_options_from_global_config(
             allow: cfg.network.allow,
             deny: cfg.network.deny,
         },
+        extra_hosts: Vec::new(),
     }
 }
 

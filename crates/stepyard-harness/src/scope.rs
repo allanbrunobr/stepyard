@@ -798,6 +798,7 @@ impl Engine {
                 } => {
                     let executor = self.executor();
                     let timeout = step.timeout;
+                    let env = self.sandbox_env_for_exec(&env);
                     joinset.spawn(async move {
                         let fut = async {
                             executor
