@@ -66,6 +66,15 @@ fn default_shutdown_signal() -> Arc<OnceLock<String>> {
     Arc::new(OnceLock::new())
 }
 
+/// Host API proxy settings for sandbox cmd steps — keeps the real
+/// `ANTHROPIC_API_KEY` on the host while the container receives a
+/// per-session token and `ANTHROPIC_BASE_URL` pointing at the proxy.
+#[derive(Debug, Clone)]
+pub struct AnthropicProxyEnv {
+    pub port: u16,
+    pub auth_token: String,
+}
+
 /// Runtime configuration for the harness.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct HarnessConfig {
@@ -105,6 +114,9 @@ pub struct HarnessConfig {
     /// Structured sandbox creation options derived from workflow sandbox config.
     #[serde(skip, default)]
     pub create_options: CreateOptions,
+    /// When set, sandbox cmd steps route Anthropic traffic through the host proxy.
+    #[serde(skip, default)]
+    pub anthropic_proxy: Option<AnthropicProxyEnv>,
 }
 
 impl Default for HarnessConfig {
@@ -116,8 +128,20 @@ impl Default for HarnessConfig {
             shutdown_signal: default_shutdown_signal(),
             chat_client: None,
             create_options: CreateOptions::default(),
+            anthropic_proxy: None,
         }
     }
+}
+
+/// Strip the real API key from a resolved env map and inject proxy routing
+/// pairs for sandbox execution.
+pub fn apply_anthropic_proxy_env(env: &mut HashMap<String, String>, proxy: &AnthropicProxyEnv) {
+    env.remove("ANTHROPIC_API_KEY");
+    env.insert(
+        "ANTHROPIC_BASE_URL".into(),
+        format!("http://host.docker.internal:{}", proxy.port),
+    );
+    env.insert("ANTHROPIC_API_KEY".into(), proxy.auth_token.clone());
 }
 
 /// Per-invocation inputs threaded into the renderer — data that varies
@@ -730,6 +754,17 @@ impl Engine {
     /// engine does not expose a scoped step counter. Documented here
     /// because `StepTimeoutFired.step_index` reads `step_index`
     /// verbatim.
+    pub(crate) fn sandbox_env_for_exec(
+        &self,
+        resolved_env: &HashMap<String, String>,
+    ) -> HashMap<String, String> {
+        let mut env = resolved_env.clone();
+        if let Some(proxy) = &self.config.anthropic_proxy {
+            apply_anthropic_proxy_env(&mut env, proxy);
+        }
+        env
+    }
+
     pub(crate) async fn execute_cmd_with_select(
         &mut self,
         step: &Step,
@@ -755,8 +790,9 @@ impl Engine {
         // we just need a reader handle the select arm can read without
         // holding another reference to `self`.
         let signal_slot = self.config.shutdown_signal.clone();
+        let sandbox_env = self.sandbox_env_for_exec(resolved_env);
         let selection = {
-            let exec_fut = executor.execute_with_env(session_uuid, &step_clone, resolved_env);
+            let exec_fut = executor.execute_with_env(session_uuid, &step_clone, &sandbox_env);
             let cancel_fut = async {
                 while !cancel_token.is_cancelled() {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -2578,6 +2614,30 @@ fn parse_host_var(value: &str) -> Option<&str> {
         Some(inner)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod proxy_env_tests {
+    use super::*;
+
+    #[test]
+    fn apply_anthropic_proxy_env_replaces_real_key() {
+        let mut env = HashMap::from([
+            ("ANTHROPIC_API_KEY".into(), "sk-ant-real".into()),
+            ("GH_TOKEN".into(), "ghp_test".into()),
+        ]);
+        let proxy = AnthropicProxyEnv {
+            port: 4242,
+            auth_token: "session-token".into(),
+        };
+        apply_anthropic_proxy_env(&mut env, &proxy);
+        assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("session-token"));
+        assert_eq!(
+            env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("http://host.docker.internal:4242")
+        );
+        assert_eq!(env.get("GH_TOKEN").map(String::as_str), Some("ghp_test"));
     }
 }
 

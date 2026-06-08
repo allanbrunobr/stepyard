@@ -38,10 +38,9 @@ fn v2_executes_cmd_only_workflow_to_completion() {
         .success();
 }
 
-/// Rejection path: a workflow with a gate step cannot run on v2 yet; the CLI
-/// must exit non-zero and name the unsupported step type on stderr.
+/// Rejection path: v2 does not support `--dry-run` yet.
 #[test]
-fn v2_rejects_workflow_with_unsupported_step_type() {
+fn v2_rejects_dry_run() {
     let Some(url) = db_url() else {
         eprintln!("[skip] DATABASE_URL not set");
         return;
@@ -52,23 +51,46 @@ fn v2_rejects_workflow_with_unsupported_step_type() {
         .unwrap()
         .args([
             "execute",
-            "workflows/hello-world.yaml",
+            "workflows/hello-world-cmd.yaml",
             "--no-sandbox",
             "--engine",
             "v2",
+            "--dry-run",
         ])
         .env("DATABASE_URL", &url)
         .env("STEPYARD_TENANT", &tenant)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("not yet supported"));
+        .stderr(predicates::str::contains("does not support --dry-run"));
 }
 
-/// Default `--engine` value is `v1` — no flag must still run the legacy
-/// path. We pick a cmd-only workflow to keep the smoke fast and avoid AI
-/// step requirements.
+/// Legacy v1 path still works when explicitly requested.
 #[test]
-fn default_engine_is_v1_and_still_works() {
+fn v1_engine_still_works_when_explicit() {
+    let Some(url) = db_url() else {
+        eprintln!("[skip] DATABASE_URL not set");
+        return;
+    };
+    let tenant = format!("cli-execute-{}", Uuid::new_v4());
+
+    Command::cargo_bin("stepyard")
+        .unwrap()
+        .args([
+            "execute",
+            "workflows/hello-world-cmd.yaml",
+            "--no-sandbox",
+            "--engine",
+            "v1",
+        ])
+        .env("DATABASE_URL", &url)
+        .env("STEPYARD_TENANT", &tenant)
+        .assert()
+        .success();
+}
+
+/// Default `--engine` value is `v2` — no flag must run the harness path.
+#[test]
+fn default_engine_is_v2_and_still_works() {
     let Some(url) = db_url() else {
         eprintln!("[skip] DATABASE_URL not set");
         return;

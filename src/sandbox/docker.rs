@@ -18,6 +18,8 @@ pub struct DockerSandbox {
     workspace_path: String,
     /// When set, proxy port for ANTHROPIC_BASE_URL (secrets stay on host)
     proxy_port: Option<u16>,
+    /// Per-session proxy auth token (injected as dummy ANTHROPIC_API_KEY)
+    proxy_auth_token: Option<String>,
 }
 
 /// Result of running a command inside the sandbox
@@ -35,13 +37,15 @@ impl DockerSandbox {
             config,
             workspace_path: workspace_path.into(),
             proxy_port: None,
+            proxy_auth_token: None,
         }
     }
 
     /// Enable the API proxy: the container will use ANTHROPIC_BASE_URL
-    /// instead of receiving the raw API key.
-    pub fn set_proxy(&mut self, port: u16) {
+    /// and a per-session auth token instead of the real API key.
+    pub fn set_proxy(&mut self, port: u16, auth_token: impl Into<String>) {
         self.proxy_port = Some(port);
+        self.proxy_auth_token = Some(auth_token.into());
     }
 
     /// Check if a Docker image exists locally.
@@ -193,17 +197,27 @@ impl DockerSandbox {
                     args.extend(["-e".to_string(), format!("{key}={val}")]);
                 }
             }
-            // Point Claude CLI and API clients to the host proxy
+            // Point Claude CLI and API clients to the host proxy.
             args.extend([
                 "-e".to_string(),
                 format!("ANTHROPIC_BASE_URL=http://host.docker.internal:{proxy_port}"),
             ]);
+            // Inject per-session token so clients send x-api-key; proxy validates it.
+            if let Some(token) = &self.proxy_auth_token {
+                args.extend([
+                    "-e".to_string(),
+                    format!("ANTHROPIC_API_KEY={token}"),
+                ]);
+            }
             // Ensure host.docker.internal resolves (required on Linux)
             args.extend([
                 "--add-host".to_string(),
                 "host.docker.internal:host-gateway".to_string(),
             ]);
-            tracing::info!(proxy_port, "Container will use API proxy — ANTHROPIC_API_KEY not injected");
+            tracing::info!(
+                proxy_port,
+                "Container will use API proxy — real ANTHROPIC_API_KEY stays on host"
+            );
         } else {
             // No proxy — forward all env vars directly (legacy behavior)
             for key in self.config.effective_env() {
