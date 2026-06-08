@@ -61,7 +61,8 @@ struct UnreachableExecutor;
 #[async_trait]
 impl StepExecutor for UnreachableExecutor {
     async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
-        self.execute_with_env(session_id, step, &HashMap::new()).await
+        self.execute_with_env(session_id, step, &HashMap::new())
+            .await
     }
 
     async fn execute_with_env(
@@ -218,7 +219,9 @@ async fn agent_happy_path_populates_event_metadata_and_snapshot() {
         // snapshot). Fixture emits input_tokens=10, output_tokens=20,
         // cost_usd=0.001, session_id="mock-session-123".
         assert_eq!(
-            done.payload.get("agent_session_id").and_then(|v| v.as_str()),
+            done.payload
+                .get("agent_session_id")
+                .and_then(|v| v.as_str()),
             Some("mock-session-123")
         );
         assert_eq!(
@@ -357,9 +360,9 @@ async fn agent_explicit_fork_session_emits_fork_session_and_resume() {
         // the v2 semantic fix. v1 parity would have emitted only
         // `--resume <id>` here, which is why the runner (and this test)
         // pin the new shape explicitly.
-        let has_triple = argv.windows(3).any(|w| {
-            w == ["--fork-session", "--resume", "mock-session-123"]
-        });
+        let has_triple = argv
+            .windows(3)
+            .any(|w| w == ["--fork-session", "--resume", "mock-session-123"]);
         assert!(
             has_triple,
             "expected `--fork-session --resume mock-session-123` contiguous in branch argv, got {argv:?}"
@@ -428,9 +431,9 @@ async fn agent_shared_default_survives_restart_via_log_replay() {
         // first_agent_session_id from the log scan and emitted the
         // fork+resume pair.
         let argv = read_argv_file(&argv_refine);
-        let has_triple = argv.windows(3).any(|w| {
-            w == ["--fork-session", "--resume", "mock-session-123"]
-        });
+        let has_triple = argv
+            .windows(3)
+            .any(|w| w == ["--fork-session", "--resume", "mock-session-123"]);
         assert!(
             has_triple,
             "shared default after crash must emit `--fork-session --resume <first-sid>`; got {argv:?}"
@@ -766,13 +769,8 @@ async fn agent_shutdown_broadcast_emits_signal_received_then_step_failed() {
             ..HarnessConfig::default()
         };
 
-        let mut engine = Engine::with_executor(
-            config,
-            session,
-            wf,
-            lifecycle(),
-            unreachable_executor(),
-        );
+        let mut engine =
+            Engine::with_executor(config, session, wf, lifecycle(), unreachable_executor());
 
         // Write-before-send, mirrors `install_handlers` ordering: populate
         // the signal slot THEN fire the broadcast. If the send landed

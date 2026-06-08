@@ -11,12 +11,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
     Engine, EngineError, HarnessConfig, Step, StepExecutor, StepOutcome, Workflow,
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session};
-use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {

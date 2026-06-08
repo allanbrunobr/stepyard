@@ -29,10 +29,10 @@
 
 use std::time::Duration;
 
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::startup::reconcile;
 use stepyard_sandbox_orchestrator::DockerLifecycle;
 use stepyard_session::{migrate, Session, SessionStatus};
-use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 const CMD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -51,9 +51,7 @@ async fn pool() -> Option<sqlx::PgPool> {
 async fn docker_available() -> bool {
     match tokio::time::timeout(
         CMD_TIMEOUT,
-        tokio::process::Command::new("docker")
-            .args(["ps"])
-            .output(),
+        tokio::process::Command::new("docker").args(["ps"]).output(),
     )
     .await
     {
@@ -83,15 +81,7 @@ async fn spawn_orphan(name: &str) {
     let output = tokio::time::timeout(
         CMD_TIMEOUT,
         tokio::process::Command::new("docker")
-            .args([
-                "run",
-                "-d",
-                "--name",
-                name,
-                "alpine:latest",
-                "sleep",
-                "600",
-            ])
+            .args(["run", "-d", "--name", name, "alpine:latest", "sleep", "600"])
             .output(),
     )
     .await
@@ -222,7 +212,9 @@ async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
 
     // Per-row confirmation: seeded session still `failed`, event log still
     // has exactly one `signal_received/crash_recovery` entry.
-    let reloaded2 = Session::load(&pool, seeded_id).await.expect("reload idempotent");
+    let reloaded2 = Session::load(&pool, seeded_id)
+        .await
+        .expect("reload idempotent");
     assert_eq!(
         reloaded2.status(),
         SessionStatus::Failed,

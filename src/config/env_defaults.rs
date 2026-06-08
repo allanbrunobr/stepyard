@@ -65,10 +65,11 @@ pub fn load_defaults(path: &Path) -> Result<Defaults, DefaultsError> {
         path: path.to_path_buf(),
         source,
     })?;
-    let parsed: Defaults = serde_yaml::from_str(&contents).map_err(|source| DefaultsError::Parse {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let parsed: Defaults =
+        serde_yaml::from_str(&contents).map_err(|source| DefaultsError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?;
     Ok(parsed)
 }
 
@@ -88,11 +89,7 @@ mod tests {
     #[test]
     fn load_defaults_yaml_returns_env_pairs() {
         let dir = TempDir::new().expect("tempdir");
-        let path = write_fixture(
-            &dir,
-            "defaults.yaml",
-            "env:\n  FOO: bar\n  BAZ: qux\n",
-        );
+        let path = write_fixture(&dir, "defaults.yaml", "env:\n  FOO: bar\n  BAZ: qux\n");
         let defaults = load_defaults(&path).expect("load");
         let mut expected = HashMap::new();
         expected.insert("FOO".to_string(), "bar".to_string());

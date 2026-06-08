@@ -79,11 +79,11 @@ async fn test_registry_rejects_invalid_yaml() {
 #[tokio::test]
 async fn test_stack_detection_java() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    fs::write(dir.path().join("pom.xml"), "<project></project>")
-        .expect("failed to write pom.xml");
+    fs::write(dir.path().join("pom.xml"), "<project></project>").expect("failed to write pom.xml");
 
-    let registry =
-        Registry::from_file(&fixture_registry_path()).await.expect("registry should parse");
+    let registry = Registry::from_file(&fixture_registry_path())
+        .await
+        .expect("registry should parse");
     let stack = StackDetector::detect(&registry, dir.path())
         .await
         .expect("should detect a stack from pom.xml");
@@ -105,8 +105,9 @@ async fn test_stack_detection_react() {
     )
     .expect("failed to write package.json");
 
-    let registry =
-        Registry::from_file(&fixture_registry_path()).await.expect("registry should parse");
+    let registry = Registry::from_file(&fixture_registry_path())
+        .await
+        .expect("registry should parse");
     let stack = StackDetector::detect(&registry, dir.path())
         .await
         .expect("should detect a stack from package.json with react");
@@ -127,8 +128,9 @@ async fn test_stack_detection_python() {
     )
     .expect("failed to write pyproject.toml");
 
-    let registry =
-        Registry::from_file(&fixture_registry_path()).await.expect("registry should parse");
+    let registry = Registry::from_file(&fixture_registry_path())
+        .await
+        .expect("registry should parse");
     let stack = StackDetector::detect(&registry, dir.path())
         .await
         .expect("should detect a stack from pyproject.toml");
@@ -149,8 +151,9 @@ async fn test_stack_detection_rust() {
     )
     .expect("failed to write Cargo.toml");
 
-    let registry =
-        Registry::from_file(&fixture_registry_path()).await.expect("registry should parse");
+    let registry = Registry::from_file(&fixture_registry_path())
+        .await
+        .expect("registry should parse");
     let stack = StackDetector::detect(&registry, dir.path())
         .await
         .expect("should detect a stack from Cargo.toml");
@@ -169,8 +172,9 @@ async fn test_fallback_chain_react() {
     // react -> typescript -> javascript -> _default
     // The fixture prompts dir has: fix-lint/typescript.md.tera but NOT fix-lint/react.md.tera
     // So the resolver should fall back to typescript.md.tera
-    let _registry =
-        Registry::from_file(&fixture_registry_path()).await.expect("registry should parse");
+    let _registry = Registry::from_file(&fixture_registry_path())
+        .await
+        .expect("registry should parse");
 
     // Build a StackInfo for react with its parent chain
     let stack = StackInfo {
@@ -212,7 +216,8 @@ async fn test_fallback_chain_reaches_default() {
 
     let resolved_name = resolved_path.file_name().unwrap().to_str().unwrap();
     assert_eq!(
-        resolved_name, "_default.md.tera",
+        resolved_name,
+        "_default.md.tera",
         "resolved prompt should be _default.md.tera, got: {}",
         resolved_path.display()
     );
@@ -233,11 +238,15 @@ async fn test_dynamic_template_path() {
         .await
         .expect("fix-lint/rust should resolve to rust.md.tera");
 
-    let content = fs::read_to_string(&resolved_path)
-        .expect("should be able to read resolved prompt file");
+    let content =
+        fs::read_to_string(&resolved_path).expect("should be able to read resolved prompt file");
 
     assert!(
-        content.contains("Rust") || content.contains("rust") || content.contains("Clippy") || content.contains("clippy") || !content.is_empty(),
+        content.contains("Rust")
+            || content.contains("rust")
+            || content.contains("Clippy")
+            || content.contains("clippy")
+            || !content.is_empty(),
         "resolved prompt for fix-lint/rust should contain Rust-specific content, got: {}",
         &content[..content.len().min(200)]
     );
@@ -254,7 +263,8 @@ async fn test_missing_prompt_error_is_descriptive() {
     };
 
     // "nonexistent-function" has no prompt files at all -- not even _default
-    let result = PromptResolver::resolve("nonexistent-function", &stack, &fixture_prompts_dir()).await;
+    let result =
+        PromptResolver::resolve("nonexistent-function", &stack, &fixture_prompts_dir()).await;
 
     assert!(
         result.is_err(),

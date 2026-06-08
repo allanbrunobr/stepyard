@@ -21,8 +21,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use stepyard_session::{migrate, Session};
 use sqlx::postgres::PgPoolOptions;
+use stepyard_session::{migrate, Session};
 use uuid::Uuid;
 
 const CMD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -123,7 +123,10 @@ async fn session_list_filters_by_status_and_since() {
 
     // ── `--status completed` → only completed rows appear ─────────────────
     let out = run_stepyard(&bin, &db_url, &["session", "list", "--status", "completed"]).await;
-    assert!(out.status.success(), "exit 0 expected for --status completed");
+    assert!(
+        out.status.success(),
+        "exit 0 expected for --status completed"
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains(&completed_id),
@@ -151,7 +154,14 @@ async fn session_list_filters_by_status_and_since() {
     let out = run_stepyard(
         &bin,
         &db_url,
-        &["session", "list", "--status", "running", "--since", "notaduration"],
+        &[
+            "session",
+            "list",
+            "--status",
+            "running",
+            "--since",
+            "notaduration",
+        ],
     )
     .await;
     assert_eq!(

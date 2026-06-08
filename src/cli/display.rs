@@ -50,12 +50,7 @@ pub fn step_skip(pb: &ProgressBar, name: &str, message: &str) {
 }
 
 pub fn iteration(current: usize, max: usize) {
-    println!(
-        "    {} Iteration {}/{}",
-        "↻".cyan(),
-        current + 1,
-        max
-    );
+    println!("    {} Iteration {}/{}", "↻".cyan(), current + 1, max);
 }
 
 pub fn agent_progress(text: &str) {
@@ -206,11 +201,7 @@ pub fn workflow_summary(
         input_tokens,
         output_tokens
     );
-    println!(
-        "   {} Cost:   ${:.4}",
-        "·".dimmed(),
-        cost_usd
-    );
+    println!("   {} Cost:   ${:.4}", "·".dimmed(), cost_usd);
 }
 
 #[cfg(test)]
@@ -258,12 +249,6 @@ mod tests {
 
     #[test]
     fn test_workflow_summary_does_not_panic() {
-        workflow_summary(
-            10,
-            Duration::from_secs(42),
-            1234,
-            567,
-            0.0023,
-        );
+        workflow_summary(10, Duration::from_secs(42), 1234, 567, 0.0023);
     }
 }

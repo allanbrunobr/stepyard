@@ -3,16 +3,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::config::StepConfig;
 use crate::config::manager::ConfigManager;
+use crate::config::StepConfig;
 use crate::control_flow::ControlFlow;
 use crate::engine::context::Context;
 use crate::error::StepError;
 use crate::workflow::schema::{ScopeDef, StepDef, StepType};
 
 use super::{
-    agent::AgentExecutor, cmd::CmdExecutor, gate::GateExecutor, repeat::RepeatExecutor,
-    chat::ChatExecutor, CmdOutput, IterationOutput, SandboxAwareExecutor, ScopeOutput,
+    agent::AgentExecutor, chat::ChatExecutor, cmd::CmdExecutor, gate::GateExecutor,
+    repeat::RepeatExecutor, CmdOutput, IterationOutput, SandboxAwareExecutor, ScopeOutput,
     SharedSandbox, StepExecutor, StepOutput,
 };
 
@@ -68,8 +68,15 @@ impl StepExecutor for CallExecutor {
 
         for scope_step in &scope.steps {
             let step_config = resolve_scope_step_config(&self.config_manager, scope_step);
-            let result =
-                dispatch_scope_step_sandboxed(scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox, &self.config_manager).await;
+            let result = dispatch_scope_step_sandboxed(
+                scope_step,
+                &step_config,
+                &child_ctx,
+                &self.scopes,
+                &self.sandbox,
+                &self.config_manager,
+            )
+            .await;
 
             match result {
                 Ok(output) => {
@@ -130,7 +137,12 @@ pub(super) fn resolve_scope_step_config(
         let values: HashMap<String, serde_json::Value> = step
             .config
             .iter()
-            .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+                )
+            })
             .collect();
         StepConfig { values }
     }
@@ -145,16 +157,30 @@ pub(super) async fn dispatch_scope_step_sandboxed(
     config_manager: &Option<Arc<ConfigManager>>,
 ) -> Result<StepOutput, StepError> {
     match step.step_type {
-        StepType::Cmd => CmdExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
-        StepType::Agent => AgentExecutor.execute_sandboxed(step, config, ctx, sandbox).await,
+        StepType::Cmd => {
+            CmdExecutor
+                .execute_sandboxed(step, config, ctx, sandbox)
+                .await
+        }
+        StepType::Agent => {
+            AgentExecutor
+                .execute_sandboxed(step, config, ctx, sandbox)
+                .await
+        }
         StepType::Gate => GateExecutor.execute(step, config, ctx).await,
         StepType::Chat => ChatExecutor.execute(step, config, ctx).await,
-        StepType::Repeat => RepeatExecutor::new(scopes, sandbox.clone())
-            .with_config_manager(config_manager.clone())
-            .execute(step, config, ctx).await,
-        StepType::Call => CallExecutor::new(scopes, sandbox.clone())
-            .with_config_manager(config_manager.clone())
-            .execute(step, config, ctx).await,
+        StepType::Repeat => {
+            RepeatExecutor::new(scopes, sandbox.clone())
+                .with_config_manager(config_manager.clone())
+                .execute(step, config, ctx)
+                .await
+        }
+        StepType::Call => {
+            CallExecutor::new(scopes, sandbox.clone())
+                .with_config_manager(config_manager.clone())
+                .execute(step, config, ctx)
+                .await
+        }
         _ => Err(StepError::Fail(format!(
             "Step type '{}' not supported in scope",
             step.step_type
@@ -165,8 +191,8 @@ pub(super) async fn dispatch_scope_step_sandboxed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::workflow::schema::{ScopeDef, StepType};
+    use std::collections::HashMap;
 
     fn cmd_step(name: &str, run: &str) -> StepDef {
         StepDef {
@@ -241,9 +267,7 @@ mod tests {
     #[tokio::test]
     async fn call_with_explicit_outputs() {
         let scope = ScopeDef {
-            steps: vec![
-                cmd_step("step1", "echo hello"),
-            ],
+            steps: vec![cmd_step("step1", "echo hello")],
             outputs: Some("rendered: {{ steps.step1.stdout }}".to_string()),
         };
         let mut scopes = HashMap::new();

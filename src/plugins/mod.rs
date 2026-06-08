@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use crate::config::StepConfig;
 use crate::engine::context::Context;
 use crate::error::StepError;
-use crate::steps::{StepOutput};
+use crate::steps::StepOutput;
 use crate::workflow::schema::StepDef;
 
 /// Schema describing a plugin's configuration requirements

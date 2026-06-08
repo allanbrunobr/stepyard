@@ -956,8 +956,7 @@ impl Engine {
                     idle_threshold_ms: idle_ms,
                 })
                 .await?;
-                let error =
-                    stepyard_core::TerminationReason::IdleTimeout { idle_ms }.to_string();
+                let error = stepyard_core::TerminationReason::IdleTimeout { idle_ms }.to_string();
                 self.emit(Event::StepFailed {
                     step_name: step.name.clone(),
                     step_type: "cmd".into(),
@@ -2632,7 +2631,10 @@ mod proxy_env_tests {
             auth_token: "session-token".into(),
         };
         apply_anthropic_proxy_env(&mut env, &proxy);
-        assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("session-token"));
+        assert_eq!(
+            env.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some("session-token")
+        );
         assert_eq!(
             env.get("ANTHROPIC_BASE_URL").map(String::as_str),
             Some("http://host.docker.internal:4242")

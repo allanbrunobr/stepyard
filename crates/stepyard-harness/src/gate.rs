@@ -159,15 +159,13 @@ pub fn outcome_for(
         GateAction::Skip => GateOutcome::Skip,
         GateAction::Break => GateOutcome::Break,
         GateAction::Fail => {
-            let reason = message
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    if passed {
-                        "gate passed but on_pass=fail".into()
-                    } else {
-                        "gate failed".into()
-                    }
-                });
+            let reason = message.map(str::to_string).unwrap_or_else(|| {
+                if passed {
+                    "gate passed but on_pass=fail".into()
+                } else {
+                    "gate failed".into()
+                }
+            });
             GateOutcome::Fail { message: reason }
         }
     }
@@ -180,10 +178,7 @@ mod tests {
     #[test]
     fn action_parse_defaults_to_continue() {
         assert_eq!(GateAction::parse(None).unwrap(), GateAction::Continue);
-        assert_eq!(
-            GateAction::parse(Some("")).unwrap(),
-            GateAction::Continue
-        );
+        assert_eq!(GateAction::parse(Some("")).unwrap(), GateAction::Continue);
         assert_eq!(
             GateAction::parse(Some("continue")).unwrap(),
             GateAction::Continue

@@ -21,7 +21,6 @@ use crate::error::StepError;
 use crate::events::subscribers::{DashboardSubscriber, FileSubscriber, WebhookSubscriber};
 use crate::events::types::Event;
 use crate::events::EventBus;
-use stepyard_session::Session;
 use crate::plugins::loader::PluginLoader;
 use crate::plugins::registry::PluginRegistry;
 use crate::prompts::{
@@ -41,6 +40,7 @@ use crate::steps::{
 use crate::workflow::schema::{OutputType, StepDef, StepType, WorkflowDef};
 use context::Context;
 use state::WorkflowState;
+use stepyard_session::Session;
 
 /// Options for configuring the Engine
 #[derive(Default)]
@@ -234,9 +234,10 @@ impl Engine {
                         .filter(|s| !s.is_empty())
                 });
                 // Secret: config > env DASHBOARD_API_SECRET
-                let secret = dashboard_cfg.secret.clone().or_else(|| {
-                    std::env::var("DASHBOARD_API_SECRET").ok()
-                });
+                let secret = dashboard_cfg
+                    .secret
+                    .clone()
+                    .or_else(|| std::env::var("DASHBOARD_API_SECRET").ok());
                 let sandbox_str = format!("{:?}", options.sandbox_mode);
                 event_bus.add_subscriber(Box::new(DashboardSubscriber::new(
                     dashboard_cfg.url.clone(),
@@ -397,7 +398,11 @@ impl Engine {
 
         if !self.quiet {
             if let Some(ref repo) = self.repo {
-                println!("  {} Creating Docker sandbox (repo: {})…", "🐳".cyan(), repo);
+                println!(
+                    "  {} Creating Docker sandbox (repo: {})…",
+                    "🐳".cyan(),
+                    repo
+                );
             } else {
                 println!("  {} Creating Docker sandbox container…", "🐳".cyan());
             }
@@ -506,7 +511,10 @@ impl Engine {
                 // In repo mode, no host directory to copy back to.
                 // All side-effects (git push, gh pr create/comment) happened inside the container.
                 if !self.quiet {
-                    println!("  {} Repo mode — skipping copy-back (all changes pushed from container)", "📦".cyan());
+                    println!(
+                        "  {} Repo mode — skipping copy-back (all changes pushed from container)",
+                        "📦".cyan()
+                    );
                 }
                 0u128
             } else {
@@ -536,7 +544,12 @@ impl Engine {
                 );
             }
 
-            tracing::info!(copy_back_ms, destroy_ms, repo_mode = is_repo_mode, "Sandbox teardown complete");
+            tracing::info!(
+                copy_back_ms,
+                destroy_ms,
+                repo_mode = is_repo_mode,
+                "Sandbox teardown complete"
+            );
         }
 
         // Stop the API proxy (if running)

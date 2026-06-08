@@ -28,8 +28,8 @@
 mod docker;
 mod docker_errors;
 mod local;
-mod podman;
 pub mod mock;
+mod podman;
 mod sandbox;
 mod workspace;
 
@@ -230,19 +230,12 @@ mod send_check {
     }
 
     #[allow(dead_code)]
-    fn destroy_by_session_future_is_send(
-        lifecycle: &dyn SandboxLifecycle,
-        session_id: Uuid,
-    ) {
+    fn destroy_by_session_future_is_send(lifecycle: &dyn SandboxLifecycle, session_id: Uuid) {
         assert_send_future(lifecycle.destroy_by_session(session_id));
     }
 
     #[allow(dead_code)]
-    fn exec_future_is_send(
-        lifecycle: &dyn SandboxLifecycle,
-        id: &SandboxId,
-        cmd: &[String],
-    ) {
+    fn exec_future_is_send(lifecycle: &dyn SandboxLifecycle, id: &SandboxId, cmd: &[String]) {
         assert_send_future(lifecycle.exec(id, cmd));
     }
 
@@ -276,10 +269,7 @@ mod send_check {
     }
 
     #[allow(dead_code)]
-    fn reuse_or_create_future_is_send(
-        lifecycle: &dyn SandboxLifecycle,
-        session_id: Uuid,
-    ) {
+    fn reuse_or_create_future_is_send(lifecycle: &dyn SandboxLifecycle, session_id: Uuid) {
         assert_send_future(lifecycle.reuse_or_create(session_id));
     }
 
@@ -314,11 +304,7 @@ mod tests {
             Ok(())
         }
 
-        async fn exec(
-            &self,
-            _id: &SandboxId,
-            _cmd: &[String],
-        ) -> Result<ExecOutput, SandboxError> {
+        async fn exec(&self, _id: &SandboxId, _cmd: &[String]) -> Result<ExecOutput, SandboxError> {
             Err(SandboxError::ExecFailed("not used".into()))
         }
 

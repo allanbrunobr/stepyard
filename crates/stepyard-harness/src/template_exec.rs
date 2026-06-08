@@ -217,7 +217,9 @@ mod tests {
             vars: &vars,
             scope: None,
         };
-        let out = render_template(tmp.path(), None, "greet", &ctx).await.unwrap();
+        let out = render_template(tmp.path(), None, "greet", &ctx)
+            .await
+            .unwrap();
         assert_eq!(out, "Hi world!");
     }
 

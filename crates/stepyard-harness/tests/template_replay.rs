@@ -46,7 +46,8 @@ struct UnreachableExecutor;
 #[async_trait]
 impl StepExecutor for UnreachableExecutor {
     async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
-        self.execute_with_env(session_id, step, &HashMap::new()).await
+        self.execute_with_env(session_id, step, &HashMap::new())
+            .await
     }
 
     async fn execute_with_env(
@@ -366,9 +367,7 @@ async fn template_dynamic_prompt_renders_basename() {
         let evs = events(&engine).await;
         let done = evs
             .iter()
-            .find(|e| {
-                event_kind(e) == Some("step_completed") && event_step_name(e) == Some("tmpl")
-            })
+            .find(|e| event_kind(e) == Some("step_completed") && event_step_name(e) == Some("tmpl"))
             .expect("template step_completed");
         let stdout = done
             .payload
@@ -417,7 +416,9 @@ async fn template_replay_skips_completed_step() {
             unreachable_executor(),
         );
         let first = engine.step().await.expect("step 1");
-        assert!(matches!(first, StepOutcome::StepCompleted { ref step_name } if step_name == "replay"));
+        assert!(
+            matches!(first, StepOutcome::StepCompleted { ref step_name } if step_name == "replay")
+        );
         drop(engine);
 
         // Delete the prompt file — if replay re-entered the template

@@ -91,7 +91,9 @@ pub enum DurationParseError {
     #[error("duration `{got}`: unknown unit `{unit}` (expected ms, s, m, or h)")]
     UnknownUnit { got: String, unit: String },
     /// A unit repeated or appeared out of the required high-to-low order.
-    #[error("duration `{got}`: unit `{unit}` repeats or is out of order (expected h > m > s > ms)")]
+    #[error(
+        "duration `{got}`: unit `{unit}` repeats or is out of order (expected h > m > s > ms)"
+    )]
     OrderViolation { got: String, unit: String },
     /// Total duration overflowed the representable u64 millisecond range.
     #[error("duration `{got}` overflows representable milliseconds")]
@@ -380,11 +382,7 @@ mod tests {
         ];
         for (input, want_ms) in cases {
             let got = parse_duration(input).unwrap_or_else(|e| panic!("{input} failed: {e}"));
-            assert_eq!(
-                got,
-                Duration::from_millis(*want_ms),
-                "input={input}"
-            );
+            assert_eq!(got, Duration::from_millis(*want_ms), "input={input}");
         }
     }
 
@@ -406,10 +404,7 @@ mod tests {
         ];
         for input in cases {
             let res = parse_duration(input);
-            assert!(
-                res.is_err(),
-                "expected `{input}` to fail, got {res:?}"
-            );
+            assert!(res.is_err(), "expected `{input}` to fail, got {res:?}");
         }
     }
 
@@ -422,8 +417,8 @@ mod tests {
             ("2h15m30s", "2h15m30s"),
             ("1m500ms", "1m500ms"),
             ("0s", "0s"),
-            ("90s", "1m30s"),    // normalization
-            ("60000ms", "1m"),   // normalization
+            ("90s", "1m30s"),  // normalization
+            ("60000ms", "1m"), // normalization
             ("2h", "2h"),
             ("10m", "10m"),
         ];

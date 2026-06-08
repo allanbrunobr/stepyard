@@ -194,25 +194,22 @@ mod tests {
 
     #[test]
     fn execute_rejects_var_without_equals_at_clap_parse_time() {
-        let err = match Cli::try_parse_from(["stepyard", "execute", "--var", "FOO", "workflow.yaml"]) {
-            Ok(_) => panic!("missing equals must fail"),
-            Err(err) => err,
-        };
+        let err =
+            match Cli::try_parse_from(["stepyard", "execute", "--var", "FOO", "workflow.yaml"]) {
+                Ok(_) => panic!("missing equals must fail"),
+                Err(err) => err,
+            };
         assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
     }
 
     #[test]
     fn execute_rejects_lowercase_var_key_at_clap_parse_time() {
-        let err = match Cli::try_parse_from([
-            "stepyard",
-            "execute",
-            "--var",
-            "foo=bar",
-            "workflow.yaml",
-        ]) {
-            Ok(_) => panic!("lowercase key must fail"),
-            Err(err) => err,
-        };
+        let err =
+            match Cli::try_parse_from(["stepyard", "execute", "--var", "foo=bar", "workflow.yaml"])
+            {
+                Ok(_) => panic!("lowercase key must fail"),
+                Err(err) => err,
+            };
         assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
     }
 
@@ -228,7 +225,10 @@ mod tests {
         .expect("podman runtime should parse");
         match cli.command {
             Command::Execute(args) => {
-                assert_eq!(args.sandbox_runtime, Some(crate::sandbox::SandboxRuntime::Podman));
+                assert_eq!(
+                    args.sandbox_runtime,
+                    Some(crate::sandbox::SandboxRuntime::Podman)
+                );
             }
             _ => panic!("expected execute command"),
         }

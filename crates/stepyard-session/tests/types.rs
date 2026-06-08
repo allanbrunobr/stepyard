@@ -4,8 +4,8 @@
 //! in `tests/integration.rs` and are gated behind the `STEPYARD_SESSION_DATABASE_URL`
 //! environment variable.
 
-use stepyard_session::{Session, SessionEvent, SessionId, SessionStatus};
 use std::str::FromStr;
+use stepyard_session::{Session, SessionEvent, SessionId, SessionStatus};
 use uuid::Uuid;
 
 #[test]

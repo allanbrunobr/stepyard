@@ -132,11 +132,7 @@ async fn positive_control_host_filesystem_untouched() {
 
     let out = timeout(
         DOCKER_TIMEOUT,
-        lifecycle.exec_with_env(
-            &id,
-            &["printenv".to_string(), "MSG".to_string()],
-            &env,
-        ),
+        lifecycle.exec_with_env(&id, &["printenv".to_string(), "MSG".to_string()], &env),
     )
     .await
     .expect("exec_with_env did not time out")
@@ -182,11 +178,7 @@ async fn negative_control_user_owned_sh_c_expansion() {
         DOCKER_TIMEOUT,
         lifecycle.exec_with_env(
             &id,
-            &[
-                "sh".to_string(),
-                "-c".to_string(),
-                "echo $MSG".to_string(),
-            ],
+            &["sh".to_string(), "-c".to_string(), "echo $MSG".to_string()],
             &env,
         ),
     )

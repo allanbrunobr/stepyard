@@ -4,8 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::cli::display;
-use crate::config::StepConfig;
 use crate::config::manager::ConfigManager;
+use crate::config::StepConfig;
 use crate::control_flow::ControlFlow;
 use crate::engine::context::Context;
 use crate::error::StepError;
@@ -86,8 +86,14 @@ impl StepExecutor for RepeatExecutor {
                 let step_config = resolve_scope_step_config(&self.config_manager, scope_step);
 
                 let result = dispatch_scope_step_sandboxed(
-                    scope_step, &step_config, &child_ctx, &self.scopes, &self.sandbox, &self.config_manager,
-                ).await;
+                    scope_step,
+                    &step_config,
+                    &child_ctx,
+                    &self.scopes,
+                    &self.sandbox,
+                    &self.config_manager,
+                )
+                .await;
 
                 match result {
                     Ok(output) => {
@@ -127,8 +133,7 @@ impl StepExecutor for RepeatExecutor {
             };
 
             // Pass output as scope_value for next iteration
-            scope_value =
-                serde_json::Value::String(iter_output.text().to_string());
+            scope_value = serde_json::Value::String(iter_output.text().to_string());
 
             iterations.push(IterationOutput {
                 index: i,
@@ -229,7 +234,11 @@ steps:
             .unwrap();
 
         if let StepOutput::Scope(scope_out) = result {
-            assert_eq!(scope_out.iterations.len(), 1, "Should break after 1 iteration");
+            assert_eq!(
+                scope_out.iterations.len(),
+                1,
+                "Should break after 1 iteration"
+            );
         } else {
             panic!("Expected Scope output");
         }

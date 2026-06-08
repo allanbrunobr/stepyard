@@ -193,10 +193,7 @@ mod tests {
             &yaml_str("anthropic")
         );
         // Global timeout is set
-        assert_eq!(
-            defaults.global.get("timeout").unwrap(),
-            &yaml_str("300s")
-        );
+        assert_eq!(defaults.global.get("timeout").unwrap(), &yaml_str("300s"));
         // Cmd fail_on_error is set
         assert!(defaults.cmd.contains_key("fail_on_error"));
     }
@@ -294,10 +291,7 @@ mod tests {
             result.chat.get("model").unwrap(),
             &yaml_str("claude-sonnet-4-20250514")
         );
-        assert_eq!(
-            result.chat.get("provider").unwrap(),
-            &yaml_str("anthropic")
-        );
+        assert_eq!(result.chat.get("provider").unwrap(), &yaml_str("anthropic"));
         assert_eq!(
             result.agent.get("model").unwrap(),
             &yaml_str("claude-sonnet-4-20250514")
@@ -324,15 +318,9 @@ mod tests {
             &yaml_str("claude-3-haiku-20240307")
         );
         // Workflow temperature overrides embedded default
-        assert_eq!(
-            result.chat.get("temperature").unwrap(),
-            &yaml_str("0.9")
-        );
+        assert_eq!(result.chat.get("temperature").unwrap(), &yaml_str("0.9"));
         // Provider still comes from embedded (workflow didn't set it)
-        assert_eq!(
-            result.chat.get("provider").unwrap(),
-            &yaml_str("anthropic")
-        );
+        assert_eq!(result.chat.get("provider").unwrap(), &yaml_str("anthropic"));
     }
 
     #[test]

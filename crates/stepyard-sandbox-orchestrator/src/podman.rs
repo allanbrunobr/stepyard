@@ -297,11 +297,7 @@ impl SandboxLifecycle for PodmanLifecycle {
         })
     }
 
-    async fn exec_interactive(
-        &self,
-        id: &SandboxId,
-        cmd: &[String],
-    ) -> Result<i32, SandboxError> {
+    async fn exec_interactive(&self, id: &SandboxId, cmd: &[String]) -> Result<i32, SandboxError> {
         let name = Self::container_name(*id.as_uuid());
         let args = exec_interactive_args(&name, cmd);
         let status = Command::new(PODMAN)

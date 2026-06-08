@@ -9,7 +9,11 @@ pub fn validate(workflow: &WorkflowDef) -> Vec<String> {
     let mut errors = Vec::new();
 
     // Check main steps
-    validate_steps(&workflow.steps, &workflow.scopes.keys().cloned().collect(), &mut errors);
+    validate_steps(
+        &workflow.steps,
+        &workflow.scopes.keys().cloned().collect(),
+        &mut errors,
+    );
 
     // Check scope steps
     let scope_names: HashSet<String> = workflow.scopes.keys().cloned().collect();
@@ -45,25 +49,20 @@ pub fn validate(workflow: &WorkflowDef) -> Vec<String> {
     errors
 }
 
-fn validate_steps(
-    steps: &[StepDef],
-    scope_names: &HashSet<String>,
-    errors: &mut Vec<String>,
-) {
+fn validate_steps(steps: &[StepDef], scope_names: &HashSet<String>, errors: &mut Vec<String>) {
     for step in steps {
         validate_step(step, scope_names, errors);
     }
 }
 
-fn validate_step(
-    step: &StepDef,
-    scope_names: &HashSet<String>,
-    errors: &mut Vec<String>,
-) {
+fn validate_step(step: &StepDef, scope_names: &HashSet<String>, errors: &mut Vec<String>) {
     match step.step_type {
         StepType::Cmd => {
             if step.run.as_ref().is_none_or(|r| r.trim().is_empty()) {
-                errors.push(format!("Step '{}': cmd step requires 'run' field", step.name));
+                errors.push(format!(
+                    "Step '{}': cmd step requires 'run' field",
+                    step.name
+                ));
             }
         }
         StepType::Agent | StepType::Chat => {
@@ -101,10 +100,7 @@ fn validate_step(
             if step.step_type == StepType::Repeat {
                 if let Some(max) = step.max_iterations {
                     if max == 0 {
-                        errors.push(format!(
-                            "Step '{}': max_iterations must be > 0",
-                            step.name
-                        ));
+                        errors.push(format!("Step '{}': max_iterations must be > 0", step.name));
                     }
                 }
             }
@@ -129,7 +125,10 @@ fn validate_step(
         StepType::Template => {}
         StepType::Script => {
             if step.run.as_ref().is_none_or(|r| r.trim().is_empty()) {
-                errors.push(format!("Step '{}': script step requires 'run' field", step.name));
+                errors.push(format!(
+                    "Step '{}': script step requires 'run' field",
+                    step.name
+                ));
             }
         }
     }
@@ -144,10 +143,7 @@ fn validate_step(
 ///
 /// Returns a list of validation error messages (empty means all ok).
 #[allow(dead_code)]
-pub fn validate_plugin_configs(
-    steps: &[StepDef],
-    registry: &PluginRegistry,
-) -> Vec<String> {
+pub fn validate_plugin_configs(steps: &[StepDef], registry: &PluginRegistry) -> Vec<String> {
     let mut errors = Vec::new();
     for step in steps {
         let type_name = step.step_type.to_string();
@@ -190,7 +186,10 @@ fn has_cycle(
     }
     if let Some(scope_def) = scopes.get(scope_name) {
         for step in &scope_def.steps {
-            if matches!(step.step_type, StepType::Call | StepType::Repeat | StepType::Map) {
+            if matches!(
+                step.step_type,
+                StepType::Call | StepType::Repeat | StepType::Map
+            ) {
                 if let Some(ref target) = step.scope {
                     if has_cycle(target, scopes, visited) {
                         return true;

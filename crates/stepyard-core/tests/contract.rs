@@ -7,12 +7,12 @@
 //! * EventSubscriber is dyn-compatible.
 
 use chrono::TimeZone;
+use serde::Deserialize;
+use serde_json::json;
 use stepyard_core::{
     ChatRole, EngineError, Event, EventSubscriber, GateOutcome, ScopeContext, StepOutputSnapshot,
     TerminationReason,
 };
-use serde::Deserialize;
-use serde_json::json;
 
 #[test]
 fn step_started_serialization_is_stable() {
@@ -113,8 +113,7 @@ fn step_completed_with_output_snapshot_roundtrips() {
     let back: Event = serde_json::from_str(&s).unwrap();
     match back {
         Event::StepCompleted {
-            output: Some(snap),
-            ..
+            output: Some(snap), ..
         } => {
             assert_eq!(snap.stdout, "hello\n");
             assert_eq!(snap.stderr, "");

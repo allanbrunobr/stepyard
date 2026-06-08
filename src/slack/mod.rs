@@ -82,9 +82,8 @@ struct GitHubRef {
 
 fn extract_github_info(input: &str) -> GitHubRef {
     // Match: https://github.com/owner/repo/pull/N or /issues/N
-    let url_re = regex::Regex::new(
-        r"https?://github\.com/([^/]+/[^/]+)/(?:pull|issues)/(\d+)"
-    ).unwrap();
+    let url_re =
+        regex::Regex::new(r"https?://github\.com/([^/]+/[^/]+)/(?:pull|issues)/(\d+)").unwrap();
     if let Some(caps) = url_re.captures(input) {
         return GitHubRef {
             repo: Some(caps[1].to_string()),
@@ -93,9 +92,7 @@ fn extract_github_info(input: &str) -> GitHubRef {
     }
 
     // Match: https://github.com/owner/repo (no PR/issue number — for security-audit, generate-docs)
-    let repo_re = regex::Regex::new(
-        r"https?://github\.com/([^/]+/[^/\s]+)"
-    ).unwrap();
+    let repo_re = regex::Regex::new(r"https?://github\.com/([^/]+/[^/\s]+)").unwrap();
     if let Some(caps) = repo_re.captures(input) {
         return GitHubRef {
             repo: Some(caps[1].to_string()),
@@ -162,7 +159,11 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         let info = extract_github_info(&caps[1]);
         return Some(WorkflowMatch {
             workflow: "security-audit.yaml".to_string(),
-            target: if info.number.is_empty() { ".".to_string() } else { info.number },
+            target: if info.number.is_empty() {
+                ".".to_string()
+            } else {
+                info.number
+            },
             repo: info.repo,
             description: "Security audit".to_string(),
         });
@@ -176,7 +177,11 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         let info = extract_github_info(&caps[1]);
         return Some(WorkflowMatch {
             workflow: "generate-docs.yaml".to_string(),
-            target: if info.number.is_empty() { ".".to_string() } else { info.number },
+            target: if info.number.is_empty() {
+                ".".to_string()
+            } else {
+                info.number
+            },
             repo: info.repo,
             description: "Generate documentation".to_string(),
         });
@@ -323,7 +328,10 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
             };
 
             if output.status.success() {
-                ("✅", format!("Workflow completed successfully!\n```\n{}\n```", combined))
+                (
+                    "✅",
+                    format!("Workflow completed successfully!\n```\n{}\n```", combined),
+                )
             } else {
                 let err_tail = if stderr.len() > 1000 {
                     format!("...{}", &stderr[stderr.len() - 1000..])
@@ -348,7 +356,10 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
         &state,
         &SlackMessage {
             channel,
-            text: format!("{} *{}* finished\n{}", status_emoji, wf.description, summary),
+            text: format!(
+                "{} *{}* finished\n{}",
+                status_emoji, wf.description, summary
+            ),
             thread_ts: Some(thread_ts),
         },
     )
@@ -393,8 +404,7 @@ async fn slack_events(
             }
 
             if event.event_type == "app_mention" {
-                if let (Some(text), Some(channel), Some(ts)) =
-                    (event.text, event.channel, event.ts)
+                if let (Some(text), Some(channel), Some(ts)) = (event.text, event.channel, event.ts)
                 {
                     info!(
                         user = ?event.user,
@@ -455,7 +465,8 @@ fn load_slack_config() -> (String, String, String) {
 
     let (file_token, file_secret, file_dir) = if config_path.exists() {
         let content = std::fs::read_to_string(&config_path).unwrap_or_default();
-        let parsed: toml::Value = toml::from_str(&content).unwrap_or(toml::Value::Table(Default::default()));
+        let parsed: toml::Value =
+            toml::from_str(&content).unwrap_or(toml::Value::Table(Default::default()));
         let slack = parsed.get("slack");
         (
             slack
@@ -497,15 +508,39 @@ fn load_slack_config() -> (String, String, String) {
 /// Embedded workflow files — compiled into the binary so `cargo install` users
 /// have working workflows without cloning the repo.
 const EMBEDDED_WORKFLOWS: &[(&str, &str)] = &[
-    ("code-review.yaml", include_str!("../../workflows/code-review.yaml")),
+    (
+        "code-review.yaml",
+        include_str!("../../workflows/code-review.yaml"),
+    ),
     ("fix-ci.yaml", include_str!("../../workflows/fix-ci.yaml")),
-    ("fix-issue.yaml", include_str!("../../workflows/fix-issue.yaml")),
-    ("fix-test.yaml", include_str!("../../workflows/fix-test.yaml")),
-    ("flaky-test-fix.yaml", include_str!("../../workflows/flaky-test-fix.yaml")),
-    ("generate-docs.yaml", include_str!("../../workflows/generate-docs.yaml")),
-    ("refactor.yaml", include_str!("../../workflows/refactor.yaml")),
-    ("security-audit.yaml", include_str!("../../workflows/security-audit.yaml")),
-    ("weekly-report.yaml", include_str!("../../workflows/weekly-report.yaml")),
+    (
+        "fix-issue.yaml",
+        include_str!("../../workflows/fix-issue.yaml"),
+    ),
+    (
+        "fix-test.yaml",
+        include_str!("../../workflows/fix-test.yaml"),
+    ),
+    (
+        "flaky-test-fix.yaml",
+        include_str!("../../workflows/flaky-test-fix.yaml"),
+    ),
+    (
+        "generate-docs.yaml",
+        include_str!("../../workflows/generate-docs.yaml"),
+    ),
+    (
+        "refactor.yaml",
+        include_str!("../../workflows/refactor.yaml"),
+    ),
+    (
+        "security-audit.yaml",
+        include_str!("../../workflows/security-audit.yaml"),
+    ),
+    (
+        "weekly-report.yaml",
+        include_str!("../../workflows/weekly-report.yaml"),
+    ),
 ];
 
 /// Resolve workflows directory with fallback chain:
@@ -522,8 +557,7 @@ fn resolve_workflows_dir() -> String {
     let workflows_path = home_dir.join(".stepyard").join("workflows");
 
     if !workflows_path.exists() {
-        std::fs::create_dir_all(&workflows_path)
-            .expect("Failed to create ~/.stepyard/workflows/");
+        std::fs::create_dir_all(&workflows_path).expect("Failed to create ~/.stepyard/workflows/");
 
         for (name, content) in EMBEDDED_WORKFLOWS {
             let file_path = workflows_path.join(name);

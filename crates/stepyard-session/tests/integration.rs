@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
-use stepyard_session::{migrate, Session, SessionError, SessionId};
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
+use stepyard_session::{migrate, Session, SessionError, SessionId};
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -175,9 +175,7 @@ async fn concurrent_appends_produce_no_gaps_and_no_duplicates() {
         let mut handles = Vec::new();
         for i in 0..20 {
             let s = session.clone();
-            handles.push(tokio::spawn(async move {
-                s.append(json!({"i": i})).await
-            }));
+            handles.push(tokio::spawn(async move { s.append(json!({"i": i})).await }));
         }
 
         let mut seqs: Vec<i64> = Vec::new();

@@ -160,7 +160,11 @@ pub struct ExecuteArgs {
     pub no_sandbox: bool,
 
     /// Select the sandbox runtime. Overrides STEPYARD_SANDBOX.
-    #[arg(long = "sandbox-runtime", value_enum, value_name = "docker|local|podman")]
+    #[arg(
+        long = "sandbox-runtime",
+        value_enum,
+        value_name = "docker|local|podman"
+    )]
     pub sandbox_runtime: Option<SandboxRuntime>,
 
     /// Disable `.stepyard/logs/<session_id>.jsonl` file mirroring.
@@ -206,7 +210,11 @@ pub struct ExecArgs {
     pub interactive: bool,
 
     /// Select the sandbox runtime. Defaults the same way as execute.
-    #[arg(long = "sandbox-runtime", value_enum, value_name = "docker|local|podman")]
+    #[arg(
+        long = "sandbox-runtime",
+        value_enum,
+        value_name = "docker|local|podman"
+    )]
     pub sandbox_runtime: Option<SandboxRuntime>,
 
     /// Session UUID whose sandbox should receive the interactive exec.
@@ -305,8 +313,7 @@ async fn execute_v2(
         HarnessConfig, RunContext as HarnessRunContext, StepOutcome, TerminationReason,
     };
     use stepyard_sandbox_orchestrator::{
-        DockerLifecycle, GitWorktreeManager, LocalShellLifecycle, PodmanLifecycle,
-        SandboxLifecycle,
+        DockerLifecycle, GitWorktreeManager, LocalShellLifecycle, PodmanLifecycle, SandboxLifecycle,
     };
 
     let mut harness_workflow = harness_adapter::adapt(&workflow)
@@ -631,11 +638,12 @@ pub async fn execute(
     if args.engine == "v1" && sandbox_runtime == SandboxRuntime::Podman {
         bail!("--sandbox-runtime podman currently requires --engine v2");
     }
-    let explicit_runtime_overrides_no_sandbox =
-        args.no_sandbox && args.sandbox_runtime.is_some();
+    let explicit_runtime_overrides_no_sandbox = args.no_sandbox && args.sandbox_runtime.is_some();
     let effective_sandbox_mode = match sandbox_runtime {
         SandboxRuntime::Local => SandboxMode::Disabled,
-        SandboxRuntime::Docker | SandboxRuntime::Podman if explicit_runtime_overrides_no_sandbox => {
+        SandboxRuntime::Docker | SandboxRuntime::Podman
+            if explicit_runtime_overrides_no_sandbox =>
+        {
             SandboxMode::FullWorkflow
         }
         SandboxRuntime::Docker | SandboxRuntime::Podman => sandbox_mode,

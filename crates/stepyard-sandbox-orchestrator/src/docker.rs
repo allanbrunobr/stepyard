@@ -297,11 +297,8 @@ impl SandboxLifecycle for DockerLifecycle {
         let mut stdout = BufReader::new(stdout);
         let mut stdout_buf = Vec::new();
         loop {
-            match tokio::time::timeout(
-                idle_timeout,
-                stdout.read_until(b'\n', &mut stdout_buf),
-            )
-            .await
+            match tokio::time::timeout(idle_timeout, stdout.read_until(b'\n', &mut stdout_buf))
+                .await
             {
                 Ok(Ok(0)) => break,
                 Ok(Ok(_)) => {}
@@ -338,11 +335,7 @@ impl SandboxLifecycle for DockerLifecycle {
         })
     }
 
-    async fn exec_interactive(
-        &self,
-        id: &SandboxId,
-        cmd: &[String],
-    ) -> Result<i32, SandboxError> {
+    async fn exec_interactive(&self, id: &SandboxId, cmd: &[String]) -> Result<i32, SandboxError> {
         let name = Self::container_name(*id.as_uuid());
         let args = exec_interactive_args(&name, cmd);
         let status = Command::new("docker")

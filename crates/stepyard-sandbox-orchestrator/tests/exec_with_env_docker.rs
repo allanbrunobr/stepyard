@@ -91,11 +91,7 @@ async fn exec_with_env_injects_env_var_verbatim() {
 
     let out = timeout(
         DOCKER_TIMEOUT,
-        lifecycle.exec_with_env(
-            &id,
-            &["printenv".to_string(), "FOO".to_string()],
-            &env,
-        ),
+        lifecycle.exec_with_env(&id, &["printenv".to_string(), "FOO".to_string()], &env),
     )
     .await
     .expect("exec_with_env did not time out")
@@ -141,11 +137,7 @@ async fn exec_with_env_passes_shell_metacharacters_as_literal_string() {
 
     let out = timeout(
         DOCKER_TIMEOUT,
-        lifecycle.exec_with_env(
-            &id,
-            &["printenv".to_string(), "PAYLOAD".to_string()],
-            &env,
-        ),
+        lifecycle.exec_with_env(&id, &["printenv".to_string(), "PAYLOAD".to_string()], &env),
     )
     .await
     .expect("exec_with_env did not time out")

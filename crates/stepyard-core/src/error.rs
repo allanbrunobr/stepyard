@@ -156,10 +156,7 @@ mod tests {
         let reason = TerminationReason::StepTimeout {
             configured_ms: 5000,
         };
-        assert_eq!(
-            format!("{reason:?}"),
-            "StepTimeout { configured_ms: 5000 }"
-        );
+        assert_eq!(format!("{reason:?}"), "StepTimeout { configured_ms: 5000 }");
     }
 
     #[test]

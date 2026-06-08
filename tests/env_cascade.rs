@@ -21,8 +21,8 @@
 
 use std::collections::HashMap;
 
-use stepyard_harness::{resolve_env, Defaults, EngineError};
 use serial_test::serial;
+use stepyard_harness::{resolve_env, Defaults, EngineError};
 
 fn env_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs
@@ -40,18 +40,9 @@ fn cascade_overlay_and_host_expansion() {
     // parallel-test contamination.
     std::env::set_var("GITHUB_TOKEN", "abc123");
 
-    let defaults = Defaults::with_env(env_map(&[
-        ("SHARED", "def"),
-        ("ONLY_DEF", "x"),
-    ]));
-    let workflow_env = env_map(&[
-        ("FOO", "workflow-foo"),
-        ("SHARED", "wf"),
-    ]);
-    let step_env = env_map(&[
-        ("FOO", "step-foo"),
-        ("TOKEN", "${GITHUB_TOKEN}"),
-    ]);
+    let defaults = Defaults::with_env(env_map(&[("SHARED", "def"), ("ONLY_DEF", "x")]));
+    let workflow_env = env_map(&[("FOO", "workflow-foo"), ("SHARED", "wf")]);
+    let step_env = env_map(&[("FOO", "step-foo"), ("TOKEN", "${GITHUB_TOKEN}")]);
 
     let resolved = resolve_env(&defaults, &workflow_env, &step_env)
         .expect("cascade with valid ${VAR} must resolve");
@@ -125,14 +116,11 @@ fn step_beats_workflow_beats_defaults() {
         ("B", "defaults"),
         ("C", "defaults"),
     ]));
-    let workflow_env = env_map(&[
-        ("B", "workflow"),
-        ("C", "workflow"),
-    ]);
+    let workflow_env = env_map(&[("B", "workflow"), ("C", "workflow")]);
     let step_env = env_map(&[("C", "step")]);
 
-    let resolved = resolve_env(&defaults, &workflow_env, &step_env)
-        .expect("no host expansion — cannot fail");
+    let resolved =
+        resolve_env(&defaults, &workflow_env, &step_env).expect("no host expansion — cannot fail");
 
     assert_eq!(resolved["A"], "defaults");
     assert_eq!(resolved["B"], "workflow");

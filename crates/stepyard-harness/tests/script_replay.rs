@@ -47,7 +47,8 @@ struct UnreachableExecutor;
 #[async_trait]
 impl StepExecutor for UnreachableExecutor {
     async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
-        self.execute_with_env(session_id, step, &HashMap::new()).await
+        self.execute_with_env(session_id, step, &HashMap::new())
+            .await
     }
 
     async fn execute_with_env(
@@ -161,7 +162,8 @@ async fn script_ctx_get_reads_prior_step_output() {
                 session_id: Uuid,
                 step: &Step,
             ) -> Result<ExecOutput, SandboxError> {
-                self.execute_with_env(session_id, step, &HashMap::new()).await
+                self.execute_with_env(session_id, step, &HashMap::new())
+                    .await
             }
             async fn execute_with_env(
                 &self,
@@ -248,9 +250,7 @@ async fn script_ctx_get_reads_target() {
         let evs = events(&engine).await;
         let done = evs
             .iter()
-            .find(|e| {
-                event_kind(e) == Some("step_completed") && event_step_name(e) == Some("show")
-            })
+            .find(|e| event_kind(e) == Some("step_completed") && event_step_name(e) == Some("show"))
             .expect("script step_completed");
         let stdout = done
             .payload
@@ -329,10 +329,7 @@ async fn script_replay_skips_completed_step() {
 
         // Phase 1 — run the script with a valid source, drop the engine
         // (simulated crash). The completion event is now in the log.
-        let wf1 = Workflow::new(
-            "script-replay",
-            vec![Step::script("once", r#""first""#)],
-        );
+        let wf1 = Workflow::new("script-replay", vec![Step::script("once", r#""first""#)]);
         let mut engine = Engine::with_executor(
             HarnessConfig::default(),
             session,

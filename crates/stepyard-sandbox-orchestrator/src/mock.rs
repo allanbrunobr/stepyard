@@ -117,7 +117,10 @@ impl MockLifecycle {
 #[async_trait]
 impl SandboxLifecycle for MockLifecycle {
     async fn create(&self, session_id: Uuid) -> Result<Sandbox, SandboxError> {
-        self.calls.lock().await.push(MockCall::Create { session_id });
+        self.calls
+            .lock()
+            .await
+            .push(MockCall::Create { session_id });
         self.make_sandbox()
     }
 
@@ -195,11 +198,7 @@ impl SandboxLifecycle for MockLifecycle {
         })
     }
 
-    async fn exec_interactive(
-        &self,
-        id: &SandboxId,
-        cmd: &[String],
-    ) -> Result<i32, SandboxError> {
+    async fn exec_interactive(&self, id: &SandboxId, cmd: &[String]) -> Result<i32, SandboxError> {
         self.calls.lock().await.push(MockCall::ExecInteractive {
             id: *id,
             cmd: cmd.to_vec(),

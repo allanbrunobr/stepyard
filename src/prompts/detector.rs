@@ -18,7 +18,10 @@ impl StackDetector {
     ///
     /// Follows `detection_order` in the registry (most specific first).
     /// Returns the first fully matching stack as a [`StackInfo`].
-    pub async fn detect(registry: &Registry, workspace_path: &Path) -> Result<StackInfo, StepError> {
+    pub async fn detect(
+        registry: &Registry,
+        workspace_path: &Path,
+    ) -> Result<StackInfo, StepError> {
         let mut checked_markers: Vec<String> = Vec::new();
 
         for stack_name in &registry.detection_order {
@@ -146,7 +149,10 @@ mod tests {
                 content_match: HashMap::new(),
                 tools: {
                     let mut t = HashMap::new();
-                    t.insert("lint".to_string(), "cargo clippy -- -D warnings".to_string());
+                    t.insert(
+                        "lint".to_string(),
+                        "cargo clippy -- -D warnings".to_string(),
+                    );
                     t.insert("test".to_string(), "cargo test".to_string());
                     t.insert("build".to_string(), "cargo build --release".to_string());
                     t

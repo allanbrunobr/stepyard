@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
     Engine, EngineError, HarnessConfig, Step, StepExecutor, TerminationReason, Workflow,
 };
@@ -37,7 +38,6 @@ use stepyard_sandbox_orchestrator::{
     ExecOutput, MockCall, MockLifecycle, SandboxError, SandboxLifecycle,
 };
 use stepyard_session::{migrate, Session, SessionStatus};
-use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -57,11 +57,7 @@ struct BlockingExecutor;
 
 #[async_trait]
 impl StepExecutor for BlockingExecutor {
-    async fn execute(
-        &self,
-        _session_id: Uuid,
-        _step: &Step,
-    ) -> Result<ExecOutput, SandboxError> {
+    async fn execute(&self, _session_id: Uuid, _step: &Step) -> Result<ExecOutput, SandboxError> {
         std::future::pending::<()>().await;
         unreachable!("pending never resolves")
     }
@@ -90,8 +86,10 @@ async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
     let configured_ms: u64 = 50;
     let workflow = Workflow::new(
         "timeout-wf".to_string(),
-        vec![Step::cmd("slow-step".to_string(), "sleep forever".to_string())
-            .with_timeout(Duration::from_millis(configured_ms))],
+        vec![
+            Step::cmd("slow-step".to_string(), "sleep forever".to_string())
+                .with_timeout(Duration::from_millis(configured_ms)),
+        ],
     );
 
     let mock: Arc<MockLifecycle> = Arc::new(MockLifecycle::new());
@@ -119,9 +117,9 @@ async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
         Err(EngineError::StepFailed { step_index, reason }) => {
             assert_eq!(step_index, 0);
             match reason {
-                TerminationReason::StepTimeout {
-                    configured_ms: got,
-                } => assert_eq!(got, configured_ms),
+                TerminationReason::StepTimeout { configured_ms: got } => {
+                    assert_eq!(got, configured_ms)
+                }
                 other => panic!("expected StepTimeout, got {other:?}"),
             }
         }

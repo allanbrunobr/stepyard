@@ -11,7 +11,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{
-    Engine, EngineError, HarnessConfig, Step, StepExecutor, StepOutcome, TerminationReason, Workflow,
+    Engine, EngineError, HarnessConfig, Step, StepExecutor, StepOutcome, TerminationReason,
+    Workflow,
 };
 use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionEvent, SessionStatus};
@@ -44,7 +45,8 @@ struct UnreachableExecutor;
 #[async_trait]
 impl StepExecutor for UnreachableExecutor {
     async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
-        self.execute_with_env(session_id, step, &HashMap::new()).await
+        self.execute_with_env(session_id, step, &HashMap::new())
+            .await
     }
 
     async fn execute_with_env(
@@ -149,10 +151,7 @@ async fn completion_signal_ends_workflow_after_matching_agent_stdout() {
         assert_eq!(signaled.payload["signal"], "Task completed");
         assert!(
             !evs.iter().any(|e| {
-                e.payload
-                    .get("step_name")
-                    .and_then(|v| v.as_str())
-                    == Some("must-not-run")
+                e.payload.get("step_name").and_then(|v| v.as_str()) == Some("must-not-run")
             }),
             "completion signal should not start the following step"
         );

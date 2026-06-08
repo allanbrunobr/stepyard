@@ -10,10 +10,10 @@
 
 use std::sync::Arc;
 
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{Engine, HarnessConfig, Step, StepOutcome, Workflow};
 use stepyard_sandbox_orchestrator::{MockCall, MockLifecycle, SandboxLifecycle};
 use stepyard_session::{migrate, Session};
-use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {

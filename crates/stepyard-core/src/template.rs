@@ -31,10 +31,7 @@ pub enum TemplateError {
 /// [`TemplateError::InvalidPlaceholder`]. The replacement strips the trailing
 /// document newline that `serde_yaml::to_string` appends so the encoded scalar
 /// remains inline at the call site.
-pub fn substitute(
-    text: &str,
-    vars: &HashMap<String, String>,
-) -> Result<String, TemplateError> {
+pub fn substitute(text: &str, vars: &HashMap<String, String>) -> Result<String, TemplateError> {
     substitute_with_source(text, vars, DEFAULT_FOUND_AT)
 }
 
@@ -184,8 +181,9 @@ mod tests {
 
     #[test]
     fn missing_key_reports_source_line_and_column() {
-        let err = substitute_with_source("name: ok\ncmd: {{MISSING}}\n", &HashMap::new(), "wf.yaml")
-            .unwrap_err();
+        let err =
+            substitute_with_source("name: ok\ncmd: {{MISSING}}\n", &HashMap::new(), "wf.yaml")
+                .unwrap_err();
         match err {
             TemplateError::Unresolved { key, found_at } => {
                 assert_eq!(key, "MISSING");
@@ -235,11 +233,7 @@ mod tests {
 
     #[test]
     fn yaml_escape_prevents_mapping_injection() {
-        let got = substitute(
-            "name: {{ATTACK}}",
-            &vars(&[("ATTACK", "x\nfoo: y")]),
-        )
-        .unwrap();
+        let got = substitute("name: {{ATTACK}}", &vars(&[("ATTACK", "x\nfoo: y")])).unwrap();
         let value: serde_yaml::Value = serde_yaml::from_str(&got).unwrap();
         assert_eq!(value["name"], "x\nfoo: y");
         assert!(value.get("foo").is_none(), "substitution injected: {got}");
@@ -261,11 +255,7 @@ mod tests {
 
     #[test]
     fn multiple_placeholders_are_replaced_left_to_right() {
-        let got = substitute(
-            "a: {{A}}\nb: {{B}}",
-            &vars(&[("A", "one"), ("B", "two")]),
-        )
-        .unwrap();
+        let got = substitute("a: {{A}}\nb: {{B}}", &vars(&[("A", "one"), ("B", "two")])).unwrap();
         let value: serde_yaml::Value = serde_yaml::from_str(&got).unwrap();
         assert_eq!(value["a"], "one");
         assert_eq!(value["b"], "two");
@@ -273,11 +263,7 @@ mod tests {
 
     #[test]
     fn key_grammar_allows_uppercase_digits_after_first_and_underscore() {
-        let got = substitute(
-            "name: {{_A1}}",
-            &vars(&[("_A1", "ok")]),
-        )
-        .unwrap();
+        let got = substitute("name: {{_A1}}", &vars(&[("_A1", "ok")])).unwrap();
         let value: serde_yaml::Value = serde_yaml::from_str(&got).unwrap();
         assert_eq!(value["name"], "ok");
     }

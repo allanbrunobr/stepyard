@@ -88,14 +88,23 @@ fn build_ctx_snapshot(
 ) -> HashMap<String, serde_json::Value> {
     let mut flat: HashMap<String, serde_json::Value> = HashMap::new();
     for (name, snap) in outputs {
-        flat.insert(format!("{name}.stdout"), serde_json::Value::String(snap.stdout.clone()));
-        flat.insert(format!("{name}.stderr"), serde_json::Value::String(snap.stderr.clone()));
+        flat.insert(
+            format!("{name}.stdout"),
+            serde_json::Value::String(snap.stdout.clone()),
+        );
+        flat.insert(
+            format!("{name}.stderr"),
+            serde_json::Value::String(snap.stderr.clone()),
+        );
         flat.insert(
             format!("{name}.exit_code"),
             serde_json::json!(snap.exit_code),
         );
     }
-    flat.insert("target".into(), serde_json::Value::String(target.to_string()));
+    flat.insert(
+        "target".into(),
+        serde_json::Value::String(target.to_string()),
+    );
     flat
 }
 
@@ -192,13 +201,8 @@ mod tests {
     fn ctx_get_reads_prior_step_stdout() {
         let mut outputs = HashMap::new();
         outputs.insert("prev".into(), snap("hello_world"));
-        let out = execute_script(
-            "s",
-            r#"let v = ctx_get("prev.stdout"); v"#,
-            &outputs,
-            "",
-        )
-        .unwrap();
+        let out =
+            execute_script("s", r#"let v = ctx_get("prev.stdout"); v"#, &outputs, "").unwrap();
         assert_eq!(out, "hello_world");
     }
 
@@ -213,8 +217,7 @@ mod tests {
                 exit_code: 7,
             },
         );
-        let out =
-            execute_script("s", r#"ctx_get("prev.exit_code")"#, &outputs, "").unwrap();
+        let out = execute_script("s", r#"ctx_get("prev.exit_code")"#, &outputs, "").unwrap();
         assert_eq!(out, "7");
     }
 
@@ -227,8 +230,7 @@ mod tests {
     #[test]
     fn ctx_get_missing_key_returns_unit() {
         // Unit cast to string → "" per `dynamic_to_string`.
-        let out =
-            execute_script("s", r#"ctx_get("nope.nada")"#, &HashMap::new(), "").unwrap();
+        let out = execute_script("s", r#"ctx_get("nope.nada")"#, &HashMap::new(), "").unwrap();
         assert_eq!(out, "");
     }
 
@@ -248,8 +250,7 @@ mod tests {
     fn ctx_set_function_is_not_registered() {
         // v1 exposed `ctx_set`; PR 4 deliberately drops it. The call must
         // fail at eval time (unknown function), not silently succeed.
-        let err =
-            execute_script("s", r#"ctx_set("k", 1)"#, &HashMap::new(), "").unwrap_err();
+        let err = execute_script("s", r#"ctx_set("k", 1)"#, &HashMap::new(), "").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.to_lowercase().contains("function") || msg.contains("ctx_set"),
@@ -263,8 +264,8 @@ mod tests {
         // only `ctx_get`. Any filesystem-looking function call must fail
         // at eval time. This guards against future drift where someone
         // adds a convenience helper that opens a path.
-        let err = execute_script("s", r#"open_file("/etc/passwd")"#, &HashMap::new(), "")
-            .unwrap_err();
+        let err =
+            execute_script("s", r#"open_file("/etc/passwd")"#, &HashMap::new(), "").unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.to_lowercase().contains("function") || msg.contains("open_file"),

@@ -86,11 +86,7 @@ impl StepOutput {
             StepOutput::Agent(o) => &o.response,
             StepOutput::Chat(o) => &o.response,
             StepOutput::Gate(o) => o.message.as_deref().unwrap_or(""),
-            StepOutput::Scope(o) => o
-                .final_value
-                .as_ref()
-                .map(|v| v.text())
-                .unwrap_or(""),
+            StepOutput::Scope(o) => o.final_value.as_ref().map(|v| v.text()).unwrap_or(""),
             StepOutput::Template(o) => &o.rendered,
             StepOutput::Empty => "",
         }
@@ -118,12 +114,8 @@ impl StepOutput {
     /// Split text into lines
     #[allow(dead_code)]
     pub fn lines(&self) -> Vec<&str> {
-        self.text()
-            .lines()
-            .filter(|l| !l.is_empty())
-            .collect()
+        self.text().lines().filter(|l| !l.is_empty()).collect()
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

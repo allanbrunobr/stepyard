@@ -99,11 +99,7 @@ fn default_engine_is_v2_and_still_works() {
 
     Command::cargo_bin("stepyard")
         .unwrap()
-        .args([
-            "execute",
-            "workflows/hello-world-cmd.yaml",
-            "--no-sandbox",
-        ])
+        .args(["execute", "workflows/hello-world-cmd.yaml", "--no-sandbox"])
         .env("DATABASE_URL", &url)
         .env("STEPYARD_TENANT", &tenant)
         .assert()

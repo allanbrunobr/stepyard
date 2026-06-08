@@ -66,7 +66,10 @@ impl ApiProxy {
 
         let handle = tokio::spawn(run_proxy(listener, secrets, client, shutdown_rx));
 
-        tracing::info!(port, "API key proxy started — secrets never enter the container");
+        tracing::info!(
+            port,
+            "API key proxy started — secrets never enter the container"
+        );
 
         Ok(Self {
             port,

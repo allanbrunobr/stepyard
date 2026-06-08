@@ -109,7 +109,9 @@ async fn mock_destroy_by_session_default_records_destroy_with_session_derived_id
 // ── Docker tests (require daemon, gated by env var) ───────────────────
 
 fn docker_enabled() -> bool {
-    std::env::var("STEPYARD_TEST_DOCKER").map(|v| v == "1").unwrap_or(false)
+    std::env::var("STEPYARD_TEST_DOCKER")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 #[tokio::test]

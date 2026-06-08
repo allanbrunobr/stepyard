@@ -7,10 +7,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{Engine, EngineError, HarnessConfig, Step, TerminationReason, Workflow};
 use stepyard_sandbox_orchestrator::{MockCall, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionStatus};
-use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -34,8 +34,10 @@ async fn idle_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
     let idle_ms = 30_000;
     let workflow = Workflow::new(
         "idle-timeout-wf".to_string(),
-        vec![Step::cmd("quiet-step".to_string(), "sleep forever".to_string())
-            .with_idle_timeout(Duration::from_millis(idle_ms))],
+        vec![
+            Step::cmd("quiet-step".to_string(), "sleep forever".to_string())
+                .with_idle_timeout(Duration::from_millis(idle_ms)),
+        ],
     );
 
     let mock: Arc<MockLifecycle> = Arc::new(MockLifecycle::new());

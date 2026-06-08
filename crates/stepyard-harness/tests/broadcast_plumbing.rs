@@ -19,10 +19,10 @@
 
 use std::sync::Arc;
 
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{Engine, HarnessConfig, Step, Workflow};
 use stepyard_sandbox_orchestrator::{MockLifecycle, SandboxLifecycle};
 use stepyard_session::{migrate, Session};
-use sqlx::postgres::PgPoolOptions;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -97,7 +97,9 @@ async fn every_engine_subscribes_to_shared_shutdown_tx() {
     // "delivered" for a broadcast Sender. Asserting it equals the number of
     // Engines is the cleanest proof of "every Engine's receiver observes
     // exactly one message" without needing to reach into private fields.
-    let delivered = shutdown_tx.send(()).expect("send succeeds with live receivers");
+    let delivered = shutdown_tx
+        .send(())
+        .expect("send succeeds with live receivers");
     assert_eq!(
         delivered, 2,
         "broadcast must reach every subscribed Engine exactly once"

@@ -178,8 +178,8 @@ mod tests {
             volumes: vec!["/host:/container:ro".to_string()],
             ..CreateOptions::default()
         };
-        let executor = SandboxStepExecutor::new(lifecycle.clone())
-            .with_create_options(create_options.clone());
+        let executor =
+            SandboxStepExecutor::new(lifecycle.clone()).with_create_options(create_options.clone());
 
         let mut env = HashMap::new();
         env.insert("KEY".to_string(), "value".to_string());

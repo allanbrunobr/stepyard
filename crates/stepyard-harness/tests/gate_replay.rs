@@ -63,12 +63,9 @@ impl ScriptedExecutor {
 
 #[async_trait]
 impl StepExecutor for ScriptedExecutor {
-    async fn execute(
-        &self,
-        _session_id: Uuid,
-        step: &Step,
-    ) -> Result<ExecOutput, SandboxError> {
-        self.execute_with_env(_session_id, step, &HashMap::new()).await
+    async fn execute(&self, _session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
+        self.execute_with_env(_session_id, step, &HashMap::new())
+            .await
     }
 
     async fn execute_with_env(
@@ -94,10 +91,7 @@ fn build_then_gate(condition: &str, on_pass: &str, on_fail: &str) -> Workflow {
     let mut gate = Step::gate("check", condition);
     gate.on_pass = Some(on_pass.into());
     gate.on_fail = Some(on_fail.into());
-    Workflow::new(
-        "gate-flow",
-        vec![Step::cmd("build", "echo build"), gate],
-    )
+    Workflow::new("gate-flow", vec![Step::cmd("build", "echo build"), gate])
 }
 
 /// Collect the `event` discriminator string for every session log entry.
@@ -148,11 +142,9 @@ async fn gate_passes_when_condition_renders_truthy_and_continues() {
 
         let names = event_names(&engine).await;
         assert!(
-            names.windows(2).any(|w| w
-                == [
-                    "step_started".to_string(),
-                    "step_completed".to_string()
-                ]),
+            names
+                .windows(2)
+                .any(|w| w == ["step_started".to_string(), "step_completed".to_string()]),
             "names={names:?}"
         );
         assert_eq!(names.first().map(String::as_str), Some("workflow_started"));
@@ -193,8 +185,7 @@ async fn gate_fails_when_on_fail_is_fail() {
                 "gate-fail",
                 vec![
                     Step::cmd(
-                        "build",
-                        "echo no", // stdout will be "no\n" → falsy
+                        "build", "echo no", // stdout will be "no\n" → falsy
                     ),
                     gate,
                 ],
@@ -212,17 +203,15 @@ async fn gate_fails_when_on_fail_is_fail() {
             )
             .await;
 
-        let mut engine = Engine::with_executor(
-            HarnessConfig::default(),
-            session,
-            wf,
-            lifecycle(),
-            executor,
-        );
+        let mut engine =
+            Engine::with_executor(HarnessConfig::default(), session, wf, lifecycle(), executor);
 
         let outcome = engine.resume().await.expect("resume");
         match outcome {
-            StepOutcome::StepFailed { ref step_name, ref error } => {
+            StepOutcome::StepFailed {
+                ref step_name,
+                ref error,
+            } => {
                 assert_eq!(step_name, "check");
                 assert!(
                     error.contains("build output was not truthy"),
@@ -233,10 +222,7 @@ async fn gate_fails_when_on_fail_is_fail() {
         }
 
         let names = event_names(&engine).await;
-        assert!(
-            names.iter().any(|n| n == "step_failed"),
-            "names={names:?}"
-        );
+        assert!(names.iter().any(|n| n == "step_failed"), "names={names:?}");
 
         let reloaded = Session::load(&pool, engine.session().id()).await.unwrap();
         assert_eq!(reloaded.status(), SessionStatus::Failed);
@@ -274,7 +260,9 @@ async fn gate_cross_step_refs_survive_process_crash_and_resume() {
             executor,
         );
         let first = engine.step().await.expect("step 1");
-        assert!(matches!(first, StepOutcome::StepCompleted { ref step_name } if step_name == "build"));
+        assert!(
+            matches!(first, StepOutcome::StepCompleted { ref step_name } if step_name == "build")
+        );
         drop(engine); // crash boundary — all state now lives in the log.
 
         // Phase 2: reconstruct a fresh engine over the same session. The
@@ -316,14 +304,9 @@ async fn gate_renders_target_from_run_context() {
             target: "ok".into(), // evaluate_bool accepts "ok" as truthy
             vars: HashMap::new(),
         };
-        let mut engine = Engine::with_executor(
-            HarnessConfig::default(),
-            session,
-            wf,
-            lifecycle(),
-            executor,
-        )
-        .with_run_context(rc);
+        let mut engine =
+            Engine::with_executor(HarnessConfig::default(), session, wf, lifecycle(), executor)
+                .with_run_context(rc);
 
         let outcome = engine.resume().await.expect("resume");
         assert_eq!(outcome, StepOutcome::WorkflowCompleted);
@@ -376,13 +359,8 @@ async fn gate_missing_condition_is_structured_step_failure() {
         };
         let wf = Workflow::new("naked-gate", vec![gate]);
 
-        let mut engine = Engine::with_executor(
-            HarnessConfig::default(),
-            session,
-            wf,
-            lifecycle(),
-            executor,
-        );
+        let mut engine =
+            Engine::with_executor(HarnessConfig::default(), session, wf, lifecycle(), executor);
         let outcome = engine.resume().await.expect("resume");
         match outcome {
             StepOutcome::StepFailed { error, .. } => {
@@ -401,25 +379,14 @@ async fn gate_non_boolean_condition_is_structured_step_failure() {
             .expect("session");
         let executor = Arc::new(ScriptedExecutor::new());
 
-        let wf = Workflow::new(
-            "bad-bool-gate",
-            vec![Step::gate("check", "maybe later")],
-        );
+        let wf = Workflow::new("bad-bool-gate", vec![Step::gate("check", "maybe later")]);
 
-        let mut engine = Engine::with_executor(
-            HarnessConfig::default(),
-            session,
-            wf,
-            lifecycle(),
-            executor,
-        );
+        let mut engine =
+            Engine::with_executor(HarnessConfig::default(), session, wf, lifecycle(), executor);
         let outcome = engine.resume().await.expect("resume");
         match outcome {
             StepOutcome::StepFailed { error, .. } => {
-                assert!(
-                    error.contains("truthy/falsy token"),
-                    "error={error}"
-                );
+                assert!(error.contains("truthy/falsy token"), "error={error}");
             }
             other => panic!("expected StepFailed, got {other:?}"),
         }
@@ -456,13 +423,8 @@ async fn malformed_output_in_log_fails_replay_loudly() {
 
         let executor = Arc::new(ScriptedExecutor::new());
         let wf = build_then_gate("{{ steps.build.exit_code }} == 0", "continue", "fail");
-        let mut engine = Engine::with_executor(
-            HarnessConfig::default(),
-            session,
-            wf,
-            lifecycle(),
-            executor,
-        );
+        let mut engine =
+            Engine::with_executor(HarnessConfig::default(), session, wf, lifecycle(), executor);
 
         let err = engine
             .step()

@@ -4,16 +4,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::task::JoinSet;
 
-use crate::config::StepConfig;
 use crate::config::manager::ConfigManager;
+use crate::config::StepConfig;
 use crate::engine::context::Context;
 use crate::error::StepError;
 use crate::workflow::schema::{ScopeDef, StepDef, StepType};
 
 use super::{
-    agent::AgentExecutor, cmd::CmdExecutor, chat::ChatExecutor, gate::GateExecutor,
-    call::resolve_scope_step_config,
-    SandboxAwareExecutor, SharedSandbox, StepExecutor, StepOutput,
+    agent::AgentExecutor, call::resolve_scope_step_config, chat::ChatExecutor, cmd::CmdExecutor,
+    gate::GateExecutor, SandboxAwareExecutor, SharedSandbox, StepExecutor, StepOutput,
 };
 
 pub struct ParallelExecutor {
@@ -61,7 +60,8 @@ impl StepExecutor for ParallelExecutor {
 
             set.spawn(async move {
                 let step_config = resolve_scope_step_config(&cm_clone, &sub);
-                let result = dispatch_step(&sub, &step_config, &child_ctx, &scopes, &sandbox_clone).await;
+                let result =
+                    dispatch_step(&sub, &step_config, &child_ctx, &scopes, &sandbox_clone).await;
                 (sub.name.clone(), result)
             });
         }
@@ -74,7 +74,10 @@ impl StepExecutor for ParallelExecutor {
                 Ok((name, Ok(output))) => {
                     outputs.insert(name, output);
                 }
-                Ok((name, Err(StepError::ControlFlow(crate::control_flow::ControlFlow::Skip { .. })))) => {
+                Ok((
+                    name,
+                    Err(StepError::ControlFlow(crate::control_flow::ControlFlow::Skip { .. })),
+                )) => {
                     outputs.insert(name, StepOutput::Empty);
                 }
                 Ok((_, Err(e))) => {
@@ -125,13 +128,26 @@ async fn dispatch_step(
     let values: HashMap<String, serde_json::Value> = step
         .config
         .iter()
-        .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
+            )
+        })
         .collect();
     let step_config = StepConfig { values };
 
     match step.step_type {
-        StepType::Cmd => CmdExecutor.execute_sandboxed(step, &step_config, ctx, sandbox).await,
-        StepType::Agent => AgentExecutor.execute_sandboxed(step, &step_config, ctx, sandbox).await,
+        StepType::Cmd => {
+            CmdExecutor
+                .execute_sandboxed(step, &step_config, ctx, sandbox)
+                .await
+        }
+        StepType::Agent => {
+            AgentExecutor
+                .execute_sandboxed(step, &step_config, ctx, sandbox)
+                .await
+        }
         StepType::Gate => GateExecutor.execute(step, &step_config, ctx).await,
         StepType::Chat => ChatExecutor.execute(step, &step_config, ctx).await,
         _ => Err(StepError::Fail(format!(
@@ -144,8 +160,8 @@ async fn dispatch_step(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::workflow::schema::StepType;
+    use std::collections::HashMap;
 
     fn cmd_step(name: &str, run: &str) -> StepDef {
         StepDef {
@@ -218,15 +234,12 @@ mod tests {
         let scopes = HashMap::new();
         let step = parallel_step(
             "parallel_fail",
-            vec![
-                cmd_step("ok_step", "echo ok"),
-                {
-                    // Use an unsupported step type to force dispatch_step to return Err
-                    let mut s = cmd_step("fail_step", "echo fake");
-                    s.step_type = StepType::Template;
-                    s
-                },
-            ],
+            vec![cmd_step("ok_step", "echo ok"), {
+                // Use an unsupported step type to force dispatch_step to return Err
+                let mut s = cmd_step("fail_step", "echo fake");
+                s.step_type = StepType::Template;
+                s
+            }],
         );
         let executor = ParallelExecutor::new(&scopes, None);
         let config = StepConfig::default();

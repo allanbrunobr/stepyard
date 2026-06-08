@@ -13,10 +13,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use sqlx::postgres::PgPoolOptions;
 use stepyard_harness::{Engine, HarnessConfig, Step, StepOutcome, Workflow};
 use stepyard_sandbox_orchestrator::{MockLifecycle, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionStatus};
-use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -83,9 +83,7 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
                 lifecycle,
             );
             cancel_token_for_victim = Some(engine.cancel_token());
-            handles.push(tokio::spawn(async move {
-                engine.resume().await
-            }));
+            handles.push(tokio::spawn(async move { engine.resume().await }));
         } else {
             handles.push(tokio::spawn(async move {
                 let session = Session::new(&pool, Uuid::new_v4(), tenant)
@@ -168,8 +166,7 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
     .expect("stress rows");
 
     // Group rows by session_id.
-    let mut per_session: std::collections::BTreeMap<Uuid, Vec<(i64, String)>> =
-        Default::default();
+    let mut per_session: std::collections::BTreeMap<Uuid, Vec<(i64, String)>> = Default::default();
     for (sid, seq, event) in rows {
         per_session.entry(sid).or_default().push((seq, event));
     }
@@ -178,11 +175,7 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
         // Dense seq starting at 1.
         let seqs: Vec<i64> = events.iter().map(|(s, _)| *s).collect();
         let seq_set: HashSet<i64> = seqs.iter().copied().collect();
-        assert_eq!(
-            seq_set.len(),
-            seqs.len(),
-            "duplicate seq in session {sid}"
-        );
+        assert_eq!(seq_set.len(), seqs.len(), "duplicate seq in session {sid}");
         for (idx, &s) in seqs.iter().enumerate() {
             assert_eq!(s, (idx as i64) + 1, "gap in seq for session {sid}");
         }
@@ -224,13 +217,12 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
         "cancelled session must not end with workflow_completed"
     );
 
-    let victim_status = sqlx::query_scalar::<_, String>(
-        "SELECT status FROM sessions WHERE id = $1",
-    )
-    .bind(victim_uuid)
-    .fetch_one(&pool)
-    .await
-    .expect("victim status");
+    let victim_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM sessions WHERE id = $1")
+            .bind(victim_uuid)
+            .fetch_one(&pool)
+            .await
+            .expect("victim status");
     assert_eq!(victim_status, "cancelled");
 
     // No event leak across sessions: the event count from the SQL
@@ -246,13 +238,12 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
     );
 
     // Every session row exists and has the expected status.
-    let statuses: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, status FROM sessions WHERE tenant_id = $1",
-    )
-    .bind(&tenant)
-    .fetch_all(&pool)
-    .await
-    .expect("statuses");
+    let statuses: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, status FROM sessions WHERE tenant_id = $1")
+            .bind(&tenant)
+            .fetch_all(&pool)
+            .await
+            .expect("statuses");
     for (sid, status) in statuses {
         if sid == victim_uuid {
             assert_eq!(status, "cancelled", "victim must be cancelled");
