@@ -44,7 +44,8 @@ mod workflow;
 pub use chat_exec::{ChatClient, ChatClientError, ChatCompletionRequest, ChatCompletionResponse};
 pub use defaults::Defaults;
 pub use engine::{
-    resolve_env, CancelToken, Engine, EngineError, HarnessConfig, RunContext, StepOutcome,
+    apply_anthropic_proxy_env, resolve_env, AnthropicProxyEnv, CancelToken, Engine, EngineError,
+    HarnessConfig, RunContext, StepOutcome,
 };
 pub use executor::StepExecutor;
 pub use gate::{GateAction, GateError, GateOutcome};

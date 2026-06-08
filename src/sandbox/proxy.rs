@@ -24,14 +24,18 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-/// Secrets to inject into proxied requests
+/// Secrets to inject into proxied requests.
 struct ProxySecrets {
     anthropic_api_key: String,
+    /// Per-session token injected into the container as a dummy `ANTHROPIC_API_KEY`.
+    /// The proxy validates this before forwarding to the upstream API.
+    auth_token: String,
 }
 
 /// A running API proxy instance
 pub struct ApiProxy {
     port: u16,
+    auth_token: String,
     shutdown_tx: Option<oneshot::Sender<()>>,
     join_handle: Option<JoinHandle<()>>,
 }
@@ -50,7 +54,11 @@ impl ApiProxy {
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-        let secrets = Arc::new(ProxySecrets { anthropic_api_key });
+        let auth_token = uuid::Uuid::new_v4().to_string();
+        let secrets = Arc::new(ProxySecrets {
+            anthropic_api_key,
+            auth_token: auth_token.clone(),
+        });
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(300))
             .build()
@@ -62,6 +70,7 @@ impl ApiProxy {
 
         Ok(Self {
             port,
+            auth_token,
             shutdown_tx: Some(shutdown_tx),
             join_handle: Some(handle),
         })
@@ -70,6 +79,11 @@ impl ApiProxy {
     /// The port the proxy is listening on.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Per-session auth token injected into the sandbox as `ANTHROPIC_API_KEY`.
+    pub fn auth_token(&self) -> &str {
+        &self.auth_token
     }
 
     /// Gracefully stop the proxy.
@@ -183,6 +197,21 @@ async fn handle_connection(
     let method = parts[0];
     let path = parts[1];
 
+    // Only forward Anthropic API paths — reject everything else.
+    if !path.starts_with("/v1/") {
+        let resp = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
+        let _ = stream.write_all(resp).await;
+        return;
+    }
+
+    // Require the per-session auth token (injected as dummy ANTHROPIC_API_KEY).
+    let presented_key = parse_header_value(&headers_str, "x-api-key");
+    if presented_key.as_deref() != Some(secrets.auth_token.as_str()) {
+        let resp = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n";
+        let _ = stream.write_all(resp).await;
+        return;
+    }
+
     // Build upstream URL — all paths go to api.anthropic.com
     let upstream_url = format!("https://api.anthropic.com{path}");
 
@@ -290,6 +319,21 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
     None
 }
 
+/// Parse a header value from raw headers (case-insensitive key match).
+fn parse_header_value(headers: &str, name: &str) -> Option<String> {
+    for line in headers.lines().skip(1) {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            if key.trim().eq_ignore_ascii_case(name) {
+                return Some(value.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Parse Content-Length from raw headers string
 fn parse_content_length(headers: &str) -> usize {
     for line in headers.lines() {
@@ -340,20 +384,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn proxy_responds_to_requests() {
+    async fn proxy_responds_to_authenticated_requests() {
+        let proxy = ApiProxy::start("test-key-abc".to_string()).await.unwrap();
+        let port = proxy.port();
+        let token = proxy.auth_token().to_string();
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/v1/models"))
+            .header("x-api-key", &token)
+            .send()
+            .await
+            .expect("proxy should accept authenticated request");
+
+        // Upstream may fail in CI, but the proxy must not return 401/403.
+        assert_ne!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+        assert_ne!(resp.status(), reqwest::StatusCode::FORBIDDEN);
+
+        proxy.stop().await;
+    }
+
+    #[tokio::test]
+    async fn proxy_rejects_wrong_auth_token() {
         let proxy = ApiProxy::start("test-key-abc".to_string()).await.unwrap();
         let port = proxy.port();
 
-        // Send a request to the proxy (it will fail upstream but we can verify it's listening)
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/v1/models"))
+            .header("x-api-key", "not-the-session-token")
+            .send()
+            .await
+            .expect("proxy should respond");
+
+        assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+        proxy.stop().await;
+    }
+
+    #[tokio::test]
+    async fn proxy_rejects_missing_auth_token() {
+        let proxy = ApiProxy::start("test-key-abc".to_string()).await.unwrap();
+        let port = proxy.port();
+
         let client = reqwest::Client::new();
         let resp = client
             .get(format!("http://127.0.0.1:{port}/v1/models"))
             .send()
-            .await;
+            .await
+            .expect("proxy should respond");
 
-        // The proxy should respond (even if upstream fails, it should return 502 or forward the error)
-        assert!(resp.is_ok());
+        assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+        proxy.stop().await;
+    }
 
+    #[tokio::test]
+    async fn proxy_rejects_non_v1_paths() {
+        let proxy = ApiProxy::start("test-key-abc".to_string()).await.unwrap();
+        let port = proxy.port();
+        let token = proxy.auth_token().to_string();
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/admin/secret"))
+            .header("x-api-key", &token)
+            .send()
+            .await
+            .expect("proxy should respond");
+
+        assert_eq!(resp.status(), reqwest::StatusCode::FORBIDDEN);
         proxy.stop().await;
     }
 }

@@ -2,11 +2,11 @@
 
 ## Project Structure & Module Organization
 
-This workspace centers on `minion-engine/`, a Rust CLI and library workspace with a small TypeScript dashboard. Rust source lives in `minion-engine/src/`; reusable crates are under `minion-engine/crates/` (`stepyard-core`, `stepyard-session`, `stepyard-sandbox-orchestrator`, `stepyard-harness`). Rust integration tests live in `minion-engine/tests/` and crate-specific `*/tests/` directories. Dashboard/API code lives in `minion-engine/packages/web` and `minion-engine/packages/api`. Workflow examples are in `minion-engine/workflows/`; docs and planning artifacts are in `docs/`, `_bmad-output/`, `.hive/`, and root Markdown files.
+This workspace is a Rust CLI and library monorepo with a TypeScript dashboard. Rust source lives in `src/`; reusable crates are under `crates/` (`stepyard-core`, `stepyard-session`, `stepyard-sandbox-orchestrator`, `stepyard-harness`). Rust integration tests live in `tests/` and crate-specific `*/tests/` directories. Dashboard/API code lives in `packages/web` and `packages/api`. Workflow examples are in `workflows/`; docs and planning artifacts are in `docs/`, `_bmad-output/`, `.hive/`, and root Markdown files. Internal tooling lives in `xtask/`.
 
 ## Build, Test, and Development Commands
 
-Run commands from `minion-engine/` unless noted.
+Run commands from the repository root unless noted.
 
 - `cargo build --workspace`: build the Rust CLI and crates.
 - `cargo test --workspace`: run all Rust unit and integration tests. Some DB/Docker tests skip unless required env vars are set.

@@ -377,7 +377,7 @@ impl Engine {
         if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
             match ApiProxy::start(api_key).await {
                 Ok(proxy) => {
-                    docker.set_proxy(proxy.port());
+                    docker.set_proxy(proxy.port(), proxy.auth_token());
                     if !self.quiet {
                         println!(
                             "  {} API proxy started on port {} — secrets stay on host",
@@ -388,7 +388,9 @@ impl Engine {
                     self.api_proxy = Some(proxy);
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "Failed to start API proxy — falling back to env vars");
+                    anyhow::bail!(
+                        "Failed to start API proxy — refusing to inject ANTHROPIC_API_KEY into the container: {e}"
+                    );
                 }
             }
         }

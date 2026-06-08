@@ -12,7 +12,7 @@ env:
   # Keep that path stable even though local cargo defaults to /tmp via
   # .cargo/config.toml.
   CARGO_TARGET_DIR: target
-  BINARY_NAME: minion
+  BINARY_NAME: stepyard
 
 jobs:
   # ──────────────────────────────────────────────────────────
@@ -28,28 +28,28 @@ jobs:
           # Linux x86_64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: minion-linux-x86_64
+            artifact_name: stepyard-linux-x86_64
 
           # Linux aarch64 (cross-compile)
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: minion-linux-aarch64
+            artifact_name: stepyard-linux-aarch64
             cross: true
 
           # macOS x86_64 (Intel)
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact_name: minion-macos-x86_64
+            artifact_name: stepyard-macos-x86_64
 
           # macOS aarch64 (Apple Silicon)
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact_name: minion-macos-aarch64
+            artifact_name: stepyard-macos-aarch64
 
           # Windows x86_64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact_name: minion-windows-x86_64.exe
+            artifact_name: stepyard-windows-x86_64.exe
 
     steps:
       - name: Checkout repository
@@ -139,7 +139,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Minion Engine ${{ github.ref_name }}"
+          name: "Stepyard ${{ github.ref_name }}"
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
@@ -151,34 +151,34 @@ jobs:
 
             ### macOS (Apple Silicon)
             ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/minion-macos-aarch64 -o minion
-            chmod +x minion
-            sudo mv minion /usr/local/bin/
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/stepyard-macos-aarch64 -o stepyard
+            chmod +x stepyard
+            sudo mv stepyard /usr/local/bin/
             ```
 
             ### macOS (Intel)
             ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/minion-macos-x86_64 -o minion
-            chmod +x minion
-            sudo mv minion /usr/local/bin/
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/stepyard-macos-x86_64 -o stepyard
+            chmod +x stepyard
+            sudo mv stepyard /usr/local/bin/
             ```
 
             ### Linux (x86_64)
             ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/minion-linux-x86_64 -o minion
-            chmod +x minion
-            sudo mv minion /usr/local/bin/
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/stepyard-linux-x86_64 -o stepyard
+            chmod +x stepyard
+            sudo mv stepyard /usr/local/bin/
             ```
 
             ### Linux (aarch64)
             ```bash
-            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/minion-linux-aarch64 -o minion
-            chmod +x minion
-            sudo mv minion /usr/local/bin/
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/stepyard-linux-aarch64 -o stepyard
+            chmod +x stepyard
+            sudo mv stepyard /usr/local/bin/
             ```
 
             ### Windows (x86_64)
-            Download `minion-windows-x86_64.exe` and add to your PATH.
+            Download `stepyard-windows-x86_64.exe` and add to your PATH.
 
             ### Via cargo
             ```bash
@@ -187,7 +187,7 @@ jobs:
 
             ## Verify installation
             ```bash
-            minion --version
+            stepyard --version
             ```
 
             ## Verify checksums
