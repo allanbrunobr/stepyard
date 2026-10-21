@@ -1,3 +1,7 @@
+// `#[async_trait]` marks generated trait methods `#[must_use]` while they
+// already return a must-use future; newer clippy flags that as double_must_use.
+#![allow(clippy::double_must_use)]
+
 use std::process::ExitCode;
 use std::sync::{Arc, OnceLock};
 

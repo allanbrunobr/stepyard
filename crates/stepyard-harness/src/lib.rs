@@ -26,6 +26,10 @@
 //! ported in Story 2.4+. This deliberate scope cut keeps the contract
 //! (step/resume/cancel) provable with minimal surface area.
 
+// `#[async_trait]` marks generated trait methods `#[must_use]` while they
+// already return a must-use future; newer clippy flags that as double_must_use.
+#![allow(clippy::double_must_use)]
+
 mod agent_exec;
 mod chat_exec;
 mod defaults;

@@ -87,8 +87,8 @@ async fn reloaded_cancelled_session_refuses_to_advance() {
         .collect();
     assert_eq!(
         tags_before,
-        vec!["workflow_started", "step_failed"],
-        "fast-path cancel log shape must be workflow_started → step_failed, got {tags_before:?}"
+        vec!["workflow_started", "step_failed", "workflow_cancelled"],
+        "fast-path cancel log shape must be workflow_started → step_failed → workflow_cancelled, got {tags_before:?}"
     );
 
     drop(engine1);

@@ -47,6 +47,10 @@
 //! "Data Model" (Invariante 2, Invariante 11). Schema is in
 //! `crates/minion-session/migrations/`.
 
+// `#[async_trait]` marks generated trait methods `#[must_use]` while they
+// already return a must-use future; newer clippy flags that as double_must_use.
+#![allow(clippy::double_must_use)]
+
 #[cfg(all(feature = "postgres", feature = "sqlite"))]
 compile_error!("stepyard-session: features `postgres` and `sqlite` are mutually exclusive");
 

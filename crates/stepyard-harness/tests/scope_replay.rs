@@ -148,9 +148,20 @@ impl StepExecutor for SleepExecutor {
     async fn execute_with_env(
         &self,
         _session_id: Uuid,
-        _step: &Step,
+        step: &Step,
         _env: &HashMap<String, String>,
     ) -> Result<ExecOutput, SandboxError> {
+        // Only steps with a `timeout:` hang; untimed steps (for example a
+        // top-level preamble) complete at once. Without this, the
+        // preamble would never finish and the timeout under test would
+        // never be reached.
+        if step.timeout.is_none() {
+            return Ok(ExecOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 0,
+            });
+        }
         pending().await
     }
 }

@@ -43,7 +43,7 @@ Some tests need a service. They skip when the service is not configured:
 
 | Variable | Enables |
 |----------|---------|
-| `DATABASE_URL` | PostgreSQL integration tests (for example `tests/cli_execute.rs`) |
+| `DATABASE_URL`, `STEPYARD_HARNESS_DATABASE_URL`, `STEPYARD_SESSION_DATABASE_URL` | PostgreSQL integration tests for the CLI, the harness, and the session crate (CI sets all three) |
 | `STEPYARD_TEST_DOCKER=1` | Docker sandbox and injection tests |
 
 Example:
@@ -52,6 +52,7 @@ Example:
 docker run -d --name stepyard-test-db -p 5432:5432 \
   -e POSTGRES_PASSWORD=stepyard -e POSTGRES_DB=stepyard postgres:16-alpine
 export DATABASE_URL=postgres://postgres:stepyard@localhost:5432/stepyard
+export STEPYARD_HARNESS_DATABASE_URL=$DATABASE_URL STEPYARD_SESSION_DATABASE_URL=$DATABASE_URL
 STEPYARD_TEST_DOCKER=1 cargo test --workspace
 ```
 

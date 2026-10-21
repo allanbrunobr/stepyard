@@ -712,8 +712,13 @@ async fn agent_cancel_mid_step_returns_cancelled_outcome() {
         let tags: Vec<&str> = evs.iter().filter_map(event_kind).collect();
         assert_eq!(
             tags,
-            vec!["workflow_started", "step_started", "step_failed"],
-            "expected workflow_started → step_started → step_failed, got {tags:?}"
+            vec![
+                "workflow_started",
+                "step_started",
+                "step_failed",
+                "workflow_cancelled"
+            ],
+            "expected workflow_started → step_started → step_failed → workflow_cancelled, got {tags:?}"
         );
 
         let failed = evs
@@ -807,8 +812,9 @@ async fn agent_shutdown_broadcast_emits_signal_received_then_step_failed() {
                 "step_started",
                 "signal_received",
                 "step_failed",
+                "workflow_cancelled",
             ],
-            "expected workflow_started → step_started → signal_received → step_failed, got {tags:?}"
+            "expected workflow_started → step_started → signal_received → step_failed → workflow_cancelled, got {tags:?}"
         );
 
         let received = evs

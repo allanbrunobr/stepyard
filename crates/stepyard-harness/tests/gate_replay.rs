@@ -132,7 +132,7 @@ async fn gate_passes_when_condition_renders_truthy_and_continues() {
         let mut engine = Engine::with_executor(
             HarnessConfig::default(),
             session,
-            build_then_gate("{{ steps.build.exit_code }} == 0", "continue", "fail"),
+            build_then_gate("{{ steps.build.exit_code == 0 }}", "continue", "fail"),
             lifecycle(),
             executor,
         );
@@ -250,7 +250,7 @@ async fn gate_cross_step_refs_survive_process_crash_and_resume() {
             )
             .await;
 
-        let wf = build_then_gate("{{ steps.build.exit_code }} == 0", "continue", "fail");
+        let wf = build_then_gate("{{ steps.build.exit_code == 0 }}", "continue", "fail");
 
         let mut engine = Engine::with_executor(
             HarnessConfig::default(),
@@ -422,7 +422,7 @@ async fn malformed_output_in_log_fails_replay_loudly() {
             .expect("poison log");
 
         let executor = Arc::new(ScriptedExecutor::new());
-        let wf = build_then_gate("{{ steps.build.exit_code }} == 0", "continue", "fail");
+        let wf = build_then_gate("{{ steps.build.exit_code == 0 }}", "continue", "fail");
         let mut engine =
             Engine::with_executor(HarnessConfig::default(), session, wf, lifecycle(), executor);
 

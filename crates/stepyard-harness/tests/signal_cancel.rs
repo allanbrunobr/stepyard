@@ -164,8 +164,9 @@ async fn shutdown_broadcast_emits_signal_received_destroys_sandbox_and_returns_s
             "step_started",
             "signal_received",
             "step_failed",
+            "workflow_cancelled",
         ],
-        "expected workflow_started → step_started → signal_received → step_failed, got {tags:?}"
+        "expected workflow_started → step_started → signal_received → step_failed → workflow_cancelled, got {tags:?}"
     );
 
     let received = events
