@@ -9,13 +9,15 @@
 //!
 //! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::future::pending;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use sqlx::postgres::PgPoolOptions;
-use stepyard_harness::{Engine, HarnessConfig, Step, StepOutcome, Workflow};
-use stepyard_sandbox_orchestrator::{MockLifecycle, SandboxLifecycle};
+use stepyard_harness::{Engine, HarnessConfig, Step, StepExecutor, StepOutcome, Workflow};
+use stepyard_sandbox_orchestrator::{ExecOutput, MockLifecycle, SandboxError, SandboxLifecycle};
 use stepyard_session::{migrate, Session, SessionStatus};
 use uuid::Uuid;
 
@@ -28,6 +30,36 @@ async fn pool() -> Option<sqlx::PgPool> {
         .expect("reach DB");
     migrate(&pool).await.expect("migrations ok");
     Some(pool)
+}
+
+/// Executor for the victim session: `s1` completes, every later step
+/// hangs until the engine's cancel token fires. Without it the victim can
+/// finish all five mock steps before the outer task cancels it, which made
+/// the 9-completed / 1-cancelled assertion flaky on fast CI runners.
+struct HangAfterFirstStep;
+
+#[async_trait]
+impl StepExecutor for HangAfterFirstStep {
+    async fn execute(&self, session_id: Uuid, step: &Step) -> Result<ExecOutput, SandboxError> {
+        self.execute_with_env(session_id, step, &HashMap::new())
+            .await
+    }
+
+    async fn execute_with_env(
+        &self,
+        _session_id: Uuid,
+        step: &Step,
+        _env: &HashMap<String, String>,
+    ) -> Result<ExecOutput, SandboxError> {
+        if step.name == "s1" {
+            return Ok(ExecOutput {
+                stdout: "ok\n".into(),
+                stderr: String::new(),
+                exit_code: 0,
+            });
+        }
+        pending().await
+    }
 }
 
 fn five_step_workflow(prefix: &str) -> Workflow {
@@ -76,11 +108,12 @@ async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
                 .await
                 .expect("new session");
             victim_session_id = Some(session.id());
-            let mut engine = Engine::new(
+            let mut engine = Engine::with_executor(
                 HarnessConfig::default(),
                 session,
                 five_step_workflow(&prefix),
                 lifecycle,
+                Arc::new(HangAfterFirstStep),
             );
             cancel_token_for_victim = Some(engine.cancel_token());
             handles.push(tokio::spawn(async move { engine.resume().await }));
