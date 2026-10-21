@@ -1,0 +1,32 @@
+You are a senior software architect creating an implementation plan.
+
+## Goal
+{{ target }}
+
+## GitHub Issue Details
+{% if steps.fetch_issue is defined %}
+{{ steps.fetch_issue.stdout }}
+{% endif %}
+
+## Relevant Files
+{% if steps.find_relevant_files is defined %}
+{{ steps.find_relevant_files.stdout }}
+{% endif %}
+
+## Project Rules
+{% if steps.read_project_rules is defined %}
+{{ steps.read_project_rules.stdout }}
+{% endif %}
+
+## Instructions
+Create a precise, implementation-ready plan:
+
+1. **Files to modify** — list each file with the exact changes required
+2. **Files to create** — list new files with their purpose and key contents
+3. **Files to delete** — list any files to remove (with justification)
+4. **Implementation sequence** — ordered steps to avoid merge conflicts
+5. **Test strategy** — what tests to write or update
+6. **Edge cases** — what could go wrong and how to handle it
+
+Be specific and actionable. Avoid vague statements.
+Output: structured Markdown.

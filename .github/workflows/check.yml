@@ -1,0 +1,295 @@
+name: Check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  # CI runners are ephemeral and the workflow expects the conventional target
+  # path inside the checkout. Local cargo uses /tmp via .cargo/config.toml to
+  # keep developer workspaces from growing huge target/ directories.
+  CARGO_TARGET_DIR: target
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Build, test, clippy, audits
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: minion
+          POSTGRES_PASSWORD: minion_secret
+          POSTGRES_DB: minion_engine
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U minion -d minion_engine"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://minion:minion_secret@localhost:5432/minion_engine
+      STEPYARD_HARNESS_DATABASE_URL: postgres://minion:minion_secret@localhost:5432/minion_engine
+      STEPYARD_SESSION_DATABASE_URL: postgres://minion:minion_secret@localhost:5432/minion_engine
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs-only change
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          docs_only=true
+          changed=""
+          # `before` is all zeros on a new branch and points outside the
+          # history after a force-push; `git diff` would then abort the job.
+          # Fall back to running the full Rust suite in both cases.
+          if [[ -n "$base" && ! "$base" =~ ^0+$ ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            changed="$(git diff --name-only "$base" "$head")"
+          fi
+          if [[ -z "$changed" ]]; then
+            docs_only=false
+          else
+            while IFS= read -r path; do
+              case "$path" in
+                *.md|docs/*|_bmad-output/*|.hive/*|AGENTS.md|PROMPT.md|features.md)
+                  ;;
+                *)
+                  docs_only=false
+                  ;;
+              esac
+            done <<< "$changed"
+          fi
+
+          echo "$changed"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+      - name: Skip Rust checks for docs-only change
+        if: steps.changes.outputs.docs_only == 'true'
+        run: echo "Only docs/planning files changed; skipping Rust build/test/clippy/audits."
+
+      - name: Install Rust toolchain
+        if: steps.changes.outputs.docs_only != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # `ubuntu-latest` ships ~14 GiB free; restoring our cargo cache plus
+      # building the workspace `target/` from scratch overflows that. The
+      # runner dies mid-job with "No space left on device" before even
+      # flushing its own logs. `free-disk-space` reclaims ~25 GiB by
+      # removing pre-installed Android SDK / .NET / Haskell / Boost /
+      # Swift tooling we never use here.
+      - name: Free disk space
+        if: steps.changes.outputs.docs_only != 'true'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
+      # Cache dependency sources only. Caching `target/` made the cache archive
+      # grow past 5 GiB and repeatedly left PR checks stuck in the restore
+      # step before the build even started. The runner has enough disk after
+      # the cleanup step to build from scratch; keeping `target/` out of the
+      # cache makes CI slower but predictable.
+      - name: Cache Cargo registry
+        if: steps.changes.outputs.docs_only != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-v2-
+
+      - name: Build workspace
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo build --workspace --all-targets
+
+      - name: Rustfmt check
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo fmt --all -- --check
+
+      - name: Run tests
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo test --workspace
+
+      - name: Clippy (deny warnings)
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Round 3 Story 5 — architecture §G-gates.
+      #
+      # `scripts/audit-patterns.sh` runs the ripgrep-based gates:
+      #   G1 env-value leak          (blocking)
+      #   G2 secret field via %       (blocking)
+      #   G3 shell-string joining     (blocking)
+      #   G5 Other(...) outside classifier (blocking)
+      #   Rule7a real sleep in tests  (blocking)
+      #
+      # `cargo xtask audit-emit-before-io` runs the G4 syn AST walker as a
+      # blocking gate. Low-level wrapper sites may use an explicit
+      # `audit: emit-before-io exempt - reason: ...` comment when their caller
+      # owns the persistence boundary.
+      - name: Ensure ripgrep is installed
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
+          rg --version
+
+      - name: Pattern audits (blocking)
+        if: steps.changes.outputs.docs_only != 'true'
+        run: scripts/audit-patterns.sh
+
+      - name: Emit-before-IO audit (G4 blocking)
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo xtask audit-emit-before-io
+
+  sqlite-lite-smoke:
+    name: SQLite Lite smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs-only change
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          docs_only=true
+          changed=""
+          # `before` is all zeros on a new branch and points outside the
+          # history after a force-push; `git diff` would then abort the job.
+          # Fall back to running the full Rust suite in both cases.
+          if [[ -n "$base" && ! "$base" =~ ^0+$ ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            changed="$(git diff --name-only "$base" "$head")"
+          fi
+          if [[ -z "$changed" ]]; then
+            docs_only=false
+          else
+            while IFS= read -r path; do
+              case "$path" in
+                *.md|docs/*|_bmad-output/*|.hive/*|AGENTS.md|PROMPT.md|features.md)
+                  ;;
+                *)
+                  docs_only=false
+                  ;;
+              esac
+            done <<< "$changed"
+          fi
+
+          echo "$changed"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+      - name: Skip SQLite checks for docs-only change
+        if: steps.changes.outputs.docs_only == 'true'
+        run: echo "Only docs/planning files changed; skipping SQLite Lite Rust checks."
+
+      - name: Install Rust toolchain
+        if: steps.changes.outputs.docs_only != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Free disk space
+        if: steps.changes.outputs.docs_only != 'true'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
+      - name: Cache Cargo registry
+        if: steps.changes.outputs.docs_only != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-v2-
+
+      - name: Check SQLite Lite CLI profile
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo check -p stepyard-engine --no-default-features --features sqlite
+
+      - name: Run SQLite Lite CLI e2e smoke
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo test -p stepyard-engine --test cli_lite_smoke --no-default-features --features sqlite
+
+      - name: Test SQLite session backend
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo test -p stepyard-session --no-default-features --features sqlite
+
+      - name: Clippy SQLite session backend
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo clippy -p stepyard-session --all-targets --no-default-features --features sqlite -- -D warnings
+
+  typescript:
+    name: TypeScript build and tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build API
+        run: npm run build --workspace @stepyard/api
+
+      - name: Build web
+        run: npm run build --workspace @stepyard/web
+
+      - name: Run API tests
+        run: npm run test --workspace @stepyard/api

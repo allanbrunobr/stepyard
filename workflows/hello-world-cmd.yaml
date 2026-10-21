@@ -1,0 +1,15 @@
+name: hello-world-cmd
+description: "cmd-only smoke workflow for the v2 engine (Story 2.4)"
+
+steps:
+  - name: greet
+    type: cmd
+    run: "echo Hello from v2 engine"
+
+  - name: show_pwd
+    type: cmd
+    run: "pwd"
+
+  - name: done
+    type: cmd
+    run: "echo All done."

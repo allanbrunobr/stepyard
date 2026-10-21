@@ -1,0 +1,91 @@
+# ============================================================
+# fix-test.yaml — Generic Test Fix Workflow
+# ============================================================
+#
+# Usage:
+#   stepyard execute workflows/fix-test.yaml --engine v1 -- <PR_NUMBER>
+#
+#   Requires --engine v1: it uses {{ stack.* }} and {{ prompts.* }},
+#   which the default v2 engine does not render yet.
+#
+# What it does:
+#   1. Checks out the PR branch
+#   2. Detects the project stack (Rust, Java, React, Python, etc.)
+#   3. Installs dependencies using the stack-specific install command
+#   4. Runs the stack-specific test tool
+#   5. If tests fail, uses an AI agent with the stack-specific prompt to fix them
+#   6. Repeats test + fix up to 3 times
+#   7. Commits and pushes the fix
+#
+# Requirements:
+#   - Stack detection and prompt registry configured (registry.yaml)
+#   - Stack tools: {{ stack.tools.install }}, {{ stack.tools.test }}
+#   - Prompt template: {{ prompts.fix-test }} (resolved from registry)
+# ============================================================
+
+name: fix-test
+version: 1
+description: "Auto-detect project stack and fix test failures using stack-specific tools and prompts"
+
+# Only overrides — defaults inherited from ~/.stepyard/defaults.yaml
+config:
+  global:
+    timeout: 900s
+  cmd:
+    timeout: 300s
+
+scopes:
+  test_fix:
+    steps:
+      - name: run_tests
+        type: cmd
+        run: |
+          {{ stack.tools.test }} 2>&1
+        config:
+          fail_on_error: false
+          timeout: 300s
+
+      - name: check_tests
+        type: gate
+        condition: "{{ steps.run_tests.exit_code == 0 }}"
+        on_pass: break
+        message: "Tests passed"
+
+      - name: fix_tests
+        type: agent
+        prompt: "{{ prompts.fix-test }}"
+        config:
+          timeout: 300s
+
+steps:
+  # 1. Checkout the PR branch
+  - name: checkout
+    type: cmd
+    run: |
+      gh pr checkout {{ target }}
+
+  # 2. Install dependencies using the stack-specific install command
+  - name: install
+    type: cmd
+    run: "{{ stack.tools.install }} 2>&1"
+    config:
+      fail_on_error: false
+      timeout: 300s
+
+  # 3. Run tests + fix loop (up to 3 iterations)
+  - name: test_gate
+    type: repeat
+    scope: test_fix
+    max_iterations: 3
+
+  # 4. Commit the fix
+  - name: commit
+    type: cmd
+    run: "git add -A && git diff --cached --quiet || git commit -m 'fix(tests): resolve test failures [{{ stack.name }}]'"
+    config:
+      fail_on_error: false
+
+  # 5. Push the fix to the PR branch
+  - name: push
+    type: cmd
+    run: "git push"

@@ -1,0 +1,69 @@
+model_list:
+  # Claude models (Anthropic)
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-opus
+    litellm_params:
+      model: anthropic/claude-opus-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # OpenAI models (when API key provided)
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Google Gemini (when API key provided)
+  - model_name: gemini-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GOOGLE_API_KEY
+  - model_name: gemini-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GOOGLE_API_KEY
+
+  # Fallback routing: code-review uses best available
+  - model_name: best-for-code
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+    model_info:
+      description: "Primary model for code review and analysis"
+
+  # Budget-friendly: docs and reports
+  - model_name: budget-friendly
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GOOGLE_API_KEY
+    model_info:
+      description: "Cost-effective model for documentation and reports"
+
+router_settings:
+  routing_strategy: simple-shuffle  # load balance between same-name models
+  num_retries: 2
+  timeout: 300
+  allowed_fails: 2
+  fallbacks:
+    - claude-sonnet: [gpt-4o, gemini-pro]
+    - gpt-4o: [claude-sonnet, gemini-pro]
+    - gemini-pro: [claude-sonnet, gpt-4o]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  forward_client_headers_to_llm_api: true
+
+litellm_settings:
+  success_callback: ["langfuse"]  # optional: enable when Langfuse is added
+  drop_params: true               # drop unsupported params instead of erroring
+  set_verbose: false

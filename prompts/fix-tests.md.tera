@@ -1,0 +1,11 @@
+Fix ONLY the test failures shown below.
+
+Rules:
+- Do NOT change test expectations unless the test is clearly testing the wrong thing
+- Do NOT delete tests or mark them as skipped
+- Do NOT add new features
+- Fix only what is causing the failures
+- If a test expectation needs to change, add a comment explaining why
+
+## Test Output
+{{ steps.test.stdout }}

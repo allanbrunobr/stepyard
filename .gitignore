@@ -1,0 +1,32 @@
+/target
+node_modules/
+dist/
+
+# macOS AppleDouble metadata files (created by tar on macOS)
+._*
+.DS_Store
+
+# Environment secrets — use .env.example as template
+.env
+
+# Node
+node_modules/
+
+# Local agent/editor state
+.claude/
+.mcp.json
+.vscode/
+territory_map.json
+
+# TypeScript incremental build artifacts
+*.tsbuildinfo
+
+# Agent session artifacts (worktree/dispatch runs)
+/.dispatch
+/.done
+/PROMPT.md
+/VERIFICATION_REPORT.md
+/WORKTREE_COMPLETE.md
+
+# Stepyard runtime artifacts (session logs, v2 worktrees)
+/.stepyard/

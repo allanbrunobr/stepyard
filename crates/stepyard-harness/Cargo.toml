@@ -1,0 +1,71 @@
+[package]
+name = "stepyard-harness"
+version = "0.1.0"
+edition = "2021"
+description = "The harness loop of Stepyard v2 — Engine::step / resume / cancel over a SandboxLifecycle and a Session"
+license = "MIT"
+authors = ["Allan Bruno"]
+
+[dependencies]
+stepyard-core = { path = "../stepyard-core" }
+stepyard-session = { path = "../stepyard-session", default-features = false }
+stepyard-sandbox-orchestrator = { path = "../stepyard-sandbox-orchestrator", default-features = false }
+
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Round 3 Story 1 commit 2: `Workflow::try_from_yaml` needs `serde_yaml` at
+# runtime so callers outside tests can parse workflow YAML, and wraps it
+# with `serde_path_to_error::deserialize` so a typed-field failure (e.g.
+# `timeout: 30`) lands in `EngineError::InvalidWorkflowField { path, .. }`
+# instead of the opaque `invalid type …` surface serde_yaml emits by default.
+serde_yaml = "0.9"
+serde_path_to_error = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+tracing = "0.1"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-native-tls",
+    "uuid",
+    "chrono",
+] }
+# PR 2 of Task #31 — harness-local Tera renderer for gate conditions and
+# cross-step template refs (`{{ steps.X.stdout }}`, `{{ target }}`, `{{ vars.* }}`).
+# Matches the `tera = "1"` pin in the workspace root so Cargo dedupes against
+# the v1 engine's template module at `src/engine/template.rs`.
+tera = "1"
+# PR 4 of Task #31 (commit 2) — Rhai embedded scripting engine for the
+# `script` step type. Matches the `rhai = "1"` pin in the workspace root so
+# Cargo dedupes against v1 engine's script module (`src/steps/script.rs`).
+rhai = "1"
+# Issue #59 — `process_group` module needs `libc::kill` with a negative PID
+# to deliver SIGKILL to a whole Unix process group (the agent CLI plus any
+# descendants it forked). Tokio's `Child::Drop` only SIGKILLs the leader.
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util", "rt-multi-thread", "macros"] }
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-native-tls",
+    "postgres",
+    "uuid",
+    "chrono",
+    "json",
+] }
+# Story 2.2 — integration test spawns the `minion` bin; `wait-timeout` gives
+# `std::process::Child::wait_timeout` for a bounded wait (Rule 7b semantic
+# equivalent to `assert_cmd`'s `.timeout(..)`, which doesn't apply to a
+# hand-spawned `std::process::Child`).
+assert_cmd = "2"
+tempfile = "3"
+wait-timeout = "0.2"
+
+[features]
+default = ["postgres"]
+postgres = ["stepyard-session/postgres", "sqlx/postgres"]
+sqlite = ["stepyard-session/sqlite", "sqlx/sqlite"]
+
+[lints]
+workspace = true

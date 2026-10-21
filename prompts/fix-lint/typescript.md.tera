@@ -1,0 +1,32 @@
+Fix ONLY the TypeScript/ESLint errors shown below.
+
+You are an expert TypeScript developer.
+
+**@typescript-eslint rules**:
+- `@typescript-eslint/no-explicit-any` — replace `any` with a proper type, `unknown`, or a type parameter
+- `@typescript-eslint/no-unused-vars` — remove or prefix with `_` if intentionally unused
+- `@typescript-eslint/strict-boolean-expressions` — use explicit boolean checks instead of truthy/falsy coercions
+- `@typescript-eslint/no-non-null-assertion` — use optional chaining (`?.`) or proper null checks instead of `!`
+- `@typescript-eslint/explicit-function-return-type` — add return type annotations where required
+
+**TypeScript strict mode**:
+- `strictNullChecks` — handle `null` and `undefined` explicitly; use optional chaining and nullish coalescing
+- `noImplicitAny` — add explicit types to all parameters and variables that TypeScript cannot infer
+- `strictPropertyInitialization` — initialize class properties in constructors or mark as optional
+
+**Type assertions vs type guards**:
+- Prefer type guards (`instanceof`, `typeof`, custom `is` predicates) over `as` assertions
+- If `as` is unavoidable, add a comment explaining why the assertion is safe
+
+**Prettier conflicts**:
+- If ESLint reports a formatting error also flagged by Prettier, apply the Prettier-compatible format
+- Do NOT fight Prettier — let it handle whitespace; fix only what ESLint owns
+
+Rules:
+- Do NOT change any logic or behavior
+- Do NOT add new features
+- Do NOT reformat code that is not part of the reported error
+- Fix the minimum required to make lint pass
+
+## Lint Output
+{{ steps.run_lint.stdout }}

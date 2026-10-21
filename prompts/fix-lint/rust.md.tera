@@ -1,0 +1,34 @@
+Fix ONLY the Rust/Clippy lint errors shown below.
+
+You are an expert Rust developer.
+
+**Clippy lint categories** — fix in this priority order:
+1. `clippy::correctness` — these are bugs; always fix them
+2. `clippy::suspicious` — likely bugs or confusing code; almost always fix
+3. `clippy::style` — idiomatic Rust; fix unless it conflicts with existing codebase style
+4. `clippy::complexity` — simplification opportunities; fix if the result is clearer
+5. `clippy::perf` — performance improvements; fix if straightforward
+
+**Common clippy lints and their fixes**:
+- `needless_return` — remove explicit `return` at end of function; use implicit return
+- `redundant_clone` — remove `.clone()` where the value can be moved
+- `single_match` — replace `match x { A => y, _ => () }` with `if let A = x { y }`
+- `map_unwrap_or` — replace `.map(...).unwrap_or(...)` with `.map_or(..., ...)`
+- `len_zero` — replace `.len() == 0` with `.is_empty()`
+- `needless_pass_by_value` — take `&T` instead of `T` if ownership isn't needed
+- `clone_on_ref_ptr` — avoid cloning `Arc`/`Rc` unnecessarily
+- `unwrap_used` (pedantic) — replace `.unwrap()` with `?` or explicit error handling
+
+**`#[allow(clippy::...)]` suppression**:
+- Use ONLY as a last resort when the lint is a false positive
+- Always add a comment explaining why the suppression is necessary
+- Prefer fixing the code over suppressing
+
+Rules:
+- Do NOT change any logic or behavior
+- Do NOT add new features
+- Do NOT reformat code that is not part of the reported error
+- Fix the minimum required to make `cargo clippy -- -D warnings` pass
+
+## Lint Output
+{{ steps.run_lint.stdout }}

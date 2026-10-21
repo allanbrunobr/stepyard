@@ -1,0 +1,176 @@
+[workspace]
+members = [
+    ".",
+    "crates/stepyard-core",
+    "crates/stepyard-session",
+    "crates/stepyard-sandbox-orchestrator",
+    "crates/stepyard-harness",
+    "xtask",
+]
+# `xtask` is an internal task runner (Round 3 Story 5 G4 walker today,
+# future scaffolding helpers). Excluding it from `default-members` is a
+# local-dev ergonomics choice: bare `cargo build` / `cargo test` /
+# `cargo clippy` skip the syn/proc-macro2 dep tree xtask pulls in, so
+# inner-loop compiles stay lean. CI keeps `--workspace` on the main
+# build/test/clippy steps (see .github/workflows/check.yml), which means
+# xtask itself is compiled, tested, and clippy-checked on every PR —
+# drift in the xtask crate is caught by CI the same as any other member.
+# The `cargo xtask …` invocation in CI is how we *run* the audit binary
+# after building it, not a workaround for the default-members split.
+default-members = [
+    ".",
+    "crates/stepyard-core",
+    "crates/stepyard-session",
+    "crates/stepyard-sandbox-orchestrator",
+    "crates/stepyard-harness",
+]
+
+# Story 1.3 — force consumers of `#[non_exhaustive]` enums across the
+# workspace (most importantly `Event`, `EngineError`, `TerminationReason`
+# in stepyard-core) to handle every variant explicitly. The lint only
+# fires when a match lists all current variants without a wildcard and
+# misses one that was added later; that's exactly the silent-breakage
+# case we want to catch.
+[workspace.lints.rust]
+non_exhaustive_omitted_patterns = "deny"
+
+[lints]
+workspace = true
+
+[package]
+name = "stepyard-engine"
+version = "0.7.6"
+edition = "2021"
+# Story 1.3 AC: workspace pins ≥1.74. `non_exhaustive_omitted_patterns`
+# itself remains unstable on stable Rust (rust-lang/rust#89554) and only
+# actively fires on nightly; on stable it's a no-op the compiler logs as
+# an unknown-lint warning. MSRV is 1.82 because the existing codebase
+# uses `Option::is_none_or` (stable since 1.82).
+rust-version = "1.82"
+description = "AI workflow engine that orchestrates Claude Code CLI — automate code review, refactoring, and PR creation with YAML workflows"
+license = "MIT"
+repository = "https://github.com/allanbrunobr/stepyard"
+homepage = "https://github.com/allanbrunobr/stepyard"
+documentation = "https://github.com/allanbrunobr/stepyard#readme"
+keywords = ["ai", "workflow", "claude", "automation", "cli"]
+categories = ["command-line-utilities", "development-tools", "asynchronous"]
+readme = "README.md"
+authors = ["Allan Bruno"]
+exclude = [
+  "/Formula/",
+  "/.github/",
+  "PROMPT.md",
+  "EPICS-AND-STORIES.md",
+  "ARCHITECTURE-MINION-ENGINE.md",
+  "territory_map.json",
+]
+
+[[bin]]
+name = "stepyard"
+path = "src/main.rs"
+
+[features]
+default = ["postgres"]
+postgres = [
+    "sqlx/postgres",
+    "stepyard-session/postgres",
+    "stepyard-harness/postgres",
+    "stepyard-sandbox-orchestrator/postgres",
+]
+sqlite = [
+    "sqlx/sqlite",
+    "stepyard-session/sqlite",
+    "stepyard-harness/sqlite",
+    "stepyard-sandbox-orchestrator/sqlite",
+]
+slack = ["axum", "hmac", "sha2", "hex"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+dialoguer = "0.11"
+toml = "0.8"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Template engine
+tera = "1"
+
+# HTTP client (for events/subscribers and fallback)
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+bytes = "1"
+
+# LLM provider abstraction (18+ providers: Anthropic, OpenAI, Ollama, Google, etc.)
+rig-core = "0.32"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Terminal display
+colored = "2"
+indicatif = "0.17"
+
+# Utilities
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v5"] }
+async-trait = "0.1"
+futures = "0.3"
+dirs = "5"
+rhai = "1"
+
+# `stepyard session list --since <duration>` (Story 2.5) — parses
+# human-friendly durations like `24h`, `7d` via `humantime::Duration`'s
+# `FromStr`, so clap can bind directly without a custom `value_parser`.
+humantime = "2"
+
+# Dynamic plugin loading
+libloading = "0.8"
+
+# Stable contract types (Epic 2 Story 2.1)
+stepyard-core = { path = "crates/stepyard-core" }
+
+# Session persistence (Epic 1 Story 1.4)
+stepyard-session = { path = "crates/stepyard-session", default-features = false }
+
+# Sandbox lifecycle abstraction (Epic 2 Story 2.2)
+stepyard-sandbox-orchestrator = { path = "crates/stepyard-sandbox-orchestrator", default-features = false }
+
+# Harness step/resume/cancel loop (Epic 2 Story 2.3)
+stepyard-harness = { path = "crates/stepyard-harness", default-features = false }
+
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-native-tls",
+    "uuid",
+    "chrono",
+] }
+
+# Slack Bot (optional — enable with --features slack)
+axum = { version = "0.8.8", features = ["json"], optional = true }
+hmac = { version = "0.12.1", optional = true }
+sha2 = { version = "0.10.9", optional = true }
+hex = { version = "0.4.3", optional = true }
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = "thin"
+
+[dev-dependencies]
+wiremock = "0.6"
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+serial_test = "3"
+proptest = "1"

@@ -1,0 +1,16 @@
+name: template-step-test
+version: 1
+description: "Workflow using a template step"
+
+steps:
+  - name: fetch
+    type: cmd
+    run: "echo 'template content'"
+
+  - name: render
+    type: template
+    prompt: "prompts/example.md"
+
+  - name: verify
+    type: cmd
+    run: "echo done"

@@ -1,0 +1,3 @@
+# Default code review prompt
+Review the diff below.
+{{ steps.get_diff.stdout }}

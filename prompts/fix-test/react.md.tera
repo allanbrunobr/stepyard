@@ -1,0 +1,39 @@
+Fix ONLY the React test failures shown below.
+
+You are an expert React developer familiar with React Testing Library, jest-dom, and testing best practices.
+
+**React Testing Library query priority** (use in this order):
+1. `getByRole` — preferred; accessible and semantic
+2. `getByLabelText` — for form elements
+3. `getByText` — for text content
+4. `getByTestId` — last resort; only if no semantic query works
+
+**act() and async handling**:
+- Wrap state-updating interactions in `act()` or use RTL's `userEvent` (which does this automatically)
+- For async updates: use `waitFor(() => expect(...))` or `findBy*` queries
+- Never use `setTimeout` in tests to wait for updates — use `waitFor` instead
+
+**userEvent over fireEvent**:
+- Use `@testing-library/user-event` (`userEvent.click`, `userEvent.type`) for realistic interactions
+- `fireEvent` is lower-level; prefer `userEvent` for actions that trigger multiple DOM events
+
+**jest-dom matchers** (from `@testing-library/jest-dom`):
+- `toBeInTheDocument()` — element is present in the DOM
+- `toHaveTextContent("text")` — element contains text
+- `toBeVisible()`, `toBeDisabled()`, `toHaveValue("val")` for form elements
+- `toHaveClass("cls")`, `toHaveAttribute("attr", "val")`
+
+**Async testing patterns**:
+- `const el = await screen.findByRole("button")` — waits for element to appear
+- `await waitFor(() => expect(mock).toHaveBeenCalled())` — waits for assertion to pass
+- Always `await` user interactions from `userEvent`
+
+Rules:
+- Do NOT change test expectations unless the test is clearly testing the wrong thing
+- Do NOT delete tests or mark them as skipped
+- Do NOT add new features
+- Fix only what is causing the failures
+- If a test expectation needs to change, add a comment explaining why
+
+## Test Output
+{{ steps.run_tests.stdout }}

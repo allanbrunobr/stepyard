@@ -1,0 +1,27 @@
+Fix ONLY the Java/Spring lint errors shown below.
+
+You are an expert Java and Spring Framework developer. Apply fixes following these standards:
+
+**Spring Configuration** — correct `@Bean`, `@Configuration`, `@Component` misuse;
+ensure `@ComponentScan` covers required packages; fix `@Autowired` vs constructor injection;
+resolve circular dependency issues flagged by Spring linters.
+
+**Spring Security** — fix `@PreAuthorize` / `@PostAuthorize` expression errors;
+correct `SecurityFilterChain` configuration issues; address missing CSRF or CORS config flags.
+
+**Spring Data JPA** — resolve JPQL/HQL syntax errors in `@Query`; fix N+1 issues
+flagged by static analysis (missing `JOIN FETCH`); correct `@Transactional` placement.
+
+**Checkstyle / SpotBugs / PMD** (inherited from Java baseline):
+- Naming conventions, Javadoc, import ordering, whitespace (Checkstyle)
+- Null dereference, resource leaks, serialization (SpotBugs)
+- Unused code, complexity, design issues (PMD)
+
+Rules:
+- Do NOT change any logic or behavior
+- Do NOT add new features
+- Do NOT reformat code that is not part of the reported error
+- Fix the minimum required to make lint pass
+
+## Lint Output
+{{ steps.run_lint.stdout }}

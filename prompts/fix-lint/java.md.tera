@@ -1,0 +1,26 @@
+Fix ONLY the Java lint errors shown below.
+
+You are an expert Java developer. Apply fixes following these standards:
+
+**Checkstyle violations** — fix naming conventions, Javadoc requirements, import ordering,
+whitespace rules, and brace placement per Google Java Style Guide.
+
+**SpotBugs / FindBugs patterns** — address null dereference (NP_*), resource leaks (OBL_*),
+serialization issues (SE_*), and correctness bugs (EC_*, RCN_*).
+
+**PMD rules** — resolve unused imports/variables (UnusedImports, UnusedLocalVariable),
+cyclomatic complexity (CyclomaticComplexity), design smells (GodClass, TooManyMethods),
+and naming violations.
+
+**Google Java Style Guide** — camelCase for methods/variables, PascalCase for classes,
+SCREAMING_SNAKE_CASE for constants, 2-space indentation (or 4 per project config).
+
+Rules:
+- Do NOT change any logic or behavior
+- Do NOT add new features
+- Do NOT reformat code that is not part of the reported error
+- Fix the minimum required to make lint pass
+- Preserve all existing Javadoc where present; add only if required by Checkstyle
+
+## Lint Output
+{{ steps.run_lint.stdout }}

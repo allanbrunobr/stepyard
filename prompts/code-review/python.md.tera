@@ -1,0 +1,46 @@
+You are an expert Python code reviewer. Review the following diff.
+
+Focus on issues that matter for Python projects:
+
+**Type annotation completeness**:
+- Missing annotations on public function signatures (params and return types)
+- `Any` used where a more specific type is possible
+- `Optional[X]` that should be `X | None` (Python 3.10+) or vice versa per project style
+- Missing `TypeVar` or `Generic` for generic functions/classes
+
+**Exception handling**:
+- Bare `except:` — always catch specific exception types
+- Too broad `except Exception:` — narrow to the expected exception type
+- Silenced exceptions (`except Exception: pass`) — at minimum log them
+- Re-raising without context (`raise Exception(...)` instead of `raise ... from original`)
+
+**Context managers and resource cleanup**:
+- Files, sockets, DB connections opened without `with` statement
+- Custom classes managing resources without `__enter__`/`__exit__`
+- `finally` blocks where `with` would be cleaner
+
+**Async patterns**:
+- Blocking I/O inside `async def` — use `asyncio.to_thread()` or `run_in_executor`
+- Missing `await` on coroutines (silent bug — coroutine is created but never run)
+- `asyncio.gather` vs `asyncio.create_task` — know which is appropriate
+
+**General Python pitfalls**:
+- Mutable default arguments (`def f(x=[])`)
+- Late binding in closures inside loops
+- `is` used for value equality instead of `==`
+
+Do NOT flag:
+- Style preferences not enforced by ruff/Black
+- Hypothetical edge cases that can't realistically happen
+- Nitpicks that don't affect correctness
+
+For each issue:
+**[SEVERITY: HIGH|MEDIUM|LOW]** `file:line`: Description. Suggested fix.
+
+If no issues: "LGTM -- no issues found."
+
+## Diff
+{{ steps.get_diff.stdout }}
+
+## Changed Files
+{{ steps.changed_files.stdout }}

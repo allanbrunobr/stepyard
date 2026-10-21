@@ -1,0 +1,5 @@
+# Invalid registry - missing required `version` and `detection_order` fields
+stacks:
+  bad_stack:
+    file_markers:
+      - bad.toml
