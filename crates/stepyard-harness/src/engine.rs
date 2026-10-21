@@ -2666,7 +2666,10 @@ mod proxy_env_tests {
     #[test]
     fn apply_anthropic_proxy_env_replaces_real_key() {
         let mut env = HashMap::from([
-            ("ANTHROPIC_API_KEY".into(), "fake-anthropic-key-for-tests".into()),
+            (
+                "ANTHROPIC_API_KEY".into(),
+                "fake-anthropic-key-for-tests".into(),
+            ),
             ("GH_TOKEN".into(), "fake-gh-token-for-tests".into()),
         ]);
         let proxy = AnthropicProxyEnv {
@@ -2682,7 +2685,10 @@ mod proxy_env_tests {
             env.get("ANTHROPIC_BASE_URL").map(String::as_str),
             Some("http://host.docker.internal:4242")
         );
-        assert_eq!(env.get("GH_TOKEN").map(String::as_str), Some("fake-gh-token-for-tests"));
+        assert_eq!(
+            env.get("GH_TOKEN").map(String::as_str),
+            Some("fake-gh-token-for-tests")
+        );
     }
 }
 
