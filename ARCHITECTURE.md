@@ -1,7 +1,7 @@
 # Stepyard v2 — Architecture
 
 **Status:** Draft (v2.0.0 pending)
-**Author:** Winston (BMAD architect)
+**Author:** Allan Bruno (allanbrunobr)
 **Date:** 2026-04-13
 **Review cadence:** trimestral (ADR-010 [ref-2])
 

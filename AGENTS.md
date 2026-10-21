@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This workspace is a Rust CLI and library monorepo with a TypeScript dashboard. Rust source lives in `src/`; reusable crates are under `crates/` (`stepyard-core`, `stepyard-session`, `stepyard-sandbox-orchestrator`, `stepyard-harness`). Rust integration tests live in `tests/` and crate-specific `*/tests/` directories. Dashboard/API code lives in `packages/web` and `packages/api`. Workflow examples are in `workflows/`; docs and planning artifacts are in `docs/`, `_bmad-output/`, `.hive/`, and root Markdown files. Internal tooling lives in `xtask/`.
+This workspace is a Rust CLI and library monorepo with a TypeScript dashboard. Rust source lives in `src/`; reusable crates are under `crates/` (`stepyard-core`, `stepyard-session`, `stepyard-sandbox-orchestrator`, `stepyard-harness`). Rust integration tests live in `tests/` and crate-specific `*/tests/` directories. Dashboard/API code lives in `packages/web` and `packages/api`. Workflow examples are in `workflows/`; user and design docs are in `docs/` and root Markdown files. Internal tooling lives in `xtask/`.
 
 ## Build, Test, and Development Commands
 
@@ -26,7 +26,7 @@ Place focused Rust tests near the crate they exercise, e.g. `crates/stepyard-har
 
 ## Commit & Pull Request Guidelines
 
-Use Conventional Commits with scopes, matching project history: `feat(harness): ...`, `fix(core): Story 1.1 ...`, `chore(bmad): ...`. Reference BMAD story/feature IDs when applicable. PRs should include a concise behavior summary, linked issue/story, migration or configuration notes, and exact validation commands run. Include screenshots only for dashboard/UI changes.
+Use Conventional Commits with scopes, e.g. `feat(harness): ...`, `fix(core): ...`, `docs(readme): ...`. PRs should include a concise behavior summary, linked issue/story, migration or configuration notes, and exact validation commands run. Include screenshots only for dashboard/UI changes.
 
 ## Security & Configuration Tips
 

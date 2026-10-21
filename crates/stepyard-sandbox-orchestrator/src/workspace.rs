@@ -143,11 +143,8 @@ pub enum WorkspaceError {
     TargetBranchNotFound { target: String },
     #[error("merge conflict in files: {files:?}")]
     MergeConflict { files: Vec<String> },
-    #[error("workspace io failed: {source}")]
-    Io {
-        #[from]
-        source: std::io::Error,
-    },
+    #[error("workspace io failed: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Contract for preparing, finalizing, and pruning isolated git worktrees.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Round 3 Story 5 — pattern audits (blocking).
 #
-# Source-of-truth regexes: _bmad-output/sandcastle-features/architecture.md §G-gates.
+# Audit gates are described in CONTRIBUTING.md ("Audit gates").
 # Re-copy here verbatim — if architecture.md changes, update both sides in lockstep
 # (there is no import mechanism from the spec doc to this script).
 #

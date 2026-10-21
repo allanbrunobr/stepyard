@@ -1,8 +1,8 @@
 //! Regression: after a step times out, a reloaded engine must NOT advance
 //! the workflow. `progress_from_log()` must recognise `step_failed` (emitted
 //! alongside `step_timeout_fired`) as terminal — this is what closes the
-//! "timed-out session advanced after reload" gap called out in the BMAD
-//! review (architecture.md §D9 + NFR13).
+//! "timed-out session advanced after reload" gap found during the
+//! architecture review (crash-safe replay).
 //!
 //! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
 

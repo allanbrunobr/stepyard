@@ -71,7 +71,7 @@ jobs:
           else
             while IFS= read -r path; do
               case "$path" in
-                *.md|docs/*|_bmad-output/*|.hive/*|AGENTS.md|PROMPT.md|features.md)
+                *.md|docs/*)
                   ;;
                 *)
                   docs_only=false
@@ -208,7 +208,7 @@ jobs:
           else
             while IFS= read -r path; do
               case "$path" in
-                *.md|docs/*|_bmad-output/*|.hive/*|AGENTS.md|PROMPT.md|features.md)
+                *.md|docs/*)
                   ;;
                 *)
                   docs_only=false

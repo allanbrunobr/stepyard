@@ -1,7 +1,7 @@
 //! `cargo xtask` — workspace task runner.
 //!
 //! Round 3 Story 5 — today the only subcommand is `audit-emit-before-io`,
-//! the G4 gate from `_bmad-output/sandcastle-features/architecture.md`.
+//! the G4 (emit-before-IO) gate described in CONTRIBUTING.md.
 //! Additional audits (G1–G3 are a ripgrep script; G5 ditto; G6 is
 //! per-crate compile-time tests) live elsewhere — this crate exists for
 //! checks that need a real AST.
