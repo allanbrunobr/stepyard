@@ -315,7 +315,7 @@ The repository has a TypeScript dashboard for workflow runs, costs, and remote
 dispatch (`packages/api`, Express + PostgreSQL; `packages/web`, React + Vite).
 
 ```bash
-cp .env.example .env    # set API_SECRET
+cp .env.example .env    # replace every change-me value
 npm install
 npm run dev             # Docker Compose: Postgres + API + web + LiteLLM
 ```

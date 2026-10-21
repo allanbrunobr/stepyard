@@ -815,7 +815,7 @@ function buildSshCommand(sshHost: string, stepyardArgs: string[], env: NodeJS.Pr
   for (const entry of forward) {
     const [target, source] = entry.includes(':') ? entry.split(':', 2) : [entry, entry];
     const value = process.env[source];
-    if (value != null) {
+    if (value) {
       exports.push(`${target}=${shellQuote(value)}`);
     }
   }
