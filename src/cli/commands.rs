@@ -560,6 +560,12 @@ async fn execute_v2(
     // spawn. Story 2.3 wires the broadcast receiver arm inside `Engine::step`.
 
     display::workflow_start(&workflow.name);
+    if uses_container_sandbox {
+        eprintln!(
+            "{}",
+            container_workspace_banner(&session_id.as_uuid().to_string())
+        );
+    }
     let wf_start = Instant::now();
 
     // Drive the harness one step at a time so we can print start/finish lines
@@ -713,6 +719,14 @@ async fn execute_v2(
             }
         }
     }
+}
+
+/// First line of a container run: where the project goes. The copy itself
+/// happens before the first `cmd`/`agent` step; the short id is enough for
+/// `docker ps --filter name=...`.
+fn container_workspace_banner(session_uuid: &str) -> String {
+    let short: String = session_uuid.chars().take(8).collect();
+    format!("  workspace: project copied into container stepyard-session-{short}… at /workspace")
 }
 
 /// Tell the operator which files a container run changed in the project.
@@ -1847,6 +1861,14 @@ pub async fn session_list(_args: SessionListArgs) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn container_banner_names_the_session_container() {
+        assert_eq!(
+            super::container_workspace_banner("e6d18f4c-903b-47ae-92d4-edbfc3a0fe19"),
+            "  workspace: project copied into container stepyard-session-e6d18f4c… at /workspace"
+        );
+    }
+
     use super::*;
     use std::io::Write;
 

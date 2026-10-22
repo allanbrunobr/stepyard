@@ -44,6 +44,11 @@ impl ContainerHandle {
     /// Env values are not in the argv: each key is passed as `-e KEY`, so the
     /// CLI reads the value from its own environment. The caller sets those
     /// values on the CLI process. This keeps secrets out of `ps` output.
+    ///
+    /// With `user`, `HOME` is set to `/home/<user>`: the image sets
+    /// `HOME=/root`, and `docker exec --user` keeps it, so tools that write
+    /// under `$HOME` (the Claude CLI does) would fail with `EACCES`. A `HOME`
+    /// key in `env_keys` is dropped in that case for the same reason.
     pub fn exec_argv(
         &self,
         user: Option<&str>,
@@ -59,7 +64,14 @@ impl ContainerHandle {
         }
         argv.push("-w".into());
         argv.push(workdir.into());
-        let mut keys: Vec<&String> = env_keys.iter().collect();
+        if let Some(user) = user {
+            argv.push("-e".into());
+            argv.push(format!("HOME=/home/{user}"));
+        }
+        let mut keys: Vec<&String> = env_keys
+            .iter()
+            .filter(|k| user.is_none() || k.as_str() != "HOME")
+            .collect();
         keys.sort();
         for key in keys {
             argv.push("-e".into());
@@ -329,11 +341,29 @@ mod tests {
     }
 
     #[test]
+    fn exec_argv_without_user_keeps_home_from_the_step_env() {
+        let argv = handle().exec_argv(None, "/workspace", &["HOME".into()], "sh", &[]);
+        assert_eq!(
+            argv,
+            [
+                "exec",
+                "-i",
+                "-w",
+                "/workspace",
+                "-e",
+                "HOME",
+                "stepyard-session-x",
+                "sh"
+            ]
+        );
+    }
+
+    #[test]
     fn exec_argv_passes_env_keys_without_values() {
         let argv = handle().exec_argv(
             Some("stepyard"),
             "/workspace",
-            &["ZED".into(), "ANTHROPIC_API_KEY".into()],
+            &["ZED".into(), "HOME".into(), "ANTHROPIC_API_KEY".into()],
             "claude",
             &["-p".into()],
         );
@@ -346,6 +376,8 @@ mod tests {
                 "stepyard",
                 "-w",
                 "/workspace",
+                "-e",
+                "HOME=/home/stepyard",
                 "-e",
                 "ANTHROPIC_API_KEY",
                 "-e",
