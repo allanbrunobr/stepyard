@@ -2,7 +2,9 @@
 """Record the README demo as an asciicast v2 file (real commands, real output).
 
 Usage: scripts/demo/record.py OUT.cast
-Needs `stepyard` and `claude` (Claude Code, logged in) on PATH.
+Runs the workflow in a Docker sandbox: needs `stepyard` and `docker` on PATH,
+the `stepyard-sandbox:latest` image on the Docker host and ANTHROPIC_API_KEY
+in the environment (see scripts/demo/README.md for a remote Docker host).
 The demo project is copied to /tmp/stepyard-demo, so the repo is never touched.
 """
 import json, os, pty, select, shutil, subprocess, sys, time
@@ -20,7 +22,8 @@ MAX_SPINNER = 2.5
 STEPS = [
     "cat calc.py",
     "python3 -m unittest -q",
-    "stepyard execute fix-tests.yaml",
+    "stepyard execute fix-tests.yaml --sandbox-runtime docker",
+    "docker ps -a --filter name=stepyard-session",
     "git diff",
     "python3 -m unittest -q",
 ]
@@ -46,7 +49,8 @@ def main(out_path):
         events.append([round(clock, 3), "o", text])
 
     env = dict(os.environ, COLUMNS=str(COLS), LINES=str(ROWS), TERM="xterm-256color",
-               PYTHONDONTWRITEBYTECODE="1", GIT_PAGER="cat", CLICOLOR_FORCE="1")
+               PYTHONDONTWRITEBYTECODE="1", GIT_PAGER="cat", CLICOLOR_FORCE="1",
+               RUST_LOG="warn")  # hide INFO log lines (proxy start/stop)
     emit(PROMPT, 0.3)
     for cmd in STEPS:
         for ch in cmd:

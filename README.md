@@ -21,12 +21,14 @@ back at the end. See [Sandbox and API key protection](#sandbox-and-api-key-prote
 
 **A real run in the terminal:**
 
-![Stepyard runs a test, lets Claude Code fix the bug, and repeats until the tests pass](docs/assets/demo.gif)
+![Stepyard runs a test, lets Claude Code fix the bug inside a Docker container, and repeats until the tests pass](docs/assets/demo.gif)
 
 <sub>A real run of [`scripts/demo/project/fix-tests.yaml`](scripts/demo/project/fix-tests.yaml):
 a `repeat` loop runs the tests, a `gate` checks the result, and an `agent` step
-(Claude Code) fixes the code until the tests pass. This run uses the `local`
-runtime (no container). Only the agent's waiting time is shortened. See [scripts/demo](scripts/demo/README.md).</sub>
+(Claude Code) fixes the code until the tests pass. The run uses
+`--sandbox-runtime docker`: the project is copied into a container, the agent
+works there, only `calc.py` comes back and the container is gone afterwards.
+Only the agent's waiting time is shortened. See [scripts/demo](scripts/demo/README.md).</sub>
 
 ```mermaid
 flowchart LR
