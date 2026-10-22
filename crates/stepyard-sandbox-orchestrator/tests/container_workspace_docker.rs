@@ -14,6 +14,17 @@ use uuid::Uuid;
 
 const STEP_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Removes the container even when an assertion panics.
+struct RemoveOnDrop(String);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &self.0])
+            .output();
+    }
+}
+
 fn docker_enabled() -> bool {
     std::env::var("STEPYARD_TEST_DOCKER")
         .map(|v| v == "1")
@@ -49,6 +60,7 @@ async fn project_round_trips_through_the_session_container() {
     let handle = lifecycle
         .container_handle(session)
         .expect("docker has a handle");
+    let _cleanup = RemoveOnDrop(handle.name.clone());
 
     let result = timeout(STEP_TIMEOUT, async {
         handle
@@ -87,7 +99,6 @@ async fn project_round_trips_through_the_session_container() {
             .expect("copy_out")
     })
     .await;
-    let _ = lifecycle.destroy_by_session(session).await;
     let report = result.expect("round trip timed out");
 
     assert_eq!(report.deleted, vec!["gone.txt"]);
