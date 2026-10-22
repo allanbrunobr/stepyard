@@ -13,7 +13,9 @@ use stepyard_sandbox_orchestrator::{
     BranchStrategy, CreateOptions, SandboxError, SandboxLifecycle, WorkflowOutcome, Workspace,
     WorkspaceError, WorkspaceManager,
 };
-use stepyard_session::{Session, SessionError, SessionEvent, SessionId, SessionStatus};
+#[cfg(feature = "postgres")]
+use stepyard_session::SessionId;
+use stepyard_session::{Session, SessionError, SessionEvent, SessionStatus};
 use tokio::sync::broadcast;
 
 use crate::chat_exec::ChatClient;
