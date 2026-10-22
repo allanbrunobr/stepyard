@@ -14,7 +14,9 @@ global:
 
 agent:
   command: claude
-  model: claude-sonnet-4-20250514
+  # Claude Code model alias: always resolves to the current Sonnet, so a
+  # retired dated model id cannot break `agent` steps.
+  model: sonnet
   flags:
     - "-p"
     - "--output-format"
@@ -182,11 +184,8 @@ mod tests {
             defaults.chat.get("model").unwrap(),
             &yaml_str("claude-sonnet-4-20250514")
         );
-        // Agent model is set
-        assert_eq!(
-            defaults.agent.get("model").unwrap(),
-            &yaml_str("claude-sonnet-4-20250514")
-        );
+        // Agent model is the Claude Code alias
+        assert_eq!(defaults.agent.get("model").unwrap(), &yaml_str("sonnet"));
         // Provider is anthropic
         assert_eq!(
             defaults.chat.get("provider").unwrap(),
@@ -292,10 +291,7 @@ mod tests {
             &yaml_str("claude-sonnet-4-20250514")
         );
         assert_eq!(result.chat.get("provider").unwrap(), &yaml_str("anthropic"));
-        assert_eq!(
-            result.agent.get("model").unwrap(),
-            &yaml_str("claude-sonnet-4-20250514")
-        );
+        assert_eq!(result.agent.get("model").unwrap(), &yaml_str("sonnet"));
     }
 
     #[test]

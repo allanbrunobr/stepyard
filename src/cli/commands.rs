@@ -300,6 +300,100 @@ pub struct SessionListArgs {
 /// Returns `Ok(())` on successful completion. Non-zero exit codes for failed
 /// or cancelled workflows are produced by `std::process::exit` so the caller
 /// does not need to translate them.
+/// Aborts a background task when dropped (every exit path of the run loop).
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Incremental renderer for the v2 CLI progress view.
+///
+/// The harness drives one top-level step per `Engine::step()` call, so
+/// container steps (`repeat` / `map` / `call`) would otherwise show up as a
+/// single line. After each call this reads the session events it has not
+/// seen yet and prints nested steps, iteration headers and gate decisions.
+/// With `--verbose` it also prints cmd stdout/stderr (v1 parity).
+struct ScopeProgressView {
+    verbose: bool,
+    last_seq: i64,
+    current_iteration: Option<(String, u32)>,
+    pending_top_level: Option<stepyard_core::StepOutputSnapshot>,
+}
+
+impl ScopeProgressView {
+    fn new(verbose: bool) -> Self {
+        Self {
+            verbose,
+            last_seq: 0,
+            current_iteration: None,
+            pending_top_level: None,
+        }
+    }
+
+    fn render_new(&mut self, events: &[stepyard_session::SessionEvent]) {
+        use stepyard_core::Event;
+        let seen = self.last_seq;
+        for ev in events.iter().filter(|e| e.seq > seen) {
+            self.last_seq = ev.seq;
+            let Ok(event) = serde_json::from_value::<Event>(ev.payload.clone()) else {
+                continue;
+            };
+            match event {
+                Event::StepCompleted {
+                    step_name,
+                    duration_ms,
+                    output,
+                    scope_context: Some(scope),
+                    gate_outcome,
+                    ..
+                } => {
+                    self.iteration_header(&scope);
+                    match gate_outcome {
+                        Some(outcome) => display::scoped_gate(&step_name, &outcome),
+                        None => display::scoped_step_ok(&step_name, duration_ms),
+                    }
+                    if self.verbose {
+                        if let Some(out) = output {
+                            display::scoped_output(&out.stdout, &out.stderr);
+                        }
+                    }
+                }
+                Event::StepCompleted {
+                    step_type,
+                    output,
+                    scope_context: None,
+                    ..
+                } => {
+                    self.current_iteration = None;
+                    // Containers carry their scope's `outputs:` value, not
+                    // process output; only echo real cmd streams.
+                    if self.verbose && step_type == "cmd" {
+                        self.pending_top_level = output;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn iteration_header(&mut self, scope: &stepyard_core::ScopeContext) {
+        let key = (scope.container.clone(), scope.iteration);
+        if self.current_iteration.as_ref() != Some(&key) {
+            display::scoped_iteration(scope.iteration as usize);
+            self.current_iteration = Some(key);
+        }
+    }
+
+    fn flush_top_level_output(&mut self) {
+        if let Some(out) = self.pending_top_level.take() {
+            display::cmd_verbose(&out.stdout, &out.stderr);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn execute_v2(
     args: ExecuteArgs,
@@ -361,6 +455,8 @@ async fn execute_v2(
     }
 
     let store = build_store(args.no_file_logs).await?;
+    // A second handle for the live progress view (read-only replays).
+    let progress_store = store.clone();
     let session = open_session_with_store(store, &workflow.name).await?;
     let session_id = session.id();
 
@@ -454,6 +550,38 @@ async fn execute_v2(
     // between calls. Each `engine.step()` writes StepStarted + StepCompleted |
     // StepFailed to the session log and returns the outcome.
     let mut step_index = 0usize;
+    let mut scope_view = ScopeProgressView::new(args.verbose);
+    // Live progress: a background task replays the session log every
+    // 250 ms. It runs as its own task (not inside the select! below) so a
+    // slow read can never stall the engine future, e.g. while SQLite waits
+    // for the engine's own write to commit.
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::watch::channel(Vec::<stepyard_session::SessionEvent>::new());
+    let progress_poller = {
+        let store = progress_store.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(250));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                if progress_tx.is_closed() {
+                    break;
+                }
+                if let Ok(events) = store.replay(session_id).await {
+                    // Only wake the renderer when the log actually grew.
+                    progress_tx.send_if_modified(|current| {
+                        if current.last().map(|e| e.seq) == events.last().map(|e| e.seq) {
+                            false
+                        } else {
+                            *current = events;
+                            true
+                        }
+                    });
+                }
+            }
+        })
+    };
+    let _poller_guard = AbortOnDrop(progress_poller);
     loop {
         // Peek the upcoming step name from the adapted workflow — the log
         // has not been written yet for it. If we are past the end, the next
@@ -470,7 +598,25 @@ async fn execute_v2(
         // the signal line, drop the engine (releases its broadcast
         // receiver so the grace-loop's `receiver_count()` drops to zero),
         // then park this future forever so the signal-handlers arm wins.
-        let outcome = match engine.step().await {
+        // While the step runs, poll the session log so nested scope steps
+        // (repeat / map / call bodies) show up live above the spinner.
+        let step_result = {
+            let step_fut = engine.step();
+            tokio::pin!(step_fut);
+            loop {
+                tokio::select! {
+                    res = &mut step_fut => break res,
+                    Ok(()) = progress_rx.changed() => {
+                        let events = progress_rx.borrow_and_update().clone();
+                        match &pb {
+                            Some(pb) => pb.suspend(|| scope_view.render_new(&events)),
+                            None => scope_view.render_new(&events),
+                        }
+                    }
+                }
+            }
+        };
+        let outcome = match step_result {
             Ok(o) => o,
             Err(EngineError::StepFailed {
                 reason: TerminationReason::SignalReceived(signal),
@@ -489,17 +635,35 @@ async fn execute_v2(
             }
         };
 
+        // Render what happened inside the step (scope iterations, nested
+        // steps, gate decisions, and with --verbose the cmd output) from
+        // the session log, which is the engine's source of truth.
+        if matches!(
+            outcome,
+            StepOutcome::StepCompleted { .. } | StepOutcome::StepFailed { .. }
+        ) {
+            if let Some(pb) = &pb {
+                pb.finish_and_clear();
+            }
+            match progress_store.replay(session_id).await {
+                Ok(events) => scope_view.render_new(&events),
+                Err(e) => tracing::debug!(error = %e, "progress view: session replay failed"),
+            }
+        }
+
         match outcome {
             StepOutcome::StepCompleted { step_name } => {
                 if let Some(pb) = pb {
                     display::step_ok(&pb, &step_name, step_start_time.elapsed());
                 }
+                scope_view.flush_top_level_output();
                 step_index += 1;
             }
             StepOutcome::StepFailed { step_name, error } => {
                 if let Some(pb) = pb {
                     display::step_fail(&pb, &step_name, &error);
                 }
+                scope_view.flush_top_level_output();
                 eprintln!("step `{step_name}` failed: {error}");
                 std::process::exit(1);
             }
@@ -1356,7 +1520,7 @@ global:
 # AI Agent (Claude Code CLI) settings
 agent:
   command: claude
-  model: claude-sonnet-4-20250514
+  model: sonnet
   flags:
     - "-p"
     - "--output-format"

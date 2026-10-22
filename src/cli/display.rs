@@ -71,9 +71,10 @@ pub fn workflow_start(name: &str) {
 
 pub fn workflow_done(duration: Duration, step_count: usize) {
     println!(
-        "\n{} Done — {} steps in {:.1}s",
+        "\n{} Done — {} step{} in {:.1}s",
         "✓".green().bold(),
         step_count,
+        if step_count == 1 { "" } else { "s" },
         duration.as_secs_f64()
     );
 }
@@ -163,6 +164,44 @@ pub fn map_item(current: usize, total: usize, name: &str) {
         total,
         name.bold()
     );
+}
+
+/// v2 progress view: header for one iteration of a container scope.
+pub fn scoped_iteration(index: usize) {
+    println!("    {} iteration {}", "↻".cyan(), index + 1);
+}
+
+/// v2 progress view: a step inside a container scope finished.
+pub fn scoped_step_ok(name: &str, duration_ms: u64) {
+    println!(
+        "      {} {} {}",
+        "✓".green(),
+        name,
+        format!("({:.1}s)", duration_ms as f64 / 1000.0).dimmed()
+    );
+}
+
+/// v2 progress view: which branch a scoped gate took.
+pub fn scoped_gate(name: &str, outcome: &stepyard_core::GateOutcome) {
+    use stepyard_core::GateOutcome;
+    let label = match outcome {
+        GateOutcome::Continue => "continue".yellow(),
+        GateOutcome::Skip => "skip".yellow(),
+        GateOutcome::Break => "break".green(),
+        #[allow(unreachable_patterns)]
+        _ => "?".normal(),
+    };
+    println!("      {} {} → {}", "◆".magenta(), name, label);
+}
+
+/// v2 progress view: cmd output of a scoped step (only under --verbose).
+pub fn scoped_output(stdout: &str, stderr: &str) {
+    for line in stdout.lines() {
+        println!("        {} {}", "│".dimmed(), line);
+    }
+    for line in stderr.lines() {
+        println!("        {} {}", "│".red().dimmed(), line.dimmed());
+    }
 }
 
 /// Display a parallel sub-step with indentation

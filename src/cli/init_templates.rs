@@ -63,7 +63,7 @@ config:
   global:
     timeout: 600s
   agent:
-    model: claude-sonnet-4-20250514
+    model: sonnet
     permissions: skip
   cmd:
     fail_on_error: true
@@ -134,7 +134,7 @@ config:
   global:
     timeout: 300s
   agent:
-    model: claude-sonnet-4-20250514
+    model: sonnet
     permissions: skip
 
 steps:
@@ -181,7 +181,7 @@ config:
   global:
     timeout: 600s
   agent:
-    model: claude-sonnet-4-20250514
+    model: sonnet
     permissions: skip
   cmd:
     fail_on_error: false
