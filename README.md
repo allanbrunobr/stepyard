@@ -10,12 +10,24 @@ Stepyard runs AI coding workflows that you write as YAML. Each step is explicit:
 run a command, ask a model, check a condition, retry until the tests pass. The
 agent does not decide what to do next. It follows the workflow.
 
+![How Stepyard works: an issue starts a workflow, the project is copied into a separate Docker container, an agent fixes the code there until the tests pass, a pull request is opened, and the container is removed](docs/assets/how-it-works.gif)
+
+<sub>How a sandboxed run works. The API key stays on your machine; the container
+only gets a dummy token that goes through a local proxy. Today this full flow
+(project copied into the container, agent inside it) is the
+`--engine v1 --sandbox-runtime docker` path. The default v2 engine does not
+copy the project into the container yet; see
+[Known limitations of v2](#known-limitations-of-v2).
+[MP4 version](docs/assets/how-it-works.mp4).</sub>
+
+**A real run in the terminal:**
+
 ![Stepyard runs a test, lets Claude Code fix the bug, and repeats until the tests pass](docs/assets/demo.gif)
 
 <sub>A real run of [`scripts/demo/project/fix-tests.yaml`](scripts/demo/project/fix-tests.yaml):
 a `repeat` loop runs the tests, a `gate` checks the result, and an `agent` step
-(Claude Code) fixes the code until the tests pass. Only the agent's waiting time
-is shortened. See [scripts/demo](scripts/demo/README.md).</sub>
+(Claude Code) fixes the code until the tests pass. This run uses the `local`
+runtime (no container). Only the agent's waiting time is shortened. See [scripts/demo](scripts/demo/README.md).</sub>
 
 ```mermaid
 flowchart LR
