@@ -10,7 +10,7 @@ Stepyard runs AI coding workflows that you write as YAML. Each step is explicit:
 run a command, ask a model, check a condition, retry until the tests pass. The
 agent does not decide what to do next. It follows the workflow.
 
-![How Stepyard works: an issue starts a workflow, the project is copied into a separate Docker container, an agent fixes the code there until the tests pass, a pull request is opened, and the container is removed](docs/assets/how-it-works.gif)
+![How Stepyard works: an issue starts a workflow, the project is copied into a separate Docker container, an agent fixes the code there until the tests pass, a pull request is opened, the changed files are copied back, and the container is removed](docs/assets/how-it-works.gif)
 
 <sub>How a sandboxed run works. The API key stays on your machine; the container
 only gets a dummy token that goes through a local proxy. With
