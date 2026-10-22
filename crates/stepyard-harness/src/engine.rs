@@ -379,6 +379,10 @@ impl Engine {
         let Some(handle) = self.lifecycle.container_handle(session_uuid) else {
             return Ok(());
         };
+        // step() emits WorkflowStarted before the first call, creation is
+        // idempotent (reuse by session name), and startup reconcile removes
+        // containers left by a crash.
+        // audit: emit-before-io exempt - reason: see the comment above.
         self.lifecycle
             .reuse_or_create_with_options(session_uuid, &self.config.create_options)
             .await
@@ -487,6 +491,10 @@ impl Engine {
             }
         });
         let session_uuid = *self.session.id().as_uuid();
+        // audit: emit-before-io exempt - reason: the container is removed
+        // only after its changes are on the host; callers (finalise_success /
+        // finalise_fail) own the terminal event, and a crash here leaves an
+        // orphan container that startup reconcile removes.
         let _ = self.lifecycle.destroy_by_session(session_uuid).await;
     }
 
