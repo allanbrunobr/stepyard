@@ -706,8 +706,7 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
   //   1. `STEPYARD_DISPATCH_SSH_HOST` set → SSH back to host, run stepyard there
   //      (used when the API runs in a container that doesn't have stepyard installed)
   //   2. otherwise → spawn `stepyard` directly from $PATH
-  // NOTE: Default binary name is still 'minion' until the VPS migration flips
-  // the installed binary — override with STEPYARD_BINARY=stepyard once deployed.
+  // Override the binary with STEPYARD_BINARY.
   // Log file for the detached process. Persists after the api request returns
   // so operators can inspect failures post-hoc. Written to /tmp; container-local.
   const logDir = process.env.STEPYARD_DISPATCH_LOG_DIR || '/tmp';
@@ -725,7 +724,7 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
   const sshHost = process.env.STEPYARD_DISPATCH_SSH_HOST;
   const [binary, args] = sshHost
     ? buildSshCommand(sshHost, stepyardArgs, dispatchEnv)
-    : [process.env.STEPYARD_BINARY || 'minion', stepyardArgs];
+    : [process.env.STEPYARD_BINARY || 'stepyard', stepyardArgs];
 
   logger.info(
     { binary, args, workflow, target, repo, branch, sshHost: !!sshHost, runId, logPath },
@@ -830,9 +829,8 @@ function buildSshCommand(sshHost: string, stepyardArgs: string[], env: NodeJS.Pr
   ].join(' && ');
   // Use an absolute path so we don't rely on the login shell's PATH order.
   // Some hosts have multiple stepyard binaries (e.g. ~/.cargo/bin vs /usr/local/bin)
-  // which may be different versions. Default still points at the legacy
-  // /usr/local/bin/minion path; override STEPYARD_HOST_BINARY post-VPS-migration.
-  const stepyardBin = process.env.STEPYARD_HOST_BINARY || '/usr/local/bin/minion';
+  // which may be different versions. Override with STEPYARD_HOST_BINARY.
+  const stepyardBin = process.env.STEPYARD_HOST_BINARY || '/usr/local/bin/stepyard';
   const remoteCmd = `${prep} && ${exports.join(' ')} exec ${shellQuote(stepyardBin)} ${stepyardArgs.map(shellQuote).join(' ')}`;
   // ssh concatenates remote argv with spaces before feeding it to the remote
   // shell, which then re-parses. Pass the bash invocation as ONE argument so

@@ -6,7 +6,7 @@
 //! in a downstream crate (`stepyard-session`, `stepyard-harness`,
 //! `stepyard-sandbox-orchestrator`).
 //!
-//! See `minion-engine/ARCHITECTURE.md` § "stepyard-core".
+//! See `ARCHITECTURE.md` § "stepyard-core".
 
 pub mod duration;
 pub mod env;

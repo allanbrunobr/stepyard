@@ -43,7 +43,7 @@ config:
   global:
     sandbox:
       enabled: true
-      image: "minion-engine/base:latest"   # optional — defaults to the built-in image
+      image: "stepyard-sandbox:latest"   # optional — defaults to the built-in image
       workspace: "/workspace"              # mount point inside the container
       network:
         allow: ["api.anthropic.com", "api.github.com"]

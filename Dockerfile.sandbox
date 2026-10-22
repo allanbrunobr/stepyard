@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────────
 # Stepyard — Reference Sandbox Image
 #
-# Build:  docker build -f Dockerfile.sandbox -t minion-sandbox:latest .
+# Build:  docker build -f Dockerfile.sandbox -t stepyard-sandbox:latest .
 # Usage:  stepyard execute workflow.yaml  (sandbox is ON by default)
 #
 # This image contains every tool needed by the standard workflow
@@ -53,13 +53,13 @@ RUN git config --global user.name "Stepyard" \
 
 # ── Non-root user for agent steps ──────────────────────────
 # Claude CLI refuses --dangerously-skip-permissions as root.
-# Agent steps run as "minion" via docker exec --user minion.
-RUN useradd -m -u 1000 -s /bin/bash minion \
-    && cp -r /root/.cargo /home/minion/.cargo \
-    && chown -R minion:minion /home/minion/.cargo \
-    && mkdir -p /home/minion/.claude /home/minion/.config/gh \
-    && chown -R minion:minion /home/minion
+# Agent steps run as "stepyard" via docker exec --user stepyard.
+RUN useradd -m -u 1000 -s /bin/bash stepyard \
+    && cp -r /root/.cargo /home/stepyard/.cargo \
+    && chown -R stepyard:stepyard /home/stepyard/.cargo \
+    && mkdir -p /home/stepyard/.claude /home/stepyard/.config/gh \
+    && chown -R stepyard:stepyard /home/stepyard
 
-ENV PATH="/home/minion/.cargo/bin:/root/.cargo/bin:${PATH}"
+ENV PATH="/home/stepyard/.cargo/bin:/root/.cargo/bin:${PATH}"
 
 WORKDIR /workspace

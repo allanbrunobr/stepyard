@@ -8,7 +8,7 @@
 //!    still `running` is marked `failed`, with a `SignalReceived` event
 //!    (`signal = "crash_recovery"`) appended to its log.
 //! 2. **Container reconciliation.** Every live Docker container named
-//!    `minion-session-<uuid>` whose UUID does NOT correspond to a currently
+//!    `stepyard-session-<uuid>` whose UUID does NOT correspond to a currently
 //!    `running` session is destroyed (NFR12 — idempotent).
 //! 3. **Worktree pruning.** Startup-only stale worktree cleanup.
 //!
@@ -24,7 +24,7 @@
 //!
 //! The binary's `src/startup.rs` re-exports this module. Placing the logic
 //! here lets `crates/stepyard-harness/tests/startup_reconcile.rs` exercise it
-//! without the workspace growing a circular `minion-engine → minion-harness`
+//! without the workspace growing a circular `stepyard → stepyard-harness`
 //! build edge.
 
 use std::collections::HashSet;
@@ -113,16 +113,16 @@ pub async fn reconcile_with_workspace_manager(
     let running_set: HashSet<Uuid> = still_running.into_iter().collect();
 
     // Docker's `--filter name=` is a SUBSTRING match, not a glob — the
-    // Story AC writes `name=minion-session-*` descriptively, but passing a
+    // Story AC writes `name=stepyard-session-*` descriptively, but passing a
     // literal `*` here makes Docker look for containers whose names contain
     // the asterisk character, which is never true. We pass the trailing-dash
     // prefix instead; `extract_session_uuid` below is the strict filter that
-    // ensures we only ever destroy `minion-session-<uuid>` names.
+    // ensures we only ever destroy `stepyard-session-<uuid>` names.
     let ps = Command::new("docker")
         .args([
             "ps",
             "--filter",
-            "name=minion-session-",
+            "name=stepyard-session-",
             "--format",
             "{{.Names}}",
         ])
@@ -209,10 +209,10 @@ pub async fn reconcile_with_workspace_manager(
 }
 
 /// Extract the session UUID from a container name of the form
-/// `minion-session-<uuid>`. Returns `None` if the prefix is missing or the
+/// `stepyard-session-<uuid>`. Returns `None` if the prefix is missing or the
 /// suffix is not a valid UUID.
 fn extract_session_uuid(container_name: &str) -> Option<Uuid> {
-    let suffix = container_name.strip_prefix("minion-session-")?;
+    let suffix = container_name.strip_prefix("stepyard-session-")?;
     Uuid::parse_str(suffix).ok()
 }
 
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn extract_session_uuid_parses_valid_name() {
         let uuid = Uuid::new_v4();
-        let name = format!("minion-session-{uuid}");
+        let name = format!("stepyard-session-{uuid}");
         assert_eq!(extract_session_uuid(&name), Some(uuid));
     }
 
@@ -237,18 +237,18 @@ mod tests {
 
     #[test]
     fn extract_session_uuid_rejects_non_uuid_suffix() {
-        assert_eq!(extract_session_uuid("minion-session-not-a-uuid"), None);
+        assert_eq!(extract_session_uuid("stepyard-session-not-a-uuid"), None);
     }
 
     #[test]
     fn extract_session_uuid_rejects_empty_suffix() {
-        assert_eq!(extract_session_uuid("minion-session-"), None);
+        assert_eq!(extract_session_uuid("stepyard-session-"), None);
     }
 
     #[test]
     fn extract_session_uuid_rejects_trailing_junk() {
         let uuid = Uuid::new_v4();
-        let name = format!("minion-session-{uuid}-extra");
+        let name = format!("stepyard-session-{uuid}-extra");
         assert_eq!(extract_session_uuid(&name), None);
     }
 

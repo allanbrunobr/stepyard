@@ -43,9 +43,9 @@
 //!
 //! # Architecture reference
 //!
-//! See `minion-engine/ARCHITECTURE.md` sections "minion-session" and
+//! See `ARCHITECTURE.md` sections "stepyard-session" and
 //! "Data Model" (Invariante 2, Invariante 11). Schema is in
-//! `crates/minion-session/migrations/`.
+//! `crates/stepyard-session/migrations/`.
 
 // `#[async_trait]` marks generated trait methods `#[must_use]` while they
 // already return a must-use future; newer clippy flags that as double_must_use.

@@ -3,15 +3,15 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-minion}
+      POSTGRES_USER: ${POSTGRES_USER:-stepyard}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-minion_engine}
+      POSTGRES_DB: ${POSTGRES_DB:-stepyard}
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-minion}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stepyard}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -22,9 +22,9 @@ services:
     ports:
       - "${API_PORT:-3001}:3001"
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-minion}
+      POSTGRES_USER: ${POSTGRES_USER:-stepyard}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-minion_engine}
+      POSTGRES_DB: ${POSTGRES_DB:-stepyard}
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       API_PORT: 3001
@@ -36,7 +36,7 @@ services:
       # points at `db` (compose network), but stepyard on the host needs `localhost`.
       # Unset/empty forwarded values are skipped.
       STEPYARD_SSH_ENV_FORWARD: "DATABASE_URL:STEPYARD_HOST_DATABASE_URL,GH_TOKEN,ANTHROPIC_API_KEY"
-      DATABASE_URL: "postgres://${POSTGRES_USER:-minion}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-minion_engine}"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-stepyard}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-stepyard}"
       STEPYARD_HOST_DATABASE_URL: ${STEPYARD_HOST_DATABASE_URL:-}
       GH_TOKEN: ${GH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -74,7 +74,7 @@ services:
       - "${LITELLM_PORT:-4000}:4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY must be set in .env}
-      LITELLM_LOG_DB: postgresql://${POSTGRES_USER:-minion}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-minion_engine}
+      LITELLM_LOG_DB: postgresql://${POSTGRES_USER:-stepyard}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-stepyard}
     volumes:
       - ./litellm-config.yaml:/app/config.yaml
     command: ["--config", "/app/config.yaml", "--port", "4000"]

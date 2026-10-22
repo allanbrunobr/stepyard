@@ -579,6 +579,6 @@ mod tests {
     fn config_image_fallback() {
         let cfg = SandboxConfig::default();
         let sb = DockerSandbox::new(cfg, "/tmp");
-        assert_eq!(sb.config.image(), "minion-sandbox:latest");
+        assert_eq!(sb.config.image(), "stepyard-sandbox:latest");
     }
 }

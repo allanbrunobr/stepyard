@@ -60,7 +60,7 @@ pub use workflow::{
 };
 
 // Re-export so callers matching on `EngineError::StepFailed.reason` don't
-// need to import minion-core directly (Story 1.4).
+// need to import stepyard-core directly (Story 1.4).
 pub use stepyard_core::TerminationReason;
 
 // Re-exported chat turn types (PR 5b of Task #31). Chat-producing

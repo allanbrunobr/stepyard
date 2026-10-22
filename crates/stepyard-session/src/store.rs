@@ -67,7 +67,7 @@ impl From<SessionId> for Uuid {
 /// One persisted entry in a session's append-only log.
 ///
 /// `payload` is opaque JSON so that the event schema can evolve in
-/// `minion-core` without forcing a schema migration of the session storage.
+/// `stepyard-core` without forcing a schema migration of the session storage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEvent {
     /// Row identifier (random v4 UUID).
@@ -78,7 +78,7 @@ pub struct SessionEvent {
     pub seq: i64,
     /// Wall-clock time the event row was inserted (server NOW()).
     pub created_at: DateTime<Utc>,
-    /// Opaque JSON payload (shape owned by `minion-core::Event`).
+    /// Opaque JSON payload (shape owned by `stepyard-core::Event`).
     pub payload: serde_json::Value,
 }
 

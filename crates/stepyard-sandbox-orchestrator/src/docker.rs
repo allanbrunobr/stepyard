@@ -59,7 +59,7 @@ impl DockerLifecycle {
     /// Container-naming convention so `reuse_or_create` can find a previous
     /// container by session.
     fn container_name(session_id: Uuid) -> String {
-        format!("minion-session-{session_id}")
+        format!("stepyard-session-{session_id}")
     }
 
     /// Return the docker container id for a name, or None if not running.
@@ -408,8 +408,8 @@ mod tests {
         let cmd = vec!["sh".to_string()];
 
         assert_eq!(
-            exec_interactive_args("minion-session-abc", &cmd),
-            vec!["exec", "-it", "minion-session-abc", "sh"]
+            exec_interactive_args("stepyard-session-abc", &cmd),
+            vec!["exec", "-it", "stepyard-session-abc", "sh"]
         );
     }
 }

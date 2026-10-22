@@ -13,7 +13,7 @@
 # gates, which is not acceptable on a developer machine. CI/release workflows
 # set `CARGO_TARGET_DIR=target` explicitly because their runners are ephemeral
 # and some packaging steps expect the conventional relative path.
-target-dir = "/tmp/stepyard-minion-engine-target"
+target-dir = "/tmp/stepyard-target"
 
 [alias]
 xtask = "run --quiet --package xtask --"

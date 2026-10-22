@@ -8,7 +8,7 @@
 //! docker run --rm -d --name pg-session -e POSTGRES_PASSWORD=pg \
 //!     -p 5433:5432 postgres:16-alpine
 //! export STEPYARD_SESSION_DATABASE_URL=postgres://postgres:pg@localhost:5433/postgres
-//! cargo test -p minion-session --test integration
+//! cargo test -p stepyard-session --test integration
 //! ```
 //!
 //! Each test creates a fresh session so tests don't interfere. Migrations

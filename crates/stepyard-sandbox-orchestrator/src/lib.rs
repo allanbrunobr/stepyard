@@ -127,7 +127,7 @@ pub trait SandboxLifecycle: Send + Sync {
     /// Tear down every sandbox bound to this `session_id`. This is the
     /// teardown path the harness uses on cancel, timeout, and signal — the
     /// session UUID is what the backend can use to locate real resources
-    /// (e.g. Docker looks up `minion-session-<uuid>`).
+    /// (e.g. Docker looks up `stepyard-session-<uuid>`).
     ///
     /// The default implementation converts the UUID into a [`SandboxId`]
     /// and delegates to [`SandboxLifecycle::destroy`]. Backends whose

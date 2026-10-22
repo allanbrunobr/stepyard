@@ -196,16 +196,16 @@ impl AgentExecutor {
         // Build the full command to run inside the container:
         // echo '<prompt>' | claude -p --output-format stream-json ...
         let args_str = args.join(" ");
-        // Set HOME for the minion user so Claude CLI finds its config
+        // Set HOME for the stepyard user so Claude CLI finds its config
         let sandbox_cmd = format!(
-            "export HOME=/home/minion && echo '{}' | {} {}",
+            "export HOME=/home/stepyard && echo '{}' | {} {}",
             escaped_prompt, command, args_str
         );
 
         let sb_guard = sb.lock().await;
         let sb_output = tokio::time::timeout(
             timeout,
-            sb_guard.run_command_as_user(&sandbox_cmd, "minion"),
+            sb_guard.run_command_as_user(&sandbox_cmd, "stepyard"),
         )
         .await
         .map_err(|_| StepError::Timeout(timeout))?

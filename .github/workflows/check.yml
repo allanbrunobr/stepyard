@@ -25,20 +25,20 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: minion
+          POSTGRES_USER: stepyard
           POSTGRES_PASSWORD: ci_only_password
-          POSTGRES_DB: minion_engine
+          POSTGRES_DB: stepyard
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U minion -d minion_engine"
+          --health-cmd "pg_isready -U stepyard -d stepyard"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgres://minion:ci_only_password@localhost:5432/minion_engine
-      STEPYARD_HARNESS_DATABASE_URL: postgres://minion:ci_only_password@localhost:5432/minion_engine
-      STEPYARD_SESSION_DATABASE_URL: postgres://minion:ci_only_password@localhost:5432/minion_engine
+      DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_HARNESS_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_SESSION_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -66,7 +66,7 @@ fn sigterm_yields_exit_143_within_grace() {
     let tmp = TempDir::new().expect("tempdir");
     let fixture = write_fixture(&tmp);
 
-    // `--no-sandbox` avoids needing Docker for `cmd` steps. Minion's v2
+    // `--no-sandbox` avoids needing Docker for `cmd` steps. Stepyard's v2
     // engine requires a PG session pool — we hand it the harness test DB via
     // `DATABASE_URL`. `STEPYARD_SHUTDOWN_GRACE_S=2` caps the grace at 2s so the
     // whole test finishes within the 5s wall-clock budget.

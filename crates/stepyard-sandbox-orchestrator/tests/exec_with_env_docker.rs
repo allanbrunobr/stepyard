@@ -28,7 +28,7 @@ fn docker_enabled() -> bool {
 /// but do it directly here so the test can reuse the container name derived
 /// from a known session id (AC assertions target exact argv).
 async fn create_alpine_container(session_id: Uuid) -> String {
-    let name = format!("minion-session-{session_id}");
+    let name = format!("stepyard-session-{session_id}");
     // Clean up any stale container from a prior failed test run.
     let _ = timeout(
         DOCKER_TIMEOUT,

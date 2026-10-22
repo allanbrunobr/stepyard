@@ -51,7 +51,7 @@ fn docker_enabled() -> bool {
 }
 
 async fn create_alpine_container(session_id: Uuid) -> String {
-    let name = format!("minion-session-{session_id}");
+    let name = format!("stepyard-session-{session_id}");
     let _ = timeout(
         DOCKER_TIMEOUT,
         tokio::process::Command::new("docker")
@@ -114,7 +114,7 @@ async fn positive_control_host_filesystem_untouched() {
     // Per-test unique marker — a single `cargo test` invocation reuses
     // the same PID across all its tests, so `process::id()` would
     // collide. A fresh Uuid per call is collision-safe.
-    let marker = format!("/tmp/minion-pwned-{}", Uuid::new_v4());
+    let marker = format!("/tmp/stepyard-pwned-{}", Uuid::new_v4());
     let _ = std::fs::remove_file(&marker);
     assert!(
         !PathBuf::from(&marker).exists(),
@@ -155,7 +155,7 @@ async fn positive_control_host_filesystem_untouched() {
 /// Negative-control (escape hatch IS user-owned).
 ///
 /// When the workflow author EXPLICITLY picks `sh -c "echo $MSG"` as the
-/// command, the shell inside the container does expand `$MSG`. Minion
+/// command, the shell inside the container does expand `$MSG`. Stepyard
 /// does not paternalistically escape values — the expansion boundary is
 /// clear and user-owned.
 #[tokio::test]
@@ -198,7 +198,7 @@ async fn negative_control_user_owned_sh_c_expansion() {
 /// preview must show the payload verbatim and the host marker must not exist.
 #[test]
 fn cli_var_substitution_positive_control_host_filesystem_untouched() {
-    let marker = format!("/tmp/minion-cli-var-pwned-{}", Uuid::new_v4());
+    let marker = format!("/tmp/stepyard-cli-var-pwned-{}", Uuid::new_v4());
     let _ = std::fs::remove_file(&marker);
     assert!(
         !PathBuf::from(&marker).exists(),

@@ -3,7 +3,7 @@
 //! Seed scenario:
 //! 1. A PG session with `status = 'running'` whose container does NOT exist
 //!    on the Docker daemon.
-//! 2. An orphan Docker container with name `minion-session-<uuid>` whose
+//! 2. An orphan Docker container with name `stepyard-session-<uuid>` whose
 //!    UUID has NO matching session row.
 //!
 //! After `reconcile(&pool, &lifecycle)`:
@@ -133,7 +133,7 @@ async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
     let seeded_id = seeded.id();
 
     let orphan_uuid = Uuid::new_v4();
-    let orphan_name = format!("minion-session-{orphan_uuid}");
+    let orphan_name = format!("stepyard-session-{orphan_uuid}");
     // RAII: guarantees the orphan container is torn down even if reconcile
     // panics or an assertion blows up mid-way.
     let _guard = ContainerCleanup {
@@ -198,7 +198,7 @@ async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
 
     // The direct observable of "no state change": both counters are zero.
     // The first reconcile drained every `running` session and every orphan
-    // `minion-session-*` container, so the second pass has nothing to do.
+    // `stepyard-session-*` container, so the second pass has nothing to do.
     assert_eq!(
         report2.sessions_reconciled, 0,
         "idempotent reconcile must reconcile zero sessions, got {}",

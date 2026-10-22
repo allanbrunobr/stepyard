@@ -271,6 +271,7 @@ pub enum SessionStatus {
 
 impl SessionStatus {
     /// Label matching the `sessions.status` DB check constraint.
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
     fn as_db_str(&self) -> &'static str {
         match self {
             Self::Running => "running",
@@ -1037,7 +1038,7 @@ async fn validate_environment(
                        config:\n\
                          global:\n\
                            sandbox:\n\
-                             image: \"minion-sandbox:latest\""
+                             image: \"stepyard-sandbox:latest\""
                 ));
             }
         }

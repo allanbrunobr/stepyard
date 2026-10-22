@@ -61,7 +61,6 @@ exclude = [
   "/.github/",
   "PROMPT.md",
   "EPICS-AND-STORIES.md",
-  "ARCHITECTURE-MINION-ENGINE.md",
   "territory_map.json",
 ]
 

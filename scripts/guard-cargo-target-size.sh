@@ -4,7 +4,7 @@ set -eu
 limit_mib="${STEPYARD_CARGO_TARGET_MAX_MIB:-1024}"
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 workspace_target="$repo_root/target"
-target_dir="${CARGO_TARGET_DIR:-/tmp/stepyard-minion-engine-target}"
+target_dir="${CARGO_TARGET_DIR:-/tmp/stepyard-target}"
 
 case "$limit_mib" in
   ''|*[!0-9]*|0)

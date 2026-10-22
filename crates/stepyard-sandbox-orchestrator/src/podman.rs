@@ -53,7 +53,7 @@ impl PodmanLifecycle {
     }
 
     fn container_name(session_id: Uuid) -> String {
-        format!("minion-session-{session_id}")
+        format!("stepyard-session-{session_id}")
     }
 
     async fn find_container(name: &str) -> Result<Option<String>, SandboxError> {
@@ -370,8 +370,8 @@ mod tests {
         let cmd = vec!["sh".to_string()];
 
         assert_eq!(
-            exec_interactive_args("minion-session-abc", &cmd),
-            vec!["exec", "-it", "minion-session-abc", "sh"]
+            exec_interactive_args("stepyard-session-abc", &cmd),
+            vec!["exec", "-it", "stepyard-session-abc", "sh"]
         );
     }
 }

@@ -141,7 +141,7 @@ async fn docker_create_exec_destroy_roundtrip() {
             "-a",
             "-q",
             "--filter",
-            &format!("name=minion-session-{session_id}"),
+            &format!("name=stepyard-session-{session_id}"),
         ])
         .output()
         .await
@@ -191,7 +191,7 @@ async fn docker_destroy_by_session_reaches_override_through_trait_object() {
             "-a",
             "-q",
             "--filter",
-            &format!("name=minion-session-{session_id}"),
+            &format!("name=stepyard-session-{session_id}"),
         ])
         .output()
         .await

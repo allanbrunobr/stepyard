@@ -54,7 +54,7 @@ sqlx = { version = "0.8", default-features = false, features = [
     "chrono",
     "json",
 ] }
-# Story 2.2 — integration test spawns the `minion` bin; `wait-timeout` gives
+# Story 2.2 — integration test spawns the `stepyard` bin; `wait-timeout` gives
 # `std::process::Child::wait_timeout` for a bounded wait (Rule 7b semantic
 # equivalent to `assert_cmd`'s `.timeout(..)`, which doesn't apply to a
 # hand-spawned `std::process::Child`).

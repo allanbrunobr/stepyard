@@ -41,7 +41,7 @@ pub enum SandboxMode {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SandboxConfig {
     pub enabled: bool,
-    /// Docker image to use (default: "minion-sandbox:latest")
+    /// Docker image to use (default: "stepyard-sandbox:latest")
     pub image: Option<String>,
     /// Host path to mount as workspace inside container
     pub workspace: Option<String>,
@@ -64,7 +64,7 @@ pub struct SandboxConfig {
 
 impl SandboxConfig {
     /// Default image used when none is specified
-    pub const DEFAULT_IMAGE: &'static str = "minion-sandbox:latest";
+    pub const DEFAULT_IMAGE: &'static str = "stepyard-sandbox:latest";
 
     /// Well-known env vars that are auto-forwarded when the user does NOT
     /// specify an explicit `env:` list. This covers the most common
@@ -106,10 +106,10 @@ impl SandboxConfig {
         "~/.config/gh:/root/.config/gh:ro",
         "~/.claude:/root/.claude:rw",
         "~/.ssh:/root/.ssh:ro",
-        // Minion user mounts (for agent steps — Claude CLI runs as minion)
-        "~/.config/gh:/home/minion/.config/gh:ro",
-        "~/.claude:/home/minion/.claude:rw",
-        "~/.claude.json:/home/minion/.claude.json:ro",
+        // Sandbox user mounts (agent steps run Claude CLI as the `stepyard` user)
+        "~/.config/gh:/home/stepyard/.config/gh:ro",
+        "~/.claude:/home/stepyard/.claude:rw",
+        "~/.claude.json:/home/stepyard/.claude.json:ro",
     ];
 
     pub fn image(&self) -> &str {
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn default_image() {
         let cfg = SandboxConfig::default();
-        assert_eq!(cfg.image(), "minion-sandbox:latest");
+        assert_eq!(cfg.image(), "stepyard-sandbox:latest");
     }
 
     #[test]
