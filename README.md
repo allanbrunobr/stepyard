@@ -10,6 +10,13 @@ Stepyard runs AI coding workflows that you write as YAML. Each step is explicit:
 run a command, ask a model, check a condition, retry until the tests pass. The
 agent does not decide what to do next. It follows the workflow.
 
+![Stepyard runs a test, lets Claude Code fix the bug, and repeats until the tests pass](docs/assets/demo.gif)
+
+<sub>A real run of [`scripts/demo/project/fix-tests.yaml`](scripts/demo/project/fix-tests.yaml):
+a `repeat` loop runs the tests, a `gate` checks the result, and an `agent` step
+(Claude Code) fixes the code until the tests pass. Only the agent's waiting time
+is shortened. See [scripts/demo](scripts/demo/README.md).</sub>
+
 ```mermaid
 flowchart LR
     Y[workflow.yaml] --> CLI[stepyard CLI]
@@ -116,9 +123,10 @@ Output:
 ✓ Done — 3 steps in 0.0s
 ```
 
-The v2 engine prints step status only. The full output of each step is in
-`.stepyard/logs/<session_id>.jsonl`. Add `--engine v1 --verbose` to print step
-output in the terminal.
+The v2 engine prints each step, including the steps inside `repeat`, `map` and
+`call` loops and the decision of each `gate`. Add `--verbose` to also print the
+output of `cmd` steps. The full output of every step is in
+`.stepyard/logs/<session_id>.jsonl`.
 
 To start a workflow of your own, run `stepyard init my-workflow --template blank`.
 
@@ -241,7 +249,7 @@ build.
 | Project files in the Docker/Podman sandbox | Not yet. Use `local` or `--engine v1` |
 | `{{ stack.* }}`, `{{ prompts.* }}` | Not rendered. Use `--engine v1` |
 | `--dry-run` | Rejected. Use `--engine v1` or `stepyard inspect` |
-| `--verbose`, `--quiet`, `--resume`, `--repo` | Ignored |
+| `--quiet`, `--resume`, `--repo` | Ignored (`--verbose` works: it prints cmd output) |
 | `parallel:` on `map` | Ignored. Items run one after another (v1 also runs them one after another by default) |
 | `config.events.dashboard` | Not sent. Dashboard events work only with v1 |
 | `--timeout` | Has no effect in either engine. Set `config.global.timeout` or a step `timeout:` |
@@ -274,7 +282,8 @@ Main `execute` flags:
 | `--branch-strategy head\|merge-to-head\|named-branch:<name>` | Git worktree strategy for the v2 session |
 | `--no-file-logs` | Do not write `.stepyard/logs/<session_id>.jsonl` (or set `STEPYARD_NO_FILE_LOGS=1`) |
 | `--json` | Print the result as JSON |
-| `--dry-run`, `--verbose`, `--quiet`, `--resume <step>`, `--repo owner/repo` | v1 only |
+| `--verbose` | Also print the output of `cmd` steps |
+| `--dry-run`, `--quiet`, `--resume <step>`, `--repo owner/repo` | v1 only |
 
 Run `stepyard <command> --help` for every option.
 

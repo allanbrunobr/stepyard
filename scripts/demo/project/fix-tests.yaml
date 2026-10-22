@@ -1,0 +1,27 @@
+name: fix-tests
+description: Run the tests, let the agent fix the code, repeat until green.
+
+scopes:
+  attempt:
+    steps:
+      - name: test
+        type: cmd
+        run: "python3 -B -m unittest -q 2>&1 | tail -n 1"
+      - name: green
+        type: gate
+        condition: "{{ 'OK' in steps.test.stdout }}"
+        on_pass: break
+        on_fail: continue
+      - name: fix
+        type: agent
+        config:
+          permissions: skip   # let Claude Code edit files without prompting
+        prompt: |
+          The unit tests fail: {{ steps.test.stdout }}
+          Fix the bug in calc.py. Do not change the tests.
+
+steps:
+  - name: fix_until_green
+    type: repeat
+    scope: attempt
+    max_iterations: 3

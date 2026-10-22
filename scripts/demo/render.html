@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="node_modules/asciinema-player/dist/bundle/asciinema-player.css">
+<style>
+  html,body{margin:0;background:#0d1117} .ap-overlay{display:none!important}
+  #wrap{display:inline-block;padding:18px 20px 20px;background:#0d1117}
+  #bar{height:22px;display:flex;gap:8px;align-items:center;margin-bottom:10px}
+  #bar span{width:12px;height:12px;border-radius:50%;display:inline-block}
+  .asciinema-player-theme-gh{--term-color-foreground:#e6edf3;--term-color-background:#0d1117;
+   --term-color-0:#484f58;--term-color-1:#ff7b72;--term-color-2:#3fb950;--term-color-3:#d29922;
+   --term-color-4:#58a6ff;--term-color-5:#bc8cff;--term-color-6:#39c5cf;--term-color-7:#b1bac4;
+   --term-color-8:#6e7681;--term-color-9:#ffa198;--term-color-10:#56d364;--term-color-11:#e3b341;
+   --term-color-12:#79c0ff;--term-color-13:#d2a8ff;--term-color-14:#56d4dd;--term-color-15:#ffffff}
+</style></head><body>
+<div id="wrap"><div id="bar"><span style="background:#ff5f56"></span><span style="background:#ffbd2e"></span><span style="background:#27c93f"></span></div><div id="player"></div></div>
+<script src="node_modules/asciinema-player/dist/bundle/asciinema-player.min.js"></script>
+<script>
+  window.player = AsciinemaPlayer.create(new URLSearchParams(location.search).get('cast') || 'demo.cast', document.getElementById('player'),
+    {controls:false, autoPlay:false, theme:'gh', terminalFontSize:'15px', fit:false,
+     terminalFontFamily:"Menlo, 'SF Mono', Consolas, monospace", preload:true});
+</script></body></html>
