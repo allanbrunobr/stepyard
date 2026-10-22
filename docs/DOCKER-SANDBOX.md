@@ -95,10 +95,11 @@ v2 wires the same proxy from `execute_v2` into sandbox cmd steps via
 If the proxy fails to start, the workflow **aborts** — there is no fallback that
 injects the real key into the container.
 
-**v2 note:** `agent` and `chat` steps run on the **host** in the default v2
-engine; they use the real key from the host environment directly. The proxy
-applies to **sandbox cmd steps** (and v1 sandbox paths) that call the Anthropic
-API from inside the container.
+**v2 note:** with a container runtime, `cmd` and `agent` steps run in the
+container and get the dummy token, never the real key. `agent` steps run as
+`docker|podman exec -i --user stepyard -w /workspace -e KEY ...`: env values are
+read by the exec client from its own environment, so they do not appear in the
+process list. `chat` steps run on the host.
 
 Architecture diagram: see the "Sandbox and API key protection" section of the README.
 
@@ -107,9 +108,23 @@ Architecture diagram: see the "Sandbox and API key protection" section of the RE
 **v2 engine (default):**
 
 1. `stepyard execute` starts; API proxy starts if sandbox + `ANTHROPIC_API_KEY`
-2. `SandboxLifecycle::reuse_or_create` creates or reuses a container per session
-3. Cmd steps run via `docker exec` with argv-only env injection; agent/chat run on the host
-4. `destroy_by_session` tears down the container when the workflow ends or is cancelled
+2. Before the first cmd/agent step, the engine creates (or reuses) the session
+   container and copies the project into `/workspace` with a `tar` stream
+   (excluding `target`, `node_modules`, `.stepyard`, `.venv`, `__pycache__`).
+   If `/workspace` has no `.git`, a baseline commit is made there. A marker
+   file (`/tmp/.stepyard-workspace-ready`) prevents a second copy when a run
+   resumes with the same container.
+3. Cmd steps run via `docker exec` in `/workspace`; agent steps run the Claude
+   CLI in the container as `stepyard`; chat steps run on the host
+4. At the end (success or step failure), files reported by `git status` in
+   `/workspace` are copied back to the project (`docker cp`; deletions are
+   applied; paths with `..` or absolute paths are rejected), then
+   `destroy_by_session` removes the container. A cancel removes the container
+   without copying back.
+
+Copying (not bind-mounting) also works with a remote Docker daemon. The
+default image must be available for Podman: build it with
+`podman build -t stepyard-sandbox:latest -f Dockerfile.sandbox .`.
 
 **v1 engine (`--engine v1`):**
 

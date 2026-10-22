@@ -351,9 +351,26 @@ pub(crate) async fn run_agent_step(
     state: &AgentSessionState<'_>,
     env: &HashMap<String, String>,
     completion_signal: Option<&str>,
+    container: Option<&crate::container_workspace::AgentContainer>,
 ) -> Result<AgentExecOutput, AgentExecError> {
     let argv = build_agent_argv(step, state)?;
-    let command = step.agent_command.as_deref().unwrap_or("claude");
+    let agent_bin = step.agent_command.as_deref().unwrap_or("claude");
+
+    // In a container run the agent CLI runs inside the session container
+    // through `docker|podman exec -i`. The step env is set on the exec
+    // client and forwarded by key (`-e KEY`), so the container gets only
+    // the step env (with the proxy token in place of the real API key), not
+    // the host environment.
+    let (command, argv) = match container {
+        Some(c) => {
+            let keys: Vec<String> = env.keys().cloned().collect();
+            let exec_argv =
+                c.handle
+                    .exec_argv(c.user.as_deref(), &c.workdir, &keys, agent_bin, &argv);
+            (c.handle.binary.as_str(), exec_argv)
+        }
+        None => (agent_bin, argv),
+    };
 
     let mut command_builder = Command::new(command);
     command_builder

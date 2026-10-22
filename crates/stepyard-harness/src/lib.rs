@@ -32,6 +32,7 @@
 
 mod agent_exec;
 mod chat_exec;
+mod container_workspace;
 mod defaults;
 mod engine;
 mod executor;
@@ -46,6 +47,7 @@ mod template_exec;
 mod workflow;
 
 pub use chat_exec::{ChatClient, ChatClientError, ChatCompletionRequest, ChatCompletionResponse};
+pub use container_workspace::{ContainerWorkspace, WorkspaceSync};
 pub use defaults::Defaults;
 pub use engine::{
     apply_anthropic_proxy_env, resolve_env, AnthropicProxyEnv, CancelToken, Engine, EngineError,

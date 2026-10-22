@@ -111,6 +111,9 @@ impl SandboxLifecycle for DockerLifecycle {
         for host in &opts.extra_hosts {
             command.args(["--add-host", host]);
         }
+        if let Some(workdir) = &opts.workdir {
+            command.arg("-w").arg(workdir);
+        }
         if !opts.network.allow.is_empty() || !opts.network.deny.is_empty() {
             command.args(["--network", "bridge"]);
         }
@@ -139,6 +142,13 @@ impl SandboxLifecycle for DockerLifecycle {
             exec_fn: Arc::new(DockerExec {
                 container_name: name,
             }),
+        })
+    }
+
+    fn container_handle(&self, session_id: Uuid) -> Option<crate::ContainerHandle> {
+        Some(crate::ContainerHandle {
+            binary: "docker".to_string(),
+            name: Self::container_name(session_id),
         })
     }
 

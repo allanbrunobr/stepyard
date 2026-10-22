@@ -821,16 +821,24 @@ impl Engine {
                     first_agent_session_id,
                 } => {
                     let timeout = step.timeout;
+                    let (env, agent_container) = self.agent_exec_target(&env);
                     joinset.spawn(async move {
                         let state = crate::agent_exec::AgentSessionState {
                             agent_session_ids: &agent_session_ids,
                             first_agent_session_id: first_agent_session_id.as_deref(),
                         };
                         let fut = async {
-                            crate::agent_exec::run_agent_step(&step, &prompt, &state, &env, None)
-                                .await
-                                .map(ParallelTaskOutput::Agent)
-                                .map_err(|e| e.to_string())
+                            crate::agent_exec::run_agent_step(
+                                &step,
+                                &prompt,
+                                &state,
+                                &env,
+                                None,
+                                agent_container.as_ref(),
+                            )
+                            .await
+                            .map(ParallelTaskOutput::Agent)
+                            .map_err(|e| e.to_string())
                         };
                         let res = parallel_task_with_timeout(timeout, fut).await;
                         (pos, name, StepKind::Agent, res)
@@ -1922,6 +1930,7 @@ impl Engine {
             first_agent_session_id: progress.first_agent_session_id.as_deref(),
         };
         let container_top_level_index = top_level_position_of(self, &scope_ctx.container).await?;
+        let (agent_env, agent_container) = self.agent_exec_target(&resolved_env);
 
         let cancel_token = self.cancel_token();
         let signal_slot = self.shutdown_signal();
@@ -1933,8 +1942,9 @@ impl Engine {
                 body_step,
                 &rendered_prompt,
                 &state,
-                &resolved_env,
+                &agent_env,
                 None,
+                agent_container.as_ref(),
             );
             let cancel_fut = async {
                 while !cancel_token.is_cancelled() {

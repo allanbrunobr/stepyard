@@ -13,11 +13,10 @@ agent does not decide what to do next. It follows the workflow.
 ![How Stepyard works: an issue starts a workflow, the project is copied into a separate Docker container, an agent fixes the code there until the tests pass, a pull request is opened, and the container is removed](docs/assets/how-it-works.gif)
 
 <sub>How a sandboxed run works. The API key stays on your machine; the container
-only gets a dummy token that goes through a local proxy. Today this full flow
-(project copied into the container, agent inside it) is the
-`--engine v1 --sandbox-runtime docker` path. The default v2 engine does not
-copy the project into the container yet; see
-[Known limitations of v2](#known-limitations-of-v2).
+only gets a dummy token that goes through a local proxy. With
+`--sandbox-runtime docker` (or `podman`), the project is copied into the
+container, `cmd` and `agent` steps run there, and the changed files are copied
+back at the end. See [Sandbox and API key protection](#sandbox-and-api-key-protection).
 [MP4 version](docs/assets/how-it-works.mp4).</sub>
 
 **A real run in the terminal:**
@@ -62,8 +61,8 @@ The CLI has two engines:
 
 | Engine | Status | Use it when |
 |--------|--------|-------------|
-| `v2` (default) | Session log in PostgreSQL or SQLite, resumes after a crash | Most workflows, on the host (`local` runtime) |
-| `v1` (`--engine v1`) | Legacy, more complete | You need a Docker sandbox that contains your project, `{{ stack }}` / `{{ prompts.* }}`, `--dry-run`, or dashboard events |
+| `v2` (default) | Session log in PostgreSQL or SQLite, resumes after a crash | Most workflows, on the host or in a Docker/Podman container |
+| `v1` (`--engine v1`) | Legacy | You need `{{ stack }}` / `{{ prompts.* }}`, `--dry-run`, `--repo`, or dashboard events |
 
 Read [Known limitations of v2](#known-limitations-of-v2) before you depend on the default engine.
 
@@ -232,8 +231,23 @@ Full reference: [`docs/STEP-TYPES.md`](docs/STEP-TYPES.md) and [`docs/YAML-SPEC.
 
 ## Sandbox and API key protection
 
-With a container runtime, `cmd` steps run in a fresh container that is removed
-after the run. The real `ANTHROPIC_API_KEY` does not go into the container:
+With a container runtime, each run gets a fresh container (default image
+`stepyard-sandbox:latest`, built on the first run):
+
+1. Before the first `cmd` or `agent` step, the project (the current directory)
+   is copied into `/workspace` in the container. `target/`, `node_modules/`,
+   `.stepyard/`, `.venv/`, and `__pycache__/` are not copied.
+2. `cmd` steps run in `/workspace`. `agent` steps run the Claude CLI in
+   `/workspace` as the non-root user `stepyard`, with only the step's
+   environment (not your shell environment).
+3. When the workflow ends (also when a step fails), the files that changed are
+   copied back to the project and the container is removed. Changes are found
+   with `git status`, so files that your `.gitignore` excludes are not copied
+   back. The CLI prints the list of changed files.
+
+A cancelled run (Ctrl-C) removes the container without copying changes back.
+
+The real `ANTHROPIC_API_KEY` does not go into the container:
 
 - The container gets a per-session dummy token as `ANTHROPIC_API_KEY` and
   `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>`.
@@ -241,7 +255,10 @@ after the run. The real `ANTHROPIC_API_KEY` does not go into the container:
   `api.anthropic.com`, and adds the real key.
 - If the proxy cannot start, the workflow stops. There is no fallback that
   gives the real key to the container.
-- In v2, `agent` and `chat` steps run on the host with your normal environment.
+- `agent` steps in the container use the same proxy. With no
+  `ANTHROPIC_API_KEY` on the host, the Claude CLI in the container is not
+  logged in (a Claude subscription login on the host is not shared).
+- `chat` steps always run on the host.
 
 ```mermaid
 sequenceDiagram
@@ -262,17 +279,12 @@ Select the runtime with `--sandbox-runtime docker|podman|local`, the
 The default is `docker` for the PostgreSQL build and `local` for the SQLite
 build.
 
-> **Important:** in v2 the container does not receive your project files yet.
-> Commands run in an empty image. For a sandboxed run against your repository,
-> use `--engine v1 --sandbox-runtime docker`: v1 copies the project into the
-> container and copies the results back. Details:
-> [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
+Details: [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 
 ## Known limitations of v2
 
 | Feature | Status in v2 |
 |---------|--------------|
-| Project files in the Docker/Podman sandbox | Not yet. Use `local` or `--engine v1` |
 | `{{ stack.* }}`, `{{ prompts.* }}` | Not rendered. Use `--engine v1` |
 | `--dry-run` | Rejected. Use `--engine v1` or `stepyard inspect` |
 | `--quiet`, `--resume`, `--repo` | Ignored (`--verbose` works: it prints cmd output) |

@@ -29,6 +29,7 @@
 // already return a must-use future; newer clippy flags that as double_must_use.
 #![allow(clippy::double_must_use)]
 
+mod container;
 mod docker;
 mod docker_errors;
 mod local;
@@ -37,6 +38,7 @@ mod podman;
 mod sandbox;
 mod workspace;
 
+pub use container::{ChangedPath, ContainerHandle, CopyOutReport};
 pub use docker::{DockerLifecycle, DockerLifecycleConfig};
 pub use local::LocalShellLifecycle;
 pub use mock::{MockCall, MockLifecycle};
@@ -78,6 +80,10 @@ pub struct CreateOptions {
     pub network: NetworkOptions,
     /// Extra `--add-host` entries (e.g. `host.docker.internal:host-gateway`).
     pub extra_hosts: Vec<String>,
+    /// Working directory for the container (`-w`). `None` keeps the image's
+    /// `WORKDIR`.
+    #[serde(default)]
+    pub workdir: Option<String>,
 }
 
 /// Structured execution options for sandbox backends.
@@ -180,6 +186,16 @@ pub trait SandboxLifecycle: Send + Sync {
         _cmd: &[String],
     ) -> Result<i32, SandboxError> {
         Err(SandboxError::InteractiveNotSupported)
+    }
+
+    /// Handle to the container that backs this session, for callers that
+    /// copy files in and out or run a process with stdin attached (the
+    /// harness uses it for the project workspace and for agent steps).
+    ///
+    /// `None` (the default) means the backend runs on the host: there is
+    /// nothing to copy, and processes run in the current directory.
+    fn container_handle(&self, _session_id: Uuid) -> Option<ContainerHandle> {
+        None
     }
 
     /// Return the live sandbox for this session if one already exists,

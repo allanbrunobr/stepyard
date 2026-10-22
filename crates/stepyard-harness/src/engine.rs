@@ -119,6 +119,11 @@ pub struct HarnessConfig {
     /// When set, sandbox cmd steps route Anthropic traffic through the host proxy.
     #[serde(skip, default)]
     pub anthropic_proxy: Option<AnthropicProxyEnv>,
+    /// When set, the project is copied into the session container and
+    /// cmd/agent steps run there; changes are copied back when the
+    /// workflow ends. See [`crate::ContainerWorkspace`].
+    #[serde(skip, default)]
+    pub container_workspace: Option<crate::ContainerWorkspace>,
 }
 
 impl Default for HarnessConfig {
@@ -131,6 +136,7 @@ impl Default for HarnessConfig {
             chat_client: None,
             create_options: CreateOptions::default(),
             anthropic_proxy: None,
+            container_workspace: None,
         }
     }
 }
@@ -270,6 +276,11 @@ pub struct Engine {
     workspace_path: Option<PathBuf>,
     workspace: Option<Workspace>,
     workspace_prepared: bool,
+    /// Set once the project is in the session container (see
+    /// [`Engine::ensure_container_workspace`]).
+    agent_container: Option<crate::container_workspace::AgentContainer>,
+    /// Outcome of the copy back to the host, for the CLI to report.
+    workspace_sync: Option<crate::WorkspaceSync>,
 }
 
 impl Engine {
@@ -315,6 +326,8 @@ impl Engine {
             workspace_path: None,
             workspace: None,
             workspace_prepared: false,
+            agent_container: None,
+            workspace_sync: None,
         }
     }
 
@@ -347,6 +360,134 @@ impl Engine {
         self.workspace_strategy = strategy;
         self.workspace_path = Some(planned_path);
         self
+    }
+
+    /// Copy the project into the session container, once per session.
+    ///
+    /// No-op when [`HarnessConfig::container_workspace`] is unset or the
+    /// backend has no container (local runs). A resumed process finds the
+    /// ready marker in the existing container and does not copy again, so
+    /// changes made by earlier steps are kept.
+    pub(crate) async fn ensure_container_workspace(&mut self) -> Result<(), String> {
+        if self.agent_container.is_some() {
+            return Ok(());
+        }
+        let Some(ws) = self.config.container_workspace.clone() else {
+            return Ok(());
+        };
+        let session_uuid = *self.session.id().as_uuid();
+        let Some(handle) = self.lifecycle.container_handle(session_uuid) else {
+            return Ok(());
+        };
+        self.lifecycle
+            .reuse_or_create_with_options(session_uuid, &self.config.create_options)
+            .await
+            .map_err(|e| format!("start session container: {e}"))?;
+
+        let marker = format!("test -f {}", crate::container_workspace::READY_MARKER);
+        let ready = handle
+            .sh(&marker)
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ready {
+            handle
+                .copy_in(&ws.host_dir, &ws.container_dir, &ws.exclude)
+                .await
+                .map_err(|e| e.to_string())?;
+            let script = crate::container_workspace::setup_script(
+                &ws.container_dir,
+                ws.agent_user.as_deref(),
+            );
+            let out = handle.sh(&script).await.map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(format!(
+                    "prepare /workspace in the container (the image needs `git`): {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+        }
+
+        // Run agents as the agent user only if the image has that user.
+        let user = match &ws.agent_user {
+            Some(u) => handle
+                .sh(&format!(
+                    "id -u {} >/dev/null 2>&1",
+                    crate::container_workspace::shell_quote(u)
+                ))
+                .await
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|_| u.clone()),
+            None => None,
+        };
+        self.agent_container = Some(crate::container_workspace::AgentContainer {
+            handle,
+            user,
+            workdir: ws.container_dir.clone(),
+        });
+        Ok(())
+    }
+
+    /// Env and container for an agent CLI invocation. In a container run
+    /// the env gets the proxy token instead of the real API key.
+    pub(crate) fn agent_exec_target(
+        &self,
+        resolved_env: &HashMap<String, String>,
+    ) -> (
+        HashMap<String, String>,
+        Option<crate::container_workspace::AgentContainer>,
+    ) {
+        match &self.agent_container {
+            Some(c) => (self.sandbox_env_for_exec(resolved_env), Some(c.clone())),
+            None => (resolved_env.clone(), None),
+        }
+    }
+
+    /// Outcome of the copy of container changes back to the host, if the
+    /// run used a container workspace.
+    pub fn workspace_sync(&self) -> Option<&crate::WorkspaceSync> {
+        self.workspace_sync.as_ref()
+    }
+
+    /// Copy changed files from the container to the host project, then
+    /// remove the container. Runs once, at the end of the workflow.
+    async fn sync_container_workspace_back(&mut self) {
+        let Some(container) = self.agent_container.take() else {
+            return;
+        };
+        let Some(ws) = self.config.container_workspace.clone() else {
+            return;
+        };
+        let result = async {
+            let changes = container
+                .handle
+                .changed_paths(&ws.container_dir)
+                .await
+                .map_err(|e| e.to_string())?;
+            container
+                .handle
+                .copy_out(&ws.container_dir, &changes, &ws.host_dir)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        .await;
+        self.workspace_sync = Some(match result {
+            Ok(report) => {
+                tracing::info!(
+                    copied = report.copied.len(),
+                    deleted = report.deleted.len(),
+                    "container workspace synced to host"
+                );
+                crate::WorkspaceSync::Synced(report)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "container workspace sync failed");
+                crate::WorkspaceSync::Failed(e)
+            }
+        });
+        let session_uuid = *self.session.id().as_uuid();
+        let _ = self.lifecycle.destroy_by_session(session_uuid).await;
     }
 
     async fn prepare_workspace_if_configured(&mut self) -> Result<(), EngineError> {
@@ -543,6 +684,27 @@ impl Engine {
             })
             .await?;
             self.prepare_workspace_if_configured().await?;
+        }
+
+        // Container runs: put the project in the session container before
+        // the first step that can run there (chat steps run on the host).
+        if !matches!(step.kind, StepKind::Chat) {
+            if let Err(error) = self.ensure_container_workspace().await {
+                self.emit(Event::StepFailed {
+                    step_name: step.name.clone(),
+                    step_type: step_type.into(),
+                    error: error.clone(),
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    timestamp: Utc::now(),
+                    sandboxed: true,
+                })
+                .await?;
+                self.finalise_fail().await?;
+                return Ok(StepOutcome::StepFailed {
+                    step_name: step.name.clone(),
+                    error,
+                });
+            }
         }
 
         self.emit(Event::StepStarted {
@@ -1500,6 +1662,7 @@ impl Engine {
             agent_session_ids: &progress.agent_session_ids,
             first_agent_session_id: progress.first_agent_session_id.as_deref(),
         };
+        let (agent_env, agent_container) = self.agent_exec_target(&resolved_env);
 
         // Race the exec future against cancel / timeout / shutdown. Same
         // shape as `execute_cmd_with_select` — keeping the two inline
@@ -1519,8 +1682,9 @@ impl Engine {
                 step,
                 &rendered_prompt,
                 &state,
-                &resolved_env,
+                &agent_env,
                 self.workflow.completion_signal.as_deref(),
+                agent_container.as_ref(),
             );
             let cancel_fut = async {
                 while !cancel_token.is_cancelled() {
@@ -2120,6 +2284,7 @@ impl Engine {
 
     async fn finalise_success(&mut self) -> Result<(), EngineError> {
         if self.session.status() == SessionStatus::Running {
+            self.sync_container_workspace_back().await;
             self.finalize_workspace_success_if_configured().await?;
             let duration_ms = self
                 .started_at
@@ -2164,6 +2329,9 @@ impl Engine {
 
     pub(crate) async fn finalise_fail(&mut self) -> Result<(), EngineError> {
         if self.session.status() == SessionStatus::Running {
+            // Keep what the steps changed before the failure: copy it back
+            // so the operator can inspect or continue from it.
+            self.sync_container_workspace_back().await;
             self.session.fail().await?;
         }
         Ok(())

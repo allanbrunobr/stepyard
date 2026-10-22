@@ -481,8 +481,22 @@ async fn execute_v2(
             sandbox_runtime,
             SandboxRuntime::Docker | SandboxRuntime::Podman
         );
-    // Docker/Podman with sandbox enabled: start the host API proxy so cmd steps
-    // inside the container never receive the real Anthropic key.
+    // Docker/Podman with sandbox enabled: the project is copied into the
+    // session container at /workspace, cmd and agent steps run there, and
+    // the changed files are copied back when the workflow ends. The default
+    // image (built by the pre-flight check) has git, the Claude CLI and the
+    // non-root `stepyard` user that this needs.
+    let container_workspace = uses_container_sandbox
+        .then(|| stepyard_harness::ContainerWorkspace::new(repo_root.clone()));
+    if uses_container_sandbox {
+        create_options
+            .image
+            .get_or_insert_with(|| crate::sandbox::SandboxConfig::DEFAULT_IMAGE.to_string());
+        create_options.workdir = Some("/workspace".into());
+    }
+
+    // Docker/Podman with sandbox enabled: start the host API proxy so cmd and
+    // agent steps inside the container never receive the real Anthropic key.
     if uses_container_sandbox {
         if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
             let proxy = crate::sandbox::proxy::ApiProxy::start(api_key)
@@ -505,6 +519,7 @@ async fn execute_v2(
         shutdown_signal,
         create_options,
         anthropic_proxy,
+        container_workspace,
         // Production chat dispatch (PR 5c commit 3b of #31). The harness'
         // `Engine::run_chat_step` falls back to a typed `StepFailed`
         // (`ChatExecError::NoClientConfigured`) when this is `None`; CLI
@@ -666,6 +681,7 @@ async fn execute_v2(
                 }
                 scope_view.flush_top_level_output();
                 eprintln!("step `{step_name}` failed: {error}");
+                report_workspace_sync(engine.workspace_sync());
                 std::process::exit(1);
             }
             StepOutcome::WorkflowCompleted => {
@@ -673,6 +689,7 @@ async fn execute_v2(
                     pb.finish_and_clear();
                 }
                 display::workflow_done(wf_start.elapsed(), step_index);
+                report_workspace_sync(engine.workspace_sync());
                 if let Some(proxy) = api_proxy.take() {
                     proxy.stop().await;
                 }
@@ -698,6 +715,40 @@ async fn execute_v2(
     }
 }
 
+/// Tell the operator which files a container run changed in the project.
+fn report_workspace_sync(sync: Option<&stepyard_harness::WorkspaceSync>) {
+    match sync {
+        None => {}
+        Some(stepyard_harness::WorkspaceSync::Synced(report)) => {
+            if report.copied.is_empty() && report.deleted.is_empty() {
+                eprintln!("  workspace: no changes in the container");
+            } else {
+                eprintln!(
+                    "  workspace: copied {} changed file(s) back from the container{}",
+                    report.copied.len(),
+                    if report.deleted.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", removed {}", report.deleted.len())
+                    }
+                );
+                for path in report.copied.iter().take(20) {
+                    eprintln!("    M {path}");
+                }
+                for path in report.deleted.iter().take(20) {
+                    eprintln!("    D {path}");
+                }
+            }
+            for path in &report.skipped {
+                eprintln!("  workspace: skipped unsafe path {path}");
+            }
+        }
+        Some(stepyard_harness::WorkspaceSync::Failed(error)) => {
+            eprintln!("  workspace: copying changes back from the container failed: {error}");
+        }
+    }
+}
+
 fn create_options_from_global_config(
     global_config: &HashMap<String, serde_yaml::Value>,
 ) -> stepyard_sandbox_orchestrator::CreateOptions {
@@ -713,6 +764,7 @@ fn create_options_from_global_config(
             deny: cfg.network.deny,
         },
         extra_hosts: Vec::new(),
+        workdir: None,
     }
 }
 
