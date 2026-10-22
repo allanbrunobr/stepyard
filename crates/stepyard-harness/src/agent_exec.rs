@@ -211,6 +211,13 @@ pub(crate) enum AgentExecError {
          captured on stdout"
     )]
     NonZeroExit { code: i32 },
+
+    /// The CLI's final `result` event carried `"is_error": true` (for
+    /// example an unknown or retired `--model`, an auth failure, or an
+    /// API error). The response text is the CLI's error message, not
+    /// work output, so the step fails instead of passing it downstream.
+    #[error("agent reported an error: {message}")]
+    ReportedError { message: String },
 }
 
 /// Runtime output of [`run_agent_step`]. Every numeric field is
@@ -239,6 +246,8 @@ pub(crate) struct AgentExecOutput {
     /// line. The engine turns this into `Event::CompletionSignaled` and a
     /// successful workflow terminal state.
     pub completion_signaled: bool,
+    /// `result.is_error` of the last `"result"` event (last-wins).
+    pub is_error: bool,
 }
 
 /// Parse one `stream-json` line from the Claude CLI into [`AgentExecOutput`].
@@ -280,6 +289,10 @@ fn parse_stream_json_line(line: &str, out: &mut AgentExecOutput) {
     if let Some(cost) = msg.get("cost_usd").and_then(|c| c.as_f64()) {
         out.cost_usd = Some(cost);
     }
+    out.is_error = msg
+        .get("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 }
 
 /// Spawn the Claude CLI, pipe the rendered prompt to its stdin, parse
@@ -324,6 +337,7 @@ fn parse_stream_json_line(line: &str, out: &mut AgentExecOutput) {
 /// status.success() && !response.is_empty() → OK (happy path)
 /// !status.success() && response.is_empty() → NonZeroExit — hard failure
 /// !status.success() && !response.is_empty() → OK — tool_use failed mid-turn
+/// last result has "is_error": true          → ReportedError (any status)
 /// ```
 ///
 /// The last row is the one that surprises reviewers: the CLI occasionally
@@ -424,6 +438,12 @@ pub(crate) async fn run_agent_step(
         error: e.to_string(),
     })?;
 
+    if output.is_error {
+        return Err(AgentExecError::ReportedError {
+            message: output.response.clone(),
+        });
+    }
+
     if !status.success() && output.response.is_empty() {
         return Err(AgentExecError::NonZeroExit {
             code: status.code().unwrap_or(-1),
@@ -437,6 +457,24 @@ pub(crate) async fn run_agent_step(
 mod tests {
     use super::*;
     use crate::workflow::Step;
+
+    #[test]
+    fn result_event_is_error_flag_is_tracked_last_wins() {
+        let mut out = AgentExecOutput::default();
+        parse_stream_json_line(
+            r#"{"type":"result","is_error":true,"result":"There's an issue with the selected model"}"#,
+            &mut out,
+        );
+        assert!(out.is_error);
+        assert_eq!(out.response, "There's an issue with the selected model");
+        parse_stream_json_line(
+            r#"{"type":"result","is_error":false,"result":"done"}"#,
+            &mut out,
+        );
+        assert!(!out.is_error);
+        parse_stream_json_line(r#"{"type":"result","result":"no flag"}"#, &mut out);
+        assert!(!out.is_error, "missing flag means success");
+    }
 
     fn empty_state() -> (HashMap<String, String>, Option<String>) {
         (HashMap::new(), None)
