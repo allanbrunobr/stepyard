@@ -50,7 +50,13 @@ stepyard execute workflows/code-review.yaml -- 42
 ## Project status
 
 Stepyard is **alpha** software. The CLI and the workflow format can change
-between versions. There are no published binaries yet. You install from source.
+between versions. Prebuilt binaries for macOS and Linux are on the
+[releases page](https://github.com/allanbrunobr/stepyard/releases); you can also
+install from source.
+
+I developed Stepyard in a private repository and moved it here as a fresh
+history when I made it public, so the commit log here is short. The project
+has been in development since March 2026 (about 300 commits before the move).
 
 The CLI has two engines:
 
@@ -77,8 +83,8 @@ diff.
 
 | Requirement | Why | How to get it |
 |-------------|-----|---------------|
-| Rust toolchain (stable) | Build and install | [rustup.rs](https://rustup.rs) |
-| git | The v2 engine must run inside a git repository | your package manager |
+| Rust toolchain (stable) | Only to build from source | [rustup.rs](https://rustup.rs) |
+| git | The v2 engine must run inside a git repository with at least one commit | your package manager |
 | A model API key | `chat` steps | for example `export ANTHROPIC_API_KEY=sk-ant-...` |
 | [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`) | `agent` steps | `npm install -g @anthropic-ai/claude-code` |
 | [GitHub CLI](https://cli.github.com) (`gh`) | Workflows that read PRs and issues | `gh auth login` |
@@ -87,7 +93,15 @@ diff.
 
 ### 2. Install
 
-Pick one session store:
+**Prebuilt binary (SQLite build, macOS or Linux):** download it from the
+[latest release](https://github.com/allanbrunobr/stepyard/releases/latest), for example:
+
+```bash
+curl -L https://github.com/allanbrunobr/stepyard/releases/latest/download/stepyard-macos-aarch64 -o stepyard
+chmod +x stepyard && sudo mv stepyard /usr/local/bin/
+```
+
+**From source**, pick one session store:
 
 ```bash
 # A) SQLite: no database server. Sessions are stored in .stepyard/sessions.db.
@@ -117,7 +131,7 @@ installed with the binary yet. Copy the ones you need into your project:
 
 ```bash
 git clone https://github.com/allanbrunobr/stepyard ~/stepyard
-cd /path/to/your-project          # must be a git repository
+cd /path/to/your-project          # a git repository with at least one commit
 cp -r ~/stepyard/workflows ~/stepyard/prompts .
 
 stepyard execute workflows/hello-world-cmd.yaml
@@ -327,7 +341,7 @@ See [`docs/CONFIG.md`](docs/CONFIG.md) for the layers inside one workflow file.
 | `--var` is rejected | Use an uppercase key: `--var MODE=strict` |
 | `render cmd ... Variable ... not found` | The step uses a variable that v2 does not provide (see the tables above), or a step name is wrong |
 | `429 Too Many Requests` | Fewer concurrent model calls: reduce `parallel` steps or add retries |
-| First Docker run is slow | The `minion-sandbox:latest` image builds once (about 2 minutes) and is cached |
+| First Docker run is slow | The `stepyard-sandbox:latest` image builds once (about 2 minutes) and is cached |
 | `gh` fails inside the sandbox | Run `gh auth login` on the host first. The token is passed as `GH_TOKEN` |
 
 ## Dashboard (optional)
@@ -352,7 +366,7 @@ Only the v1 engine sends events to the dashboard. See [`docs/REMOTE.md`](docs/RE
 - [`docs/EXAMPLES.md`](docs/EXAMPLES.md): example workflows and patterns
 - [`docs/REMOTE.md`](docs/REMOTE.md): remote execution and dashboard dispatch
 - [`docs/SLACK.md`](docs/SLACK.md): Slack bot setup
-- [`ARCHITECTURE.md`](ARCHITECTURE.md): target architecture (design document, in Portuguese)
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): how the code is organized, invariants, and what comes next
 
 ## Project layout
 

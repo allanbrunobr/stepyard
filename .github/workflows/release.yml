@@ -13,6 +13,9 @@ env:
   # .cargo/config.toml.
   CARGO_TARGET_DIR: target
   BINARY_NAME: stepyard
+  # Release binaries use the SQLite session store: no database server is
+  # needed. The PostgreSQL build is installed with `cargo install`.
+  BUILD_FEATURES: --no-default-features --features sqlite
 
 jobs:
   # ──────────────────────────────────────────────────────────
@@ -47,11 +50,6 @@ jobs:
             os: macos-latest
             artifact_name: stepyard-macos-aarch64
 
-          # Windows x86_64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            artifact_name: stepyard-windows-x86_64.exe
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -79,11 +77,11 @@ jobs:
 
       - name: Build binary (native)
         if: matrix.cross != true
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }} ${{ env.BUILD_FEATURES }}
 
       - name: Build binary (cross)
         if: matrix.cross == true
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release --locked --target ${{ matrix.target }} ${{ env.BUILD_FEATURES }}
 
       # Rename binary to include platform suffix
       - name: Rename binary (Unix)
@@ -148,6 +146,10 @@ jobs:
             artifacts/**/*
             checksums.sha256
           body: |
+            Stepyard is alpha software. These binaries use the **SQLite** session
+            store (sessions in `.stepyard/sessions.db`, steps run on the host by
+            default). For the PostgreSQL build, use `cargo install` below.
+
             ## Installation
 
             ### macOS (Apple Silicon)
@@ -178,12 +180,14 @@ jobs:
             sudo mv stepyard /usr/local/bin/
             ```
 
-            ### Windows (x86_64)
-            Download `stepyard-windows-x86_64.exe` and add to your PATH.
+            Windows is not supported yet.
 
             ### Via cargo
             ```bash
-            cargo install --git https://github.com/allanbrunobr/stepyard --tag ${{ github.ref_name }}
+            # SQLite build (same as the binaries)
+            cargo install --locked --git https://github.com/${{ github.repository }} --tag ${{ github.ref_name }} --no-default-features --features sqlite
+            # PostgreSQL build (default features)
+            cargo install --locked --git https://github.com/${{ github.repository }} --tag ${{ github.ref_name }}
             ```
 
             ## Verify installation
