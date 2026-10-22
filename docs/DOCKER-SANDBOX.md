@@ -122,31 +122,8 @@ Architecture diagram: see the "Sandbox and API key protection" section of the RE
    `destroy_by_session` removes the container. A cancel removes the container
    without copying back.
 
-Copying (not bind-mounting) also works with a remote Docker daemon (see
-[Remote Docker host](#remote-docker-host)). The default image must be
-available for Podman: build it with
+The default image must be available for Podman: build it with
 `podman build -t stepyard-sandbox:latest -f Dockerfile.sandbox .`.
-
-### Remote Docker host
-
-Stepyard calls the `docker` CLI, so `DOCKER_CONTEXT` or `DOCKER_HOST` selects
-the daemon. The project copy and `cmd` steps work as is. `agent` steps need
-one more piece: the container reaches the API proxy at
-`host.docker.internal:<port>`, which is the **Docker host**, while the proxy
-listens on `127.0.0.1` of the machine that runs `stepyard`. Fix the proxy port
-and forward it with an SSH reverse tunnel:
-
-```bash
-# on the machine that runs stepyard; `docker-box` is the SSH alias of the Docker host
-docker --context docker-box build -t stepyard-sandbox:latest - < Dockerfile.sandbox
-ssh -N -R 127.0.0.1:47821:127.0.0.1:47821 docker-box &     # keep it open during the run
-
-export DOCKER_CONTEXT=docker-box STEPYARD_PROXY_PORT=47821
-stepyard execute fix-tests.yaml --sandbox-runtime docker
-```
-
-The tunnel binds only to loopback on both machines, so the proxy is never
-exposed on the network. Tested with Docker Desktop as the remote host.
 
 **v1 engine (`--engine v1`):**
 
@@ -167,7 +144,6 @@ the name printed at startup.
 | `failed to clone <repo>`                           | `GH_TOKEN` missing or `gh auth status` stale                |
 | `image pull failed`                                | Authenticate to the registry or change `image`              |
 | Steps hang at network calls                        | Domain not in `network.allow`                               |
-| Agent step in the container cannot reach the API (remote Docker host) | Set `STEPYARD_PROXY_PORT` and open the SSH reverse tunnel (see [Remote Docker host](#remote-docker-host)) |
 
 ## See also
 

@@ -10,11 +10,9 @@ node render.mjs demo.cast ../../docs/assets/demo.gif # uses the local Google Chr
 ```
 
 Requirements: `stepyard` and `docker` on PATH, the `stepyard-sandbox:latest`
-image on the Docker host and `ANTHROPIC_API_KEY` in the environment. The
+image and `ANTHROPIC_API_KEY` in the environment. The
 workflow runs with `--sandbox-runtime docker`, so Claude Code runs in the
-container. With a remote Docker host, also set `DOCKER_CONTEXT`,
-`STEPYARD_PROXY_PORT` and the SSH tunnel described in
-[Remote Docker host](../../docs/DOCKER-SANDBOX.md#remote-docker-host).
+container.
 
 `record.py` copies `project/` (a one-function Python repo with a failing test)
 to `/tmp/stepyard-demo/calculator`, types the commands, and captures the real

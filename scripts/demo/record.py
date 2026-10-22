@@ -3,8 +3,7 @@
 
 Usage: scripts/demo/record.py OUT.cast
 Runs the workflow in a Docker sandbox: needs `stepyard` and `docker` on PATH,
-the `stepyard-sandbox:latest` image on the Docker host and ANTHROPIC_API_KEY
-in the environment (see scripts/demo/README.md for a remote Docker host).
+the `stepyard-sandbox:latest` image and ANTHROPIC_API_KEY in the environment.
 The demo project is copied to /tmp/stepyard-demo, so the repo is never touched.
 """
 import json, os, pty, select, shutil, subprocess, sys, time
