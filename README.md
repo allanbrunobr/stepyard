@@ -258,6 +258,9 @@ The real `ANTHROPIC_API_KEY` does not go into the container:
 - `agent` steps in the container use the same proxy. With no
   `ANTHROPIC_API_KEY` on the host, the Claude CLI in the container is not
   logged in (a Claude subscription login on the host is not shared).
+- With a remote Docker daemon, set `STEPYARD_PROXY_PORT` and forward that port
+  with `ssh -R` so the container can reach the proxy. See
+  [Remote Docker host](docs/DOCKER-SANDBOX.md#remote-docker-host).
 - `chat` steps always run on the host.
 
 ```mermaid
