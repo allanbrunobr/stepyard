@@ -1,16 +1,15 @@
 # Remote Execution
 
 Dispatch workflows to a Stepyard engine running on a VPS, from any machine. No SSH
-in your shell history; no shell-wrangling for each run. The model follows
-ARCHITECTURE.md Invariant 10 ("um engine por VPS") — your local CLI is a thin
-client; everything executes remotely inside `minion-sandbox:latest` containers
-on the VPS.
+in your shell history; no shell-wrangling for each run. One engine runs per
+VPS; your local CLI is a thin client, and everything executes remotely inside
+`stepyard-sandbox:latest` containers on the VPS.
 
-Introduced by **Epic 5 — Remote-First Execution**:
-- Story 5.1 — `POST /api/workflows/dispatch` on the Dashboard API
-- Story 5.2 — `stepyard remote` subcommand on the local CLI
-- Story 5.3 — `GET /api/workflows/:run_id/logs/stream` SSE snapshots consumed
-  by `stepyard remote logs`
+The pieces:
+- `POST /api/workflows/dispatch` on the Dashboard API
+- the `stepyard remote` subcommand on the local CLI
+- `GET /api/workflows/:run_id/logs/stream`, SSE snapshots consumed by
+  `stepyard remote logs`
 
 ## Architecture
 
@@ -26,7 +25,7 @@ Introduced by **Epic 5 — Remote-First Execution**:
 │    -- 42                    │   (Bearer    │  │                                 │
 │                             │    auth)     │  └── host ────────────────────────│
 │  stepyard remote status       │ ◄─────────── │      └─► stepyard 0.7.6 runs        │
-│    (shows run list)         │              │          └─► minion-sandbox ctr   │
+│    (shows run list)         │              │          └─► stepyard-sandbox ctr   │
 │                             │              │              └─► git clone, run  │
 │                             │              │                  push back, emit │
 │                             │              │                  event to api    │
@@ -89,10 +88,10 @@ Edit `/root/stepyard-dashboard/.env`:
 API_SECRET=<unchanged>
 POSTGRES_USER=stepyard
 POSTGRES_PASSWORD=<unchanged>
-POSTGRES_DB=minion_engine
+POSTGRES_DB=stepyard
 # …
 
-# NEW — Story 5.1
+# Remote dispatch
 STEPYARD_DISPATCH_SSH_HOST=root@host.docker.internal
 STEPYARD_WORKFLOWS_DIR=/root/.stepyard/workflows
 ANTHROPIC_API_KEY=<your key>         # forwarded by ssh when dispatching
@@ -117,7 +116,7 @@ stepyard remote status --limit 1
 ```
 
 You should see the run in the dashboard at `http://<vps>:5173/workflows` and a
-new `minion-sandbox:latest` container appear briefly in Portainer.
+new `stepyard-sandbox:latest` container appear briefly in Portainer.
 
 ## Remote logs
 
