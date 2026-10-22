@@ -32,6 +32,22 @@ struct ProxySecrets {
     auth_token: String,
 }
 
+/// Address the proxy listens on. Always loopback. The port is random
+/// unless `STEPYARD_PROXY_PORT` is set: a fixed port lets a remote Docker
+/// host reach the proxy through an SSH reverse tunnel
+/// (`ssh -R 127.0.0.1:PORT:127.0.0.1:PORT <docker-host>`).
+pub fn proxy_bind_addr(port_env: Option<String>) -> Result<String> {
+    match port_env.as_deref().map(str::trim) {
+        None | Some("") => Ok("127.0.0.1:0".to_string()),
+        Some(raw) => {
+            let port: u16 = raw.parse().ok().filter(|p| *p != 0).with_context(|| {
+                format!("invalid STEPYARD_PROXY_PORT `{raw}` (expected 1-65535)")
+            })?;
+            Ok(format!("127.0.0.1:{port}"))
+        }
+    }
+}
+
 /// A running API proxy instance
 pub struct ApiProxy {
     port: u16,
@@ -41,14 +57,16 @@ pub struct ApiProxy {
 }
 
 impl ApiProxy {
-    /// Start the proxy on a random available port.
+    /// Start the proxy on localhost. The port is random unless
+    /// `STEPYARD_PROXY_PORT` is set (see [`proxy_bind_addr`]).
     ///
     /// The proxy will forward requests to `api.anthropic.com` and inject
     /// the `x-api-key` header with the provided API key.
     pub async fn start(anthropic_api_key: String) -> Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")
+        let addr = proxy_bind_addr(std::env::var("STEPYARD_PROXY_PORT").ok())?;
+        let listener = TcpListener::bind(&addr)
             .await
-            .context("Failed to bind proxy to localhost")?;
+            .with_context(|| format!("Failed to bind proxy to {addr}"))?;
 
         let port = listener.local_addr()?.port();
 
@@ -351,6 +369,20 @@ fn parse_content_length(headers: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn proxy_port_is_random_unless_configured() {
+        use super::proxy_bind_addr;
+        assert_eq!(proxy_bind_addr(None).unwrap(), "127.0.0.1:0");
+        assert_eq!(proxy_bind_addr(Some(" ".into())).unwrap(), "127.0.0.1:0");
+        assert_eq!(
+            proxy_bind_addr(Some("47821".into())).unwrap(),
+            "127.0.0.1:47821"
+        );
+        for bad in ["0", "70000", "abc", "-1"] {
+            assert!(proxy_bind_addr(Some(bad.into())).is_err(), "{bad}");
+        }
+    }
+
     use super::*;
 
     #[test]
