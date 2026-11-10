@@ -44,19 +44,52 @@ fn validate_engine_v1_keeps_the_v1_rules_only() {
         .stdout(contains("valid for --engine v1"));
 }
 
+/// v2 renders only `steps`, `target`, `vars`, `args` and `scope`: a step
+/// using `{{ stack.* }}` would fail mid-run, after earlier steps ran.
 #[test]
-fn every_shipped_workflow_validates_for_the_default_engine() {
+fn validate_v2_refuses_v1_only_template_namespaces() {
+    let wf = workflow(
+        "# {{ prompts.x }} in a comment does not count\nname: stack\nsteps:\n  - name: lint\n    type: cmd\n    run: \"{{ stack.tools.lint }}\"\n",
+    );
+    stepyard()
+        .args(["validate", wf.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(contains("{{ stack.* }}"))
+        .stderr(contains("--engine v2"));
+    stepyard()
+        .args(["validate", "--engine", "v1", wf.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+/// Each shipped workflow validates for the engine it declares: the default
+/// (v2), or v1 when its header says `Requires --engine v1`, and then the
+/// default engine must refuse it.
+#[test]
+fn every_shipped_workflow_validates_for_its_engine() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("workflows");
-    let mut checked = 0;
+    let (mut v2, mut v1) = (0, 0);
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let file = path.to_str().unwrap();
+        if std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("Requires --engine v1")
+        {
             stepyard()
-                .args(["validate", path.to_str().unwrap()])
+                .args(["validate", "--engine", "v1", file])
                 .assert()
                 .success();
-            checked += 1;
+            stepyard().args(["validate", file]).assert().failure();
+            v1 += 1;
+        } else {
+            stepyard().args(["validate", file]).assert().success();
+            v2 += 1;
         }
     }
-    assert!(checked >= 12, "checked {checked}");
+    assert!(v2 >= 10 && v1 >= 2, "v2 {v2}, v1 {v1}");
 }

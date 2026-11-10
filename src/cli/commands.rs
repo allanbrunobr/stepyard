@@ -1481,6 +1481,43 @@ async fn collect_missing_prompts(
     missing
 }
 
+/// The v2 renderer knows only `steps`, `target`, `vars`, `args` and `scope`;
+/// a step using `{{ stack.* }}` or `{{ prompts.* }}` fails when it renders,
+/// after the steps before it already ran. `validate` reports it up front.
+/// Reads the YAML values (not the raw text) so comments do not count.
+fn v1_only_template_namespaces(path: &std::path::Path) -> Result<(), String> {
+    fn strings<'a>(v: &'a serde_yaml::Value, out: &mut Vec<&'a str>) {
+        match v {
+            serde_yaml::Value::String(s) => out.push(s),
+            serde_yaml::Value::Sequence(items) => items.iter().for_each(|i| strings(i, out)),
+            serde_yaml::Value::Mapping(map) => map.values().for_each(|i| strings(i, out)),
+            serde_yaml::Value::Tagged(t) => strings(&t.value, out),
+            _ => {}
+        }
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
+    let mut all = Vec::new();
+    strings(&value, &mut all);
+    let pattern = regex::Regex::new(r"\{\{-?\s*(stack|prompts)\.").expect("valid regex");
+    let mut found: Vec<&str> = all
+        .iter()
+        .flat_map(|s| pattern.captures_iter(s))
+        .map(|c| c.get(1).map_or("", |m| m.as_str()))
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    if found.is_empty() {
+        Ok(())
+    } else {
+        let names: Vec<String> = found.iter().map(|n| format!("{{{{ {n}.* }}}}")).collect();
+        Err(format!(
+            "uses {}, which --engine v2 does not render yet",
+            names.join(" and ")
+        ))
+    }
+}
+
 pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
     let workflow_path = resolve_workflow_path(&args.workflow)?;
 
@@ -1497,7 +1534,8 @@ pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
             with_defaults.config = crate::config::apply_defaults(&with_defaults.config);
             let v2 = harness_adapter::adapt(&with_defaults)
                 .map_err(|e| e.to_string())
-                .and_then(|wf| wf.validate().map_err(|e| e.to_string()));
+                .and_then(|wf| wf.validate().map_err(|e| e.to_string()))
+                .and_then(|()| v1_only_template_namespaces(&workflow_path));
             if let Err(e) = v2 {
                 eprintln!("Validation errors (--engine v2, the default):");
                 eprintln!("  - {}", display_text(&e));
