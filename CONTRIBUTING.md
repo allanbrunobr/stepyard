@@ -42,6 +42,21 @@ The minimum supported Rust version is **1.88** (`rust-version` in
 not our own code. CI builds only with stable, so after a `cargo update`
 re-check it with `cargo +1.88 check --locked --workspace --all-targets`.
 
+### Build directory
+
+`.cargo/config.toml` points `target-dir` at `/tmp/stepyard-target`, outside
+the checkout, because a repo-local `target/` has grown past 100 GiB. That
+directory is shared: every checkout and worktree on the machine builds into
+it and waits on the same Cargo lock. To keep a worktree separate, set
+`CARGO_TARGET_DIR`, which overrides the config, for example
+`export CARGO_TARGET_DIR="$HOME/.cache/stepyard-target/<worktree>"`.
+
+`scripts/cargo-guarded.sh <cargo-args>` runs Cargo between two size checks
+(`scripts/guard-cargo-target-size.sh`). The check fails if a repo-local
+`target/` exists or if the target dir is over `STEPYARD_CARGO_TARGET_MAX_MIB`
+(default 16384, about twice one full CI-equivalent pass). Clean it with
+`cargo clean` when it fails.
+
 ### Tests with external services
 
 Some tests need a service. They skip when the service is not configured:

@@ -22,7 +22,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | 3 | Saída de passo limitada no log de sessão (1 MiB por stream, configurável) | BUG-HARNESS-08 (BUG-HARNESS-03 pendente) | ✅ feito | `a913232` |
 | 4 | `SessionId` no crate de contrato; o orquestrador deixa de depender do crate de sessão | ARQ-10 (ARQ-09 pendente) | ✅ feito | `78dc9e5` |
 | 5 | Higiene: pool de banco morto da API; `allow(dead_code)` que não suprimiam nada | MANUT-16, MANUT-09 (parcial) | ✅ feito | `1e23944` |
-| 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI pendente) | ✅ feito | (este) |
+| 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI pendente) | ✅ feito | `2f67af8` |
+| 7 | Guard do diretório de build calibrado e documentado | MANUT-14 (parcial) | ✅ feito | (este) |
 
 ---
 
@@ -165,6 +166,28 @@ Não há mutante: a mudança não altera comportamento. A prova é a compilaçã
 - Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
 
 **Não coberto.** Não existe job de MSRV no CI, porque criá-lo exige mexer em `.github/`. A MSRV volta a ficar falsa no primeiro `cargo update` que puxar um crate mais novo. O passo do CI seria `dtolnay/rust-toolchain@1.88` mais `cargo check --locked --workspace --all-targets`. Também fica para depois a medição de cobertura com piso (TEST-15), pelo mesmo motivo.
+
+## 7. Guard do diretório de build — ✅ (parcial)
+
+**Defeito (MANUT-14).**
+- `scripts/guard-cargo-target-size.sh` tinha limite padrão de 1 GiB. Uma única linha de base completa deixa 8,4 GiB no target, então o `scripts/cargo-guarded.sh` (que é `guard; cargo; guard`) falhava depois de **todo** build completo bem-sucedido.
+- Nenhum documento citava os dois scripts nem o `target-dir` compartilhado em `/tmp/stepyard-target`.
+
+**Correção.**
+- O limite padrão do guard foi para 16 GiB, cerca de duas passadas completas. O comentário no script explica a conta, e `STEPYARD_CARGO_TARGET_MAX_MIB` continua sobrescrevendo.
+- A CONTRIBUTING ganhou a seção "Build directory": por que o target fica fora do checkout, que ele é compartilhado entre checkouts e worktrees (disputa o mesmo lock do Cargo), como isolar uma worktree com `CARGO_TARGET_DIR`, e o que os dois scripts fazem.
+
+**Medido:**
+- Guard no diretório real, hoje com **42,94 GiB** (inflado pelas builds desta análise): reprova com status 1, como deve.
+- Diretório vazio: aprova com status 0. Arquivo de 2 MiB: limite de 1 MiB reprova (status 1) e limite de 3 MiB aprova (status 0).
+- O `CARGO_TARGET_DIR` de fato tem precedência sobre o `target-dir` da config: `cargo metadata` passa de `/tmp/stepyard-target` para o caminho da variável. Assim, a instrução da CONTRIBUTING funciona.
+- Portões do CI: todos com status 0. Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
+
+**Não coberto (decisão do Allan).** O `target-dir = "/tmp/stepyard-target"` versionado continua.
+- Um caminho por usuário não cabe na config, porque o Cargo não expande `~` nem variáveis em `target-dir`.
+- Remover a linha devolveria o `target/` local de mais de 100 GiB para dentro de cada checkout, que é o problema que ela resolveu.
+- Mudar o padrão afeta o fluxo de todas as worktrees, então a escolha fica para quem mantém o repositório.
+- O diretório `/tmp/stepyard-target` está em 42,94 GiB e **não foi limpo**: fica fora do repositório.
 
 ## Fora do escopo dos itens: limpeza de worktrees (pedida à parte)
 
