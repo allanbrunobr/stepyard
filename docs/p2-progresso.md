@@ -15,7 +15,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | # | Item | Achados | Status | Commit |
 |---|---|---|---|---|
 | 0 | Contradições do pré-PR do #1 e o dry-run do v1 | checagem pré-PR; regressão do P1-10 | ✅ feito | `d5dfeda` |
-| 1 | Segredos do host fora do alcance do YAML (`${VAR}`, `base_url` do chat, env no argv) | SEG-RUST-05 (parcial), SEG-RUST-12 | ✅ feito | (este) |
+| 1 | Segredos do host fora do alcance do YAML (`${VAR}`, `base_url` do chat, env no argv) | SEG-RUST-05 (parcial), SEG-RUST-12 | ✅ feito | `882c323` |
+| 2 | Aviso quando o build roda no host por padrão; contêiner de sessão endurecido | SEG-RUST-06, SEG-RUST-15 | ✅ feito | (este) |
 
 ---
 
@@ -68,3 +69,25 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 - Portões do CI: todos com status 0. Suíte completa com banco: **1.189 passaram, 0 falharam, 16 ignorados**. Job SQLite: verde.
 
 **Não coberto (resto do SEG-RUST-05):** o subscriber do dashboard do v1 manda o `DASHBOARD_API_SECRET` do host (fallback quando o YAML não define `secret`) para a `url` que o **workflow** define, junto com os `artifacts` que o workflow lista. Corrigir exige decidir se a URL do dashboard pode vir do YAML. Fica registrado para decisão. O `docker create`/`run` do v1 (`src/sandbox/docker.rs`) ainda põe valores de `env` no argv; o v1 só roda em modo `--repo` com sandbox.
+
+## 2. Aviso de runtime no host e contêiner endurecido — ✅
+
+**Defeitos.**
+- **SEG-RUST-06:** o binário publicado (perfil SQLite, `release.yml`) usa o runtime `local` por padrão. Um workflow de repositório de terceiro rodava **no host** sem aviso nenhum, e o `--help` dizia "Run inside a Docker sandbox (default: true)".
+- **SEG-RUST-15:** o contêiner de sessão do v2 subia sem endurecimento nenhum.
+
+**Correção.**
+- `src/cli/commands.rs`: quando o runtime efetivo é `local` e o usuário não o escolheu (nem `--sandbox-runtime`, nem `--no-sandbox`, nem `STEPYARD_SANDBOX`), o CLI imprime no stderr que os passos vão rodar nesta máquina e como isolá-los. O `--help` de `--sandbox` agora descreve o padrão real de cada build.
+- `stepyard_sandbox_orchestrator::HARDENING_ARGS`, aplicado no `docker run` e no `podman run` do v2: `--security-opt no-new-privileges`, `--pids-limit 4096` e `--cap-drop` de `NET_RAW`, `MKNOD`, `AUDIT_WRITE`, `SETFCAP` e `SYS_CHROOT`. É conservador de propósito: o script de preparo ainda faz `chown`, e o agente roda com `--user`. Nada na imagem nem no código usa `sudo` ou setuid (conferido).
+
+**Testes.**
+- `tests/cli_lite_smoke.rs` (roda no job SQLite do CI): o padrão avisa; `--sandbox-runtime local` explícito não avisa.
+- `crates/stepyard-sandbox-orchestrator/tests/lifecycle.rs` (Docker, `#[ignore]`): cria um contêiner de sessão real, executa um comando e confere com `docker inspect` que `SecurityOpt`, `PidsLimit` e `CapDrop` estão aplicados.
+- Os testes Docker existentes passaram **com** o endurecimento: os 3 do workspace v2, duas vezes, mais os 9 do orquestrador.
+
+**Medido:**
+- **Mutantes:** sem as flags, o teste do `docker inspect` reprova; sem o aviso, o teste do smoke SQLite reprova. Restaurados.
+- **Incidente:** a primeira rodada dos testes Docker do workspace teve uma falha, porque o teste estourou o timeout de 300 s. A causa foi que a imagem `stepyard-sandbox:latest`, apagada do M1 pelo Allan, foi **reconstruída** pelo pré-voo do v2 durante esse teste. Com a imagem pronta, as três rodadas seguintes passaram. **A imagem voltou a existir no M1 por causa destes testes.**
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.189 passaram, 0 falharam, 17 ignorados** (+1 teste Docker). Job SQLite: verde (smoke 6/6).
+
+**Não coberto.** O descarte de **todas** as capabilities (`--cap-drop ALL` com reposição seletiva) exige revisar o script de preparo e a imagem, e fica para depois. O `docker create` do v1 não recebeu o endurecimento: o v1 só roda em modo `--repo` com sandbox, e sua remoção é o P3.

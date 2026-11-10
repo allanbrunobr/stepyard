@@ -85,6 +85,7 @@ impl SandboxLifecycle for PodmanLifecycle {
         let mut command = Command::new(PODMAN);
         command
             .args(["run", "-d", "--name", &name])
+            .args(crate::HARDENING_ARGS)
             .arg("--label")
             .arg(format!("session_id={session_id}"));
         for volume in &opts.volumes {

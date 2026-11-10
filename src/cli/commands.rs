@@ -177,7 +177,10 @@ pub struct ExecuteArgs {
     #[arg(long, value_name = "STEP_NAME")]
     pub resume: Option<String>,
 
-    /// Run inside a Docker sandbox (default: true). Use --no-sandbox to run locally.
+    /// Run inside a container sandbox when the selected runtime is docker or
+    /// podman. The default runtime depends on the build: the Postgres build
+    /// uses docker; the SQLite build (the released binary) uses `local`, which
+    /// runs steps on this machine. Use --sandbox-runtime to choose.
     #[arg(long, default_value_t = true, action = clap::ArgAction::SetTrue)]
     pub sandbox: bool,
 
@@ -961,6 +964,19 @@ pub async fn execute(
         .context("failed to resolve sandbox runtime")?;
     if args.no_sandbox && args.sandbox_runtime.is_some() {
         tracing::warn!("--no-sandbox was also provided; --sandbox-runtime takes precedence");
+    }
+    // SEG-RUST-06: the released binary (SQLite profile) defaults to the
+    // `local` runtime, so a workflow from an untrusted repository ran on the
+    // host with nothing said. Say it unless the user chose the runtime.
+    let runtime_chosen = args.sandbox_runtime.is_some()
+        || args.no_sandbox
+        || std::env::var_os("STEPYARD_SANDBOX").is_some();
+    if sandbox_runtime == SandboxRuntime::Local && !runtime_chosen {
+        eprintln!(
+            "warning: no container sandbox: this build runs workflow steps directly on this \
+             machine by default. Pass --sandbox-runtime docker (or podman) to isolate them, \
+             or --sandbox-runtime local to run locally on purpose."
+        );
     }
     if args.engine == "v1" && sandbox_runtime == SandboxRuntime::Podman {
         bail!("--sandbox-runtime podman currently requires --engine v2");

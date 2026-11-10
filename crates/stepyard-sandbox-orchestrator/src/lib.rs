@@ -378,6 +378,28 @@ mod tests {
     }
 }
 
+/// `docker run` / `podman run` hardening flags for session containers
+/// (SEG-RUST-15). Conservative on purpose: the setup script still runs
+/// `chown` and the agent runs with `--user`, so the default capability set
+/// stays minus what nothing here uses; `no-new-privileges` stops setuid
+/// binaries from regaining privileges, and a pids limit stops fork bombs.
+pub const HARDENING_ARGS: &[&str] = &[
+    "--security-opt",
+    "no-new-privileges",
+    "--pids-limit",
+    "4096",
+    "--cap-drop",
+    "NET_RAW",
+    "--cap-drop",
+    "MKNOD",
+    "--cap-drop",
+    "AUDIT_WRITE",
+    "--cap-drop",
+    "SETFCAP",
+    "--cap-drop",
+    "SYS_CHROOT",
+];
+
 /// Split a step's env into the `--env NAME` argv elements and the
 /// `(NAME, value)` pairs to set on the container CLI process (SEG-RUST-12).
 ///

@@ -207,3 +207,38 @@ async fn docker_destroy_by_session_reaches_override_through_trait_object() {
         "container still listed after trait-dispatched destroy_by_session: {stdout}"
     );
 }
+
+/// SEG-RUST-15 (analysis 2026-11-09): session containers start hardened —
+/// `no-new-privileges`, a pids limit and the unused capabilities dropped —
+/// and still run commands.
+#[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
+async fn docker_session_container_is_hardened() {
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
+    let lifecycle = DockerLifecycle::default();
+    let session_id = Uuid::new_v4();
+    let sandbox = lifecycle.create(session_id).await.expect("create");
+    let out = sandbox.exec("echo hi").await.expect("exec");
+    assert_eq!(out.stdout, "hi\n");
+
+    let inspect = tokio::process::Command::new("docker")
+        .args([
+            "inspect",
+            "-f",
+            "{{json .HostConfig.SecurityOpt}}|{{.HostConfig.PidsLimit}}|{{json .HostConfig.CapDrop}}",
+            &format!("stepyard-session-{session_id}"),
+        ])
+        .output()
+        .await
+        .unwrap();
+    let _ = lifecycle.destroy_by_session(session_id).await;
+    let got = String::from_utf8_lossy(&inspect.stdout).to_string();
+    assert!(got.contains("no-new-privileges"), "{got}");
+    assert!(got.contains("|4096|"), "{got}");
+    for cap in ["NET_RAW", "MKNOD", "AUDIT_WRITE", "SETFCAP", "SYS_CHROOT"] {
+        assert!(got.contains(cap), "{cap} not dropped: {got}");
+    }
+}

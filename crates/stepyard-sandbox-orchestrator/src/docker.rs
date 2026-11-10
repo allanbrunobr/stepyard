@@ -94,6 +94,7 @@ impl SandboxLifecycle for DockerLifecycle {
         let mut command = Command::new("docker");
         command
             .args(["run", "-d", "--name", &name])
+            .args(crate::HARDENING_ARGS)
             .arg("--label")
             .arg(format!("session_id={session_id}"));
         for volume in &opts.volumes {

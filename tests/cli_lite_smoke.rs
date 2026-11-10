@@ -343,3 +343,46 @@ async fn sqlite_lite_cli_stepyard_sandbox_env_selects_local_runtime() {
         "STEPYARD_SANDBOX=local should select LocalShell and complete without Docker"
     );
 }
+
+/// SEG-RUST-06 (analysis 2026-11-09): the released binary (this SQLite
+/// profile) defaults to running steps on the host. It must say so unless the
+/// user picked the runtime.
+#[tokio::test]
+async fn sqlite_lite_cli_warns_when_it_defaults_to_the_host_runtime() {
+    let cwd = tempfile::tempdir().expect("tempdir");
+    init_minimal_git_repo(cwd.path());
+    let db_path = cwd.path().join("sessions.db");
+    let workflow_path = fixture("hello-world-cmd.yaml");
+    let run = |extra: &[&str]| {
+        let mut args = vec![
+            "execute",
+            workflow_path.to_str().expect("utf-8"),
+            "--engine",
+            "v2",
+        ];
+        args.extend_from_slice(extra);
+        Command::cargo_bin("stepyard")
+            .expect("stepyard binary")
+            .args(args)
+            .current_dir(cwd.path())
+            .env("STEPYARD_SQLITE_PATH", &db_path)
+            .env("STEPYARD_TENANT", format!("lite-warn-{}", Uuid::new_v4()))
+            .env("STEPYARD_NO_FILE_LOGS", "1")
+            .env_remove("STEPYARD_SANDBOX")
+            .assert()
+            .success()
+    };
+    let warning = "warning: no container sandbox";
+    let defaulted = run(&[]);
+    let stderr = String::from_utf8_lossy(&defaulted.get_output().stderr).to_string();
+    assert!(
+        stderr.contains(warning),
+        "default runtime must warn: {stderr}"
+    );
+    let chosen = run(&["--sandbox-runtime", "local"]);
+    let stderr = String::from_utf8_lossy(&chosen.get_output().stderr).to_string();
+    assert!(
+        !stderr.contains(warning),
+        "an explicit choice must not warn: {stderr}"
+    );
+}
