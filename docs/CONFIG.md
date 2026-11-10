@@ -157,16 +157,25 @@ set them):
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `STEPYARD_ENV_ALLOW` | empty | Comma-separated host variable names that `env:` values of the form `${NAME}` may read even though the name looks like a credential (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*_KEY`, `DATABASE_URL`, …). Other names (`${HOME}`, `${CI}`) expand as before. |
-| `STEPYARD_CHAT_BASE_URL_ALLOW` | empty | Comma-separated URL prefixes a chat step may use as `base_url`. Loopback endpoints (`http://localhost:…`, `http://127.0.0.1:…`, `http://[::1]:…`) are always allowed; any other `base_url` is refused before the request, so a workflow cannot send the key read from `api_key_env` to its own server. |
+| `STEPYARD_CHAT_BASE_URL_ALLOW` | empty | Comma-separated URL prefixes a chat step may use as `base_url`. A prefix matches only up to a URL part boundary: `https://llm.example` allows `https://llm.example/v1`, not `https://llm.example.evil.net` nor `https://llm.example:9999`; a `base_url` with `user@` is never allowed. Loopback endpoints (`http://localhost:…`, `http://127.0.0.1:…`, `http://[::1]:…`) are always allowed; any other `base_url` is refused before the request, so a workflow cannot send the key read from `api_key_env` to its own server. |
 
 Environment values passed to `cmd` steps in a Docker/Podman sandbox reach the
 container through the CLI's environment (`docker exec --env NAME`), not on the
-command line, so they do not show up in `ps`.
+command line, so they do not show up in `ps`. Names the container CLI reads
+itself (`PATH`, `HOME`, `TMPDIR`, `SHELL`, `USER`, `*_PROXY` and names
+starting with `DOCKER_`, `CONTAINER_`, `CONTAINERS_`, `PODMAN_`, `BUILDKIT_`,
+`BUILDX_`, `XDG_`, `SSH_`, `LD_`, `DYLD_`) go as `--env NAME=VALUE` instead,
+so a step value meant for the container does not change which `docker` runs
+or which daemon it talks to; those values are visible in `ps`.
 
 ## Step output kept in the session log
 
-`cmd`, `agent` and `chat` output (stdout and stderr, each) is kept in the
-session log up to `STEPYARD_MAX_STEP_OUTPUT_BYTES` (default 1 MiB). Longer
+On `--engine v2` (the default), `cmd`, `agent` and `chat` output (stdout and
+stderr, each, the error of a failed step and a chat reply) is kept in the
+session log up to `STEPYARD_MAX_STEP_OUTPUT_BYTES` (default 1 MiB). The v1
+engine (`--engine v1`, also used by remote dispatch and the Slack bot) does
+not apply this cap: it records no step output, but a failed step's error,
+which holds a `cmd`'s stderr, is kept whole. Longer
 output is cut on a character boundary and ends with a
 `…[stepyard: output truncated, N more bytes …]` marker; later steps that read
 `{{ steps.X.stdout }}` see the same capped value. The engine reads the log back
@@ -187,4 +196,4 @@ Two kinds of logs exist:
 | Variable | Default | Effect |
 |---|---|---|
 | `RUST_LOG` | `info` | Filter for diagnostic logs, e.g. `warn`, `debug`, `stepyard_harness=debug`. |
-| `STEPYARD_LOG_FORMAT` | text | `json` writes one JSON object per line with a `timestamp` and, for lines logged while a v2 step runs, `span.session_id`. Use it for runs nobody watches (remote dispatch, CI) to match a line to `.stepyard/logs/<session_id>.jsonl`. The default text format has no timestamps; a line logged while a v2 step runs starts with `session{session_id=…}:`. |
+| `STEPYARD_LOG_FORMAT` | text | `json` writes one JSON object per line with a `timestamp` and, for lines logged while a v2 step runs, `span.session_id`. Use it for v2 runs nobody watches (CI, cron) to match a line to `.stepyard/logs/<session_id>.jsonl`. Remote dispatch runs v1, whose lines carry no `session_id`; its log file is named after the run id instead. The default text format has no timestamps; a line logged while a v2 step runs starts with `session{session_id=…}:`. |

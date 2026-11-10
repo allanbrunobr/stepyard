@@ -233,14 +233,16 @@ impl Event {
 /// state between `step` calls — preserves ARCHITECTURE invariant 8 under post-crash
 /// replay). Added in PR 2 of Task #31.
 ///
-/// Fields are persisted verbatim. Redaction and size caps are deferred to a
-/// later PR; the harness writes whatever the executor produced.
+/// Fields are persisted as the executor produced them, except that the
+/// harness caps `stdout` and `stderr` at `STEPYARD_MAX_STEP_OUTPUT_BYTES`
+/// each (default 1 MiB) before writing; a capped value ends with a
+/// `…[stepyard: output truncated, …]` marker. No redaction is applied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepOutputSnapshot {
-    /// Standard output of the step, verbatim.
+    /// Standard output of the step (capped, see above).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stdout: String,
-    /// Standard error of the step, verbatim.
+    /// Standard error of the step (capped, see above).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stderr: String,
     /// Process exit code (0 on success for cmd steps).

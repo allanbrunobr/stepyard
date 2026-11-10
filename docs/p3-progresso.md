@@ -313,6 +313,20 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
   - os testes `slack` passaram (6 de 6).
 - **O que só o CI mostra:** o comportamento dos testes Docker no Docker Engine do Linux, onde mora o BUG-MOTOR-02/15. Aqui eles rodaram no Docker Desktop.
 
+## Revisão pré-PR (`pre-pr-contradicoes`)
+
+**Primeira rodada, no `6689d1a`: 2 achados vivos, corrigidos.**
+- O limite de saída não valia para `StepFailed` nem para o chat (`51b84d6`, item 3).
+- O job Docker não construía a imagem do sandbox (`a644cb5`, item 10).
+
+**Segunda rodada, no `a644cb5`: 9 achados vivos (6 assuntos), corrigidos ou registrados.**
+- **Regressão da P2 (SEG-RUST-12, `882c323`).** Os valores do `env:` do passo passaram a ir para o ambiente do processo `docker`/`podman`. Um `PATH`, um `HOME` ou um `DOCKER_HOST` pensado para o contêiner passava a decidir qual binário roda e com qual daemon ele fala. Os nomes que o CLI lê (lista no `docs/CONFIG.md`) voltam a ir como `--env NOME=VALOR` no argv. Teste unitário; mutante morto.
+- **`STEPYARD_CHAT_BASE_URL_ALLOW` comparava só o prefixo do texto.** Com `https://llm.corp.example` na lista, passavam `https://llm.corp.example.evil.net` e `https://llm.corp.example@evil.net`. Agora o prefixo tem que terminar numa fronteira de parte da URL, e uma URL com `user@` nunca passa. Teste com seis URLs recusadas e quatro aceitas; mutante morto.
+- **Evento do dashboard acima de 100 kB.** Um run do v1 com um `cmd` que falha com stderr grande era recusado pela API (413) e aparecia como "exited before reporting". O erro de cada passo enviado ao dashboard agora para em 8 KiB. Teste: um erro de 200 kB gera um corpo menor que 100 kB; mutante morto.
+- **O limite de 1 MiB do log de sessão é do v2.** O v1 (despacho remoto e Slack) não grava a saída dos passos, mas grava inteiro o erro de um passo que falha. O `docs/CONFIG.md` agora diz isso; levar o corte ao v1 fica com a desativação do v1.
+- **`STEPYARD_LOG_FORMAT=json` e despacho.** O `docs/CONFIG.md` recomendava o JSON para correlacionar o despacho remoto com a sessão, mas o despacho roda no v1, que não tem o span. O texto foi corrigido.
+- **Rustdoc do `StepOutputSnapshot`** (`event.rs`): dizia que a saída é gravada inteira e que o limite ficava "para um PR futuro". Atualizado.
+
 ## O que ficou de fora da P3
 
 ### Pulado por ordem (decisão do Allan ou major de dependência)
@@ -334,6 +348,7 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **ARQ-09** (item 4): a reconciliação continua com SQL direto e `docker ps`. Passá-la para os traits exige primeiro um "lease" abstrato no `EventStore`, com implementação para o SQLite.
 - **BUG-HARNESS-03** (item 3): o `parallel` só grava `StepStarted`/`StepCompleted` dos sub-passos no fim. A correção muda a ordem dos eventos no log. Precisa ser conferida contra a invariante 2 (pareamento por passo de nível superior), a contagem de progresso e retomada, o contrato do dashboard (`tests/fixtures/dashboard-event.json`) e o limite de saída do item 3. Não a comecei para não deixá-la pela metade.
 - **Releitura completa do log** várias vezes por passo (item 3): agora limitada por passo, mas ainda linear no número de passos.
+- **Limite de saída no v1** (item 3): o erro de um passo que falha entra inteiro no log de sessão do v1. Fica para a desativação do v1.
 - **G3 e Rule7a mais amplos** (item 2): exigem um mecanismo de exceção por linha no `audit-patterns.sh`.
 - **MANUT-09** (item 5): restam 24 `allow(dead_code)` em 7 arquivos sobre código de fato morto, mais 2 para alvos não-Unix e 2 em `tests/support`.
 - **MANUT-12** (item 8): continuam cerca de 500 referências de história de planejamento (`Story N`, `PR N`, `Task #N`, `Round N`, `Epic N`). Melhor tratá-las depois da desativação do v1.
