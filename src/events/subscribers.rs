@@ -277,7 +277,7 @@ impl EventSubscriber for DashboardSubscriber {
                     tokens_in: None,
                     tokens_out: None,
                     sandboxed: *sandboxed,
-                    error: Some(error.clone()),
+                    error: Some(dashboard_error(error)),
                 });
             }
             Event::WorkflowCompleted {
@@ -372,6 +372,26 @@ impl EventSubscriber for DashboardSubscriber {
             _ => {}
         }
     }
+}
+
+/// Most bytes of a step error sent to the dashboard. A failing `cmd` puts its
+/// whole stderr in the error, and the API refuses an event body over 100 kB
+/// (413), which left the run as "exited before reporting".
+const DASHBOARD_ERROR_MAX_BYTES: usize = 8 * 1024;
+
+fn dashboard_error(error: &str) -> String {
+    if error.len() <= DASHBOARD_ERROR_MAX_BYTES {
+        return error.to_string();
+    }
+    let mut end = DASHBOARD_ERROR_MAX_BYTES;
+    while !error.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n…[stepyard: error truncated, {} more bytes]",
+        &error[..end],
+        error.len() - end
+    )
 }
 
 fn dashboard_artifacts_url(events_url: &str, run_id: &str) -> String {
@@ -478,7 +498,8 @@ impl DashboardSubscriber {
 #[cfg(test)]
 mod tests {
     use super::{
-        base64_encode, dashboard_artifacts_url, DashboardSubscriber, Event, EventSubscriber,
+        base64_encode, dashboard_artifacts_url, dashboard_error, DashboardSubscriber, Event,
+        EventSubscriber,
     };
 
     #[test]
@@ -568,5 +589,40 @@ mod tests {
             !rendered.contains("null"),
             "no null may reach the API: {rendered}"
         );
+    }
+
+    /// A failing step with a huge stderr must not push the event body past
+    /// the API's 100 kB limit (pre-PR review of the P3 branch).
+    #[test]
+    fn a_huge_step_error_is_cut_before_it_reaches_the_dashboard() {
+        let mut sub = DashboardSubscriber::new(
+            "http://127.0.0.1:1/api/events",
+            None,
+            "big",
+            "1",
+            None,
+            "dev",
+            "Disabled",
+            Vec::new(),
+        );
+        sub.dispatch_log_path = None;
+        let t = chrono::Utc::now();
+        sub.on_event(&Event::WorkflowStarted { timestamp: t });
+        sub.on_event(&Event::StepFailed {
+            step_name: "build".into(),
+            step_type: "cmd".into(),
+            error: format!("Command failed (exit 1): {}", "é".repeat(100_000)),
+            duration_ms: 1,
+            timestamp: t,
+            sandboxed: false,
+        });
+        let body = serde_json::to_string(&sub.build_payload(1, t)).unwrap();
+        assert!(
+            body.len() < 100 * 1024,
+            "event body is {} bytes",
+            body.len()
+        );
+        assert!(body.contains("error truncated"), "marker missing");
+        assert_eq!(dashboard_error("short"), "short");
     }
 }
