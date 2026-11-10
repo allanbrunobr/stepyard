@@ -25,7 +25,7 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI pendente) | ✅ feito | `2f67af8` |
 | 7 | Guard do diretório de build calibrado e documentado | MANUT-14 (parcial) | ✅ feito | `c731327` |
 | 8 | Referências a invariantes inexistentes, comentário errado sobre `parallel`, `exclude` órfãos | MANUT-12 (parcial) | ✅ feito | `1b91937`, `8c1cb61` |
-| 9 | Logs de diagnóstico com `session_id` e formato JSON opcional | MANUT-15 (parcial) | ✅ feito | (este) |
+| 9 | Logs de diagnóstico com `session_id` e formato JSON opcional | MANUT-15 (parcial) | ✅ feito | `515eccc` |
 
 ---
 
@@ -266,3 +266,40 @@ Das 235 worktrees registradas, **230** eram `stepyard-session-*` criadas por su�
 - 4 em `crates/stepyard-harness/.stepyard/workspaces`.
 
 Antes de remover, conferi que nenhuma estava travada (`locked`), nenhuma tinha processo aberto e nenhuma tinha alteração não commitada. Todas saíram com `git worktree remove --force`, sem nenhuma falha, e depois rodei `git worktree prune`. O checkout principal, as worktrees das sessões Orca e as 2 `stepyard-session-*` que ficam dentro do checkout principal **não** foram tocadas.
+
+## O que ficou de fora da P3
+
+### Pulado por ordem (decisão do Allan ou major de dependência)
+- **SEG-TS-05** e o **segredo do subscriber do dashboard**: dependem de decisão do Allan.
+- **Majors do `vite`, do `vitest` e do `node-cron`.**
+
+### Exige `.github/`, que não posso tocar
+- **Job de MSRV** (MANUT-08): `dtolnay/rust-toolchain@1.88` mais `cargo check --locked --workspace --all-targets`. Sem ele, a MSRV volta a ficar falsa no primeiro `cargo update` que puxar um crate mais novo.
+- **Cobertura com piso** (TEST-15, `cargo llvm-cov`).
+- **SEG-TS-10/11, TEST-02/03/13, MANUT-05**: os achados de CI e workflows do relatório.
+
+### Grandes demais para uma rodada de commits locais (G no relatório)
+- **Desativação do v1** (ARQ-07, MANUT-13, SEG-RUST-10, ARQ-12, TEST-14), estimada em 2–4 semanas. Antes de apagar uma linha, é preciso portar para o v2 o `--repo`, um subscriber de eventos que leia o log de sessão, `stack`/`prompts` e o `--dry-run`. Só depois saem `src/engine`, `src/steps`, `src/sandbox/docker.rs`, `src/events` e `src/plugins` (cerca de 8,9 mil linhas). Não comecei uma remoção parcial: com dois motores convivendo, apagar metade de um deixaria o padrão (v2) e o v1 divergindo ainda mais. Enquanto isso, os plugins seguem com `dlopen` no construtor do v1, nunca despachados e com `unsafe` sem teste.
+- **Quebra das funções gigantes** (ARQ-08, MANUT-11): `run_parallel` (~600 linhas), `run_chat_step`, `Engine::step`, `execute_v2`, e a unificação dos executores de nível superior e de escopo (51 montagens manuais de `StepFailed`). É refatoração sem mudança de comportamento, mas no caminho quente do harness. Pede uma rodada própria, com caracterização dos eventos emitidos antes e depois.
+
+### Ficou parcial, com o motivo registrado no item
+- **ARQ-09** (item 4): a reconciliação continua com SQL direto e `docker ps`. Passá-la para os traits exige primeiro um "lease" abstrato no `EventStore`, com implementação para o SQLite.
+- **BUG-HARNESS-03** (item 3): o `parallel` só grava `StepStarted`/`StepCompleted` dos sub-passos no fim. A correção muda a ordem dos eventos no log. Precisa ser conferida contra a invariante 2 (pareamento por passo de nível superior), a contagem de progresso e retomada, o contrato do dashboard (`tests/fixtures/dashboard-event.json`) e o limite de saída do item 3. Não a comecei para não deixá-la pela metade.
+- **Releitura completa do log** várias vezes por passo (item 3): agora limitada por passo, mas ainda linear no número de passos.
+- **G3 e Rule7a mais amplos** (item 2): exigem um mecanismo de exceção por linha no `audit-patterns.sh`.
+- **MANUT-09** (item 5): restam 24 `allow(dead_code)` em 7 arquivos sobre código de fato morto, mais 2 para alvos não-Unix e 2 em `tests/support`.
+- **MANUT-12** (item 8): continuam cerca de 500 referências de história de planejamento (`Story N`, `PR N`, `Task #N`, `Round N`, `Epic N`). Melhor tratá-las depois da desativação do v1.
+- **MANUT-14** (item 7): o `target-dir` versionado em `/tmp` continua. Mudar o padrão é decisão do Allan.
+- **MANUT-15** (item 9): o span cobre `Engine::step`. Ficam fora a reconciliação de inicialização (antes de existir sessão), as tarefas criadas com `spawn` dentro do `parallel` e os ~270 `println!`/`eprintln!` da interface.
+- **A regra 8 da ARCHITECTURE** (sem estado entre passos) não vale hoje. As exceções nomeadas lá são BUG-HARNESS-03, -04, -07 e a falta de retomada na CLI.
+
+### Ainda abertos da P2 (fora do escopo desta rodada)
+- **BUG-CLI-08**: evento `WorkflowFailed` no core.
+- **SEG-TS-04**: compose de produção.
+- **BUG-MOTOR-02/15**: proxy no Linux.
+- **SEG-TS-08**: cookie.
+- **TEST-10/11**.
+
+### Efeitos colaterais fora do repositório (nada apagado)
+- `/tmp/stepyard-target` está com **42,94 GiB**, em boa parte das builds desta análise. Não foi limpo.
+- No daemon Docker do M1 ficaram as imagens `rust:1.87` e `rust:1.88`, baixadas para medir a MSRV. Os contêineres foram todos `--rm`. Antes, na P2, eu já tinha reconstruído a imagem `stepyard-sandbox:latest` lá.
