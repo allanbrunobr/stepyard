@@ -2,8 +2,8 @@
 //!
 //! Mock-based tests always run. Docker-backed tests are `#[ignore]`d.
 //! Run them with `STEPYARD_TEST_DOCKER=1 cargo test -- --ignored`.
-//! CI does not pass `--ignored`, so a missing daemon does not fail the job
-//! and a skip is not counted as a pass.
+//! Only the `docker-tests` CI job passes `--ignored`, so a missing daemon
+//! does not fail the other jobs and a skip is not counted as a pass.
 
 use std::sync::Arc;
 

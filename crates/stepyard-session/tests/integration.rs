@@ -1,6 +1,7 @@
 //! Integration tests exercising the full append/replay/load contract against
 //! a real PostgreSQL. Skipped (without failing) when `STEPYARD_SESSION_DATABASE_URL`
-//! is not set so `cargo test` stays green in CI without a DB sidecar.
+//! is not set, unless `STEPYARD_REQUIRE_DB` is set (CI sets it), which turns
+//! the skip into a failure.
 //!
 //! To run against a local database:
 //!

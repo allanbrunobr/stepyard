@@ -42,7 +42,7 @@ edition = "2021"
 # MSRV is set by the locked dependency graph, not by our own code:
 # `home` 0.5.12 (pulled in by sqlx-postgres) requires rustc 1.88.
 # `cargo check --locked --workspace --all-targets` passes on 1.88 and is
-# refused on 1.87. Re-check after `cargo update`; nothing in CI enforces it.
+# refused on 1.87. The `msrv` job of .github/workflows/check.yml enforces it.
 rust-version = "1.88"
 description = "AI workflow engine that orchestrates Claude Code CLI — automate code review, refactoring, and PR creation with YAML workflows"
 license = "MIT"

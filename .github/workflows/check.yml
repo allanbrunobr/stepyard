@@ -1,10 +1,18 @@
 name: Check
 
 on:
+  # Every pull request, whatever its base: stacked PRs (base = another PR's
+  # branch) used to get no CI at all.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
+  # release.yml calls this workflow so a tag cannot publish binaries from a
+  # commit that fails the checks.
+  workflow_call:
+
+# Least privilege for GITHUB_TOKEN; no job here writes to the repository.
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,31 +25,21 @@ concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
 
+# Third-party actions are pinned by commit SHA (the tag is in the comment);
+# Dependabot (.github/dependabot.yml) proposes the updates.
+
 jobs:
-  check:
-    name: Build, test, clippy, audits
+  # Decides once whether the change touches only documentation. The older
+  # jobs below keep their own copy of this step so their check names report
+  # success instead of "skipped".
+  changes:
+    name: Detect docs-only change
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: stepyard
-          POSTGRES_PASSWORD: ci_only_password
-          POSTGRES_DB: stepyard
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U stepyard -d stepyard"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
-      STEPYARD_HARNESS_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
-      STEPYARD_SESSION_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+    outputs:
+      docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -63,8 +61,80 @@ jobs:
           # `before` is all zeros on a new branch and points outside the
           # history after a force-push; `git diff` would then abort the job.
           # Fall back to running the full Rust suite in both cases.
+          # `--no-renames`: with rename detection, `git mv src/x.rs docs/x.md`
+          # lists only `docs/x.md` and the change passed as docs-only.
           if [[ -n "$base" && ! "$base" =~ ^0+$ ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            changed="$(git diff --name-only "$base" "$head")"
+            changed="$(git diff --name-only --no-renames "$base" "$head")"
+          fi
+          if [[ -z "$changed" ]]; then
+            docs_only=false
+          else
+            while IFS= read -r path; do
+              case "$path" in
+                *.md|docs/*)
+                  ;;
+                *)
+                  docs_only=false
+                  ;;
+              esac
+            done <<< "$changed"
+          fi
+
+          echo "$changed"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
+  check:
+    name: Build, test, clippy, audits
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: stepyard
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: stepyard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stepyard -d stepyard"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_HARNESS_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_SESSION_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      # A database test whose URL is missing fails instead of skipping and
+      # counting as passed (TEST-03).
+      STEPYARD_REQUIRE_DB: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs-only change
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          docs_only=true
+          changed=""
+          # `before` is all zeros on a new branch and points outside the
+          # history after a force-push; `git diff` would then abort the job.
+          # Fall back to running the full Rust suite in both cases.
+          # `--no-renames`: with rename detection, `git mv src/x.rs docs/x.md`
+          # lists only `docs/x.md` and the change passed as docs-only.
+          if [[ -n "$base" && ! "$base" =~ ^0+$ ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            changed="$(git diff --name-only --no-renames "$base" "$head")"
           fi
           if [[ -z "$changed" ]]; then
             docs_only=false
@@ -89,8 +159,9 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.changes.outputs.docs_only != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master (v1)
         with:
+          toolchain: stable
           components: clippy, rustfmt
 
       # `ubuntu-latest` ships ~14 GiB free; restoring our cargo cache plus
@@ -101,7 +172,7 @@ jobs:
       # Swift tooling we never use here.
       - name: Free disk space
         if: steps.changes.outputs.docs_only != 'true'
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@3f13feab2962a87273d379ebc36ea159527e6cc9 # v1.3.2
         with:
           tool-cache: false
           android: true
@@ -118,7 +189,7 @@ jobs:
       # cache makes CI slower but predictable.
       - name: Cache Cargo registry
         if: steps.changes.outputs.docs_only != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
@@ -142,6 +213,17 @@ jobs:
       - name: Clippy (deny warnings)
         if: steps.changes.outputs.docs_only != 'true'
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # The `slack` feature is off by default; without these two steps its
+      # code and its security regression tests were never compiled in CI
+      # (MANUT-05).
+      - name: Clippy with the slack feature (deny warnings)
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo clippy -p stepyard-engine --all-targets --features slack -- -D warnings
+
+      - name: Slack tests
+        if: steps.changes.outputs.docs_only != 'true'
+        run: cargo test -p stepyard-engine --features slack --lib slack
 
       # Round 3 Story 5 — architecture §G-gates.
       #
@@ -178,7 +260,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -200,8 +282,10 @@ jobs:
           # `before` is all zeros on a new branch and points outside the
           # history after a force-push; `git diff` would then abort the job.
           # Fall back to running the full Rust suite in both cases.
+          # `--no-renames`: with rename detection, `git mv src/x.rs docs/x.md`
+          # lists only `docs/x.md` and the change passed as docs-only.
           if [[ -n "$base" && ! "$base" =~ ^0+$ ]] && git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            changed="$(git diff --name-only "$base" "$head")"
+            changed="$(git diff --name-only --no-renames "$base" "$head")"
           fi
           if [[ -z "$changed" ]]; then
             docs_only=false
@@ -226,13 +310,14 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.changes.outputs.docs_only != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master (v1)
         with:
+          toolchain: stable
           components: clippy
 
       - name: Free disk space
         if: steps.changes.outputs.docs_only != 'true'
-        uses: jlumbroso/free-disk-space@main
+        uses: jlumbroso/free-disk-space@3f13feab2962a87273d379ebc36ea159527e6cc9 # v1.3.2
         with:
           tool-cache: false
           android: true
@@ -244,7 +329,7 @@ jobs:
 
       - name: Cache Cargo registry
         if: steps.changes.outputs.docs_only != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
@@ -269,15 +354,172 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true'
         run: cargo clippy -p stepyard-session --all-targets --no-default-features --features sqlite -- -D warnings
 
+  # `rust-version` in Cargo.toml is what `cargo` promises users; this job
+  # keeps it true after a `cargo update` (MANUT-08).
+  msrv:
+    name: MSRV (Rust 1.88)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master (v1)
+        with:
+          toolchain: "1.88"
+
+      - name: Cache Cargo registry
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-v2-
+
+      - name: Check the workspace on the MSRV
+        run: cargo check --locked --workspace --all-targets
+
+  # The `#[ignore]`d tests need a Docker daemon (the runner has one). They
+  # include the argv-not-shell security tests of `injection_negative` and the
+  # v2 container workspace tests, which no job ran before (TEST-02).
+  docker-tests:
+    name: Docker tests
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: stepyard
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: stepyard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stepyard -d stepyard"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_HARNESS_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_SESSION_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_TEST_DOCKER: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master (v1)
+        with:
+          toolchain: stable
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@3f13feab2962a87273d379ebc36ea159527e6cc9 # v1.3.2
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
+      - name: Cache Cargo registry
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-v2-
+
+      # One test at a time: the tests share the daemon and the sandbox image.
+      - name: Run the Docker tests
+        run: cargo test --workspace -- --ignored --test-threads=1
+
+  # Line coverage of the workspace with a floor (TEST-15). Measured on
+  # 2026-11-10 with Rust 1.88, cargo-llvm-cov 0.9.1 and Postgres: 77.40% of
+  # lines. The floor (75) leaves a margin for runner differences; raise it
+  # when coverage grows.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: stepyard
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: stepyard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stepyard -d stepyard"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_HARNESS_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_SESSION_DATABASE_URL: postgres://stepyard:ci_only_password@localhost:5432/stepyard
+      STEPYARD_REQUIRE_DB: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust 1.88 with llvm-tools
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master (v1)
+        with:
+          toolchain: "1.88"
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-llvm-cov@0.9.1
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@3f13feab2962a87273d379ebc36ea159527e6cc9 # v1.3.2
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: false
+          swap-storage: false
+
+      - name: Cache Cargo registry
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-v2-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-v2-
+
+      - name: Measure coverage (fails under the floor)
+        run: cargo llvm-cov --locked --workspace --summary-only --fail-under-lines 75
+
   typescript:
     name: TypeScript build and tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: npm

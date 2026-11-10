@@ -3,8 +3,8 @@
 //!
 //! Ignored unless `STEPYARD_TEST_DOCKER=1` and Cargo is passed `--ignored`.
 //! Uses `alpine` and installs `git` with `apk` (needs network), so it does
-//! not depend on the full sandbox image. The workflow file is unchanged:
-//! CI does not pass `--ignored`, so these tests stay listed as ignored.
+//! not depend on the full sandbox image. The `docker-tests` CI job runs
+//! them; the other jobs list them as ignored.
 
 use std::time::Duration;
 

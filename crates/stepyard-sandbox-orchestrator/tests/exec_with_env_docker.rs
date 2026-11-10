@@ -1,8 +1,8 @@
 //! Integration tests for `DockerLifecycle::exec_with_env`.
 //!
 //! Ignored unless `STEPYARD_TEST_DOCKER=1` and Cargo is passed `--ignored`.
-//! CI does not pass `--ignored`, so these are reported as ignored rather
-//! than as passed. Every `Command` and every future carries a
+//! The `docker-tests` CI job runs them; elsewhere they are reported as
+//! ignored rather than as passed. Every `Command` and every future carries a
 //! `.timeout(Duration::from_secs(N))` (Rule 7b).
 
 use std::collections::HashMap;

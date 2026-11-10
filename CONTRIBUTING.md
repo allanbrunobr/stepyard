@@ -39,8 +39,13 @@ open a pull request.
 
 The minimum supported Rust version is **1.88** (`rust-version` in
 `Cargo.toml`). The locked dependencies set it (`home` 0.5.12 needs 1.88),
-not our own code. CI builds only with stable, so after a `cargo update`
-re-check it with `cargo +1.88 check --locked --workspace --all-targets`.
+not our own code. The `msrv` job of `.github/workflows/check.yml` runs
+`cargo check --locked --workspace --all-targets` on 1.88, so a `cargo update`
+that raises it fails CI.
+
+CI also sets `STEPYARD_REQUIRE_DB=1` in the jobs that have Postgres: a
+database test whose URL is missing fails there instead of skipping. Locally,
+without that variable, database tests still print `[skip]` and pass.
 
 ### Build directory
 

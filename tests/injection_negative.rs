@@ -11,7 +11,7 @@
 //!
 //! Integration-tier: requires a live Docker daemon. Those tests are
 //! `#[ignore]`d. Run them with `STEPYARD_TEST_DOCKER=1 cargo test -- --ignored`.
-//! CI does not pass `--ignored`. The CLI-var test at the bottom of this
+//! The `docker-tests` CI job runs them. The CLI-var test at the bottom of this
 //! file does not need Docker and still runs.
 //!
 //! # Layer choice
