@@ -270,7 +270,7 @@ impl Context {
         }
 
         // Build Tera instance and render
-        let mut tera = tera::Tera::default();
+        let mut tera = stepyard_harness::template_engine();
         tera.add_raw_template("__tmpl__", &pre.template)
             .map_err(|e| crate::error::StepError::Template(format!("{e}")))?;
 

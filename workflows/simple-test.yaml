@@ -9,7 +9,7 @@ steps:
 
   - name: show_target
     type: cmd
-    run: "echo 'Target: {{ target }}'"
+    run: "echo Target: {{ target | shell_quote }}"
 
   - name: list_files
     type: cmd

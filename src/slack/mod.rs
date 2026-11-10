@@ -127,6 +127,31 @@ fn github_ref_or_stop(info: GitHubRef, raw: &str) -> Option<GitHubRef> {
     Some(info)
 }
 
+/// Issue and PR targets must be plain numbers. The target is forwarded to
+/// workflows that interpolate it into `sh -c` commands (`gh issue view …`),
+/// and Slack text is typed by anyone in the channel: `fix issue 1;id` must
+/// not start a workflow.
+fn numeric_target(number: String) -> Option<String> {
+    let ok = !number.is_empty() && number.len() <= 10 && number.bytes().all(|b| b.is_ascii_digit());
+    ok.then_some(number)
+}
+
+/// Audit/docs targets are a repository URL (target becomes `.`) or a local
+/// relative path made only of `[a-z0-9_./-]`, not starting with `-` (would
+/// read as an option) and without `..` (would leave the working tree).
+fn path_target(number: String) -> Option<String> {
+    if number.is_empty() {
+        return Some(".".to_string());
+    }
+    let ok = number.len() <= 200
+        && !number.starts_with('-')
+        && !number.contains("..")
+        && number
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_./-".contains(&b));
+    ok.then_some(number)
+}
+
 fn route_message(text: &str) -> Option<WorkflowMatch> {
     let text = text.to_lowercase();
 
@@ -151,7 +176,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "fix-issue.yaml".to_string(),
-            target: info.number,
+            target: numeric_target(info.number)?,
             repo: info.repo,
             description: "Fix GitHub issue".to_string(),
         });
@@ -165,7 +190,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "code-review.yaml".to_string(),
-            target: info.number,
+            target: numeric_target(info.number)?,
             repo: info.repo,
             description: "Code review".to_string(),
         });
@@ -179,11 +204,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "security-audit.yaml".to_string(),
-            target: if info.number.is_empty() {
-                ".".to_string()
-            } else {
-                info.number
-            },
+            target: path_target(info.number)?,
             repo: info.repo,
             description: "Security audit".to_string(),
         });
@@ -197,11 +218,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "generate-docs.yaml".to_string(),
-            target: if info.number.is_empty() {
-                ".".to_string()
-            } else {
-                info.number
-            },
+            target: path_target(info.number)?,
             repo: info.repo,
             description: "Generate documentation".to_string(),
         });
@@ -215,7 +232,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "fix-ci.yaml".to_string(),
-            target: info.number,
+            target: numeric_target(info.number)?,
             repo: info.repo,
             description: "Fix CI failures".to_string(),
         });
@@ -642,6 +659,62 @@ mod tests {
     #[test]
     fn slack_does_not_start_a_workflow_for_a_repo_with_a_shell_metacharacter() {
         assert!(route_message("review pr https://github.com/o/r;id/pull/1").is_none());
+    }
+
+    #[test]
+    fn slack_refuses_issue_and_pr_targets_that_are_not_plain_numbers() {
+        // Before the fix `1;id` reached `gh issue view {{ target }}` in sh -c.
+        for text in [
+            "fix issue 1;id",
+            "fix issue #1$(id)",
+            "fix issue `id`",
+            "review pr 7|id",
+            "review pr main",
+            "fix ci 3&&id",
+            "fix issue 12345678901",
+        ] {
+            assert!(route_message(text).is_none(), "must refuse {text:?}");
+        }
+    }
+
+    #[test]
+    fn slack_accepts_plain_issue_and_pr_numbers() {
+        let wf = route_message("fix issue #42").expect("plain issue number");
+        assert_eq!(
+            (wf.workflow.as_str(), wf.target.as_str()),
+            ("fix-issue.yaml", "42")
+        );
+        let wf = route_message("fix ci 7").expect("plain pr number");
+        assert_eq!(
+            (wf.workflow.as_str(), wf.target.as_str()),
+            ("fix-ci.yaml", "7")
+        );
+        let wf =
+            route_message("fix issue https://github.com/acme/app/issues/9").expect("issue url");
+        assert_eq!(
+            (wf.repo.as_deref(), wf.target.as_str()),
+            (Some("acme/app"), "9")
+        );
+    }
+
+    #[test]
+    fn slack_refuses_audit_and_docs_paths_with_shell_or_traversal() {
+        for text in [
+            "security audit ./src;id",
+            "security audit $(id)",
+            "generate docs ../../etc",
+            "generate docs -rf",
+            "security audit src|id",
+        ] {
+            assert!(route_message(text).is_none(), "must refuse {text:?}");
+        }
+        let wf = route_message("security audit ./src/engine").expect("plain relative path");
+        assert_eq!(wf.target, "./src/engine");
+        let wf = route_message("generate docs https://github.com/acme/app").expect("repo url");
+        assert_eq!(
+            (wf.repo.as_deref(), wf.target.as_str()),
+            (Some("acme/app"), ".")
+        );
     }
 
     #[test]

@@ -8,8 +8,9 @@
 //!
 //! # Scope
 //!
-//! Deliberately narrow: bare [`tera::Tera::one_off`], no held engine
-//! instance, no custom filters, no macro registration. The v1 template
+//! Deliberately narrow: a fresh [`template_engine`] per render, no held
+//! engine instance, no macro registration. The only custom filter is
+//! `shell_quote` (see [`template_engine`]). The v1 template
 //! module (`src/engine/template.rs`) carries the richer surface
 //! (`?`/`!` accessors, `from("name")`, `prompts.*`) — porting those lives
 //! in later PRs of Task #31.
@@ -122,7 +123,50 @@ pub fn render(template: &str, ctx: &RenderContext<'_>) -> Result<String, RenderE
     if let Some(scope) = &ctx.scope {
         tera_ctx.insert("scope", scope);
     }
-    tera::Tera::one_off(template, &tera_ctx, false).map_err(|e| RenderError::Tera(error_chain(&e)))
+    template_engine()
+        .render_str(template, &tera_ctx)
+        .map_err(|e| RenderError::Tera(error_chain(&e)))
+}
+
+/// The Tera instance every Stepyard template is rendered with (v1 and v2).
+///
+/// Rendered templates end up inside `sh -c` (cmd steps), so values that come
+/// from outside the workflow author's control — the CLI/Slack `target`, file
+/// names listed from the repository under audit, previous steps' stdout and
+/// LLM responses — must be quoted at the interpolation site. The
+/// `shell_quote` filter does that: `{{ target | shell_quote }}` renders as one
+/// single-quoted POSIX shell word, whatever the value contains.
+///
+/// Autoescape is off: the output is shell or prompt text, never HTML.
+pub fn template_engine() -> tera::Tera {
+    let mut tera = tera::Tera::default();
+    tera.autoescape_on(vec![]);
+    tera.register_filter("shell_quote", shell_quote_filter);
+    tera
+}
+
+/// Tera filter behind `{{ value | shell_quote }}`. Strings, numbers and
+/// booleans become one single-quoted shell word; `null` becomes `''`.
+/// Arrays and objects are rejected: quoting their JSON form would silently
+/// hand the shell something the author did not mean.
+fn shell_quote_filter(
+    value: &tera::Value,
+    _args: &HashMap<String, tera::Value>,
+) -> tera::Result<tera::Value> {
+    let raw = match value {
+        tera::Value::String(s) => s.clone(),
+        tera::Value::Number(n) => n.to_string(),
+        tera::Value::Bool(b) => b.to_string(),
+        tera::Value::Null => String::new(),
+        tera::Value::Array(_) | tera::Value::Object(_) => {
+            return Err(tera::Error::msg(
+                "shell_quote expects a string, number or boolean, not a list or map",
+            ))
+        }
+    };
+    Ok(tera::Value::String(
+        crate::container_workspace::shell_quote(&raw),
+    ))
 }
 
 /// Flatten an error and its `source()` chain into one line. Tera's top
@@ -161,6 +205,55 @@ mod tests {
         HashMap<String, String>,
     ) {
         (steps, target.into(), vars)
+    }
+
+    fn render_scoped(template: &str, target: &str, scope_value: &str) -> String {
+        let steps = HashMap::new();
+        let vars = HashMap::new();
+        let ctx = RenderContext {
+            steps: &steps,
+            target,
+            vars: &vars,
+            scope: Some(ScopeView {
+                value: serde_json::Value::String(scope_value.into()),
+                index: 0,
+            }),
+        };
+        render(template, &ctx).expect("render")
+    }
+
+    #[test]
+    fn shell_quote_turns_hostile_values_into_one_literal_word() {
+        assert_eq!(
+            render_scoped("{{ target | shell_quote }}", "42", ""),
+            "'42'"
+        );
+        assert_eq!(
+            render_scoped("{{ target | shell_quote }}", "it's", ""),
+            r"'it'\''s'"
+        );
+        assert_eq!(
+            render_scoped("{{ target | shell_quote }}", "1;id", ""),
+            "'1;id'"
+        );
+        assert_eq!(render_scoped("{{ target | shell_quote }}", "", ""), "''");
+    }
+
+    #[test]
+    fn shell_quote_rejects_lists_instead_of_quoting_their_json() {
+        let steps = HashMap::new();
+        let vars = HashMap::new();
+        let ctx = RenderContext {
+            steps: &steps,
+            target: "",
+            vars: &vars,
+            scope: Some(ScopeView {
+                value: serde_json::json!(["a", "b"]),
+                index: 0,
+            }),
+        };
+        let err = render("{{ scope.value | shell_quote }}", &ctx).unwrap_err();
+        assert!(err.to_string().contains("shell_quote"), "{err}");
     }
 
     #[test]

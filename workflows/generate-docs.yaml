@@ -36,7 +36,7 @@ scopes:
     steps:
       - name: read_source
         type: cmd
-        run: "cat {{ scope.value }}"
+        run: "cat -- {{ scope.value | shell_quote }}"
 
       - name: generate_doc
         type: chat
@@ -67,13 +67,11 @@ scopes:
       - name: save_doc
         type: cmd
         run: |
-          OUTPUT_DIR="{{ args.OUTPUT | default(value='docs') }}"
+          OUTPUT_DIR={{ args.OUTPUT | default(value='docs') | shell_quote }}
           # Convert file path to doc path: src/engine/core.rs → docs/engine/core.md
-          DOC_PATH="$OUTPUT_DIR/$(echo '{{ scope.value }}' | sed 's|^src/||' | sed 's|\.[^.]*$|.md|')"
+          DOC_PATH="$OUTPUT_DIR/$(printf '%s\n' {{ scope.value | shell_quote }} | sed 's|^src/||' | sed 's|\.[^.]*$|.md|')"
           mkdir -p "$(dirname "$DOC_PATH")"
-          cat > "$DOC_PATH" << 'DOCEOF'
-          {{ steps.generate_doc.response }}
-          DOCEOF
+          printf '%s\n' {{ steps.generate_doc.response | shell_quote }} > "$DOC_PATH"
           echo "$DOC_PATH"
 
     outputs: "{{ steps.save_doc.stdout }}"
@@ -83,7 +81,7 @@ steps:
   - name: find_sources
     type: cmd
     run: |
-      SEARCH_PATH="{{ args.PATH | default(value='src') }}"
+      SEARCH_PATH={{ args.PATH | default(value='src') | shell_quote }}
       find "$SEARCH_PATH" \
         -type f \
         \( -name "*.rs" -o -name "*.ts" -o -name "*.js" -o -name "*.py" \
@@ -104,7 +102,7 @@ steps:
   # 3. Create the output directory
   - name: create_output_dir
     type: cmd
-    run: "mkdir -p {{ args.OUTPUT | default(value='docs') }}"
+    run: "mkdir -p -- {{ args.OUTPUT | default(value='docs') | shell_quote }}"
     config:
       fail_on_error: true
 
@@ -135,15 +133,15 @@ steps:
   - name: save_index
     type: cmd
     run: |
-      OUTPUT_DIR="{{ args.OUTPUT | default(value='docs') }}"
-      echo "{{ steps.generate_index.response }}" > "$OUTPUT_DIR/index.md"
+      OUTPUT_DIR={{ args.OUTPUT | default(value='docs') | shell_quote }}
+      printf '%s\n' {{ steps.generate_index.response | shell_quote }} > "$OUTPUT_DIR/index.md"
       echo "Index saved to: $OUTPUT_DIR/index.md"
 
   # 6. Print summary
   - name: summary
     type: cmd
     run: |
-      OUTPUT_DIR="{{ args.OUTPUT | default(value='docs') }}"
+      OUTPUT_DIR={{ args.OUTPUT | default(value='docs') | shell_quote }}
       FILE_COUNT=$(find "$OUTPUT_DIR" -name "*.md" | wc -l | tr -d ' ')
       echo "============================================================"
       echo " Documentation Generated"

@@ -13,8 +13,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 
 | # | Item P1 | Achados | Status | Commit |
 |---|---|---|---|---|
-| 1 | Reconciliação de partida só para sessões órfãs | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | (este) |
-| 2 | Slack `target` + filtro `shell_quote` nos workflows | SEG-RUST-02, SEG-RUST-07 | pendente | |
+| 1 | Reconciliação de partida só para sessões órfãs | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | `529b532` |
+| 2 | Slack `target` + filtro `shell_quote` nos workflows | SEG-RUST-02, SEG-RUST-07 | ✅ feito | (este) |
 | 3 | Tera sem `get_env` | SEG-RUST-04 | pendente | |
 | 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | pendente | |
 | 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | pendente | |
@@ -54,3 +54,45 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 - Suíte completa com banco: **1.129 passaram, 0 falharam, 13 ignorados** (53 binários; +3 testes de integração, +1 unitário).
 
 **Não coberto:** não há teste de ponta a ponta com dois processos `stepyard execute` reais e Docker concorrendo. O lease e a reconciliação foram testados na API da biblioteca.
+
+## 2. Slack `target` + filtro `shell_quote` nos workflows — ✅
+
+**Defeito.**
+- O `target` digitado no Slack (`fix issue 1;id`) passava sem validação (`src/slack/mod.rs:108-112`) e chegava a `gh issue view {{ target }}`, executado via `sh -c`.
+- Não existia filtro de shell-quote no Tera. Os workflows embutidos interpolavam em `sh -c` o `target`, nomes de arquivo do repositório auditado (`cat {{ scope.value }}`), stdout de passos anteriores e respostas de LLM, essas últimas inclusive dentro de heredocs, onde uma linha igual ao terminador encerraria o heredoc e executaria o resto.
+
+**Correção.**
+- `stepyard_harness::template_engine()` (`crates/stepyard-harness/src/render.rs`): instância Tera única, usada pelo v2 (`render`) e pelos dois pontos do v1 (`src/engine/context.rs`, `src/engine/template.rs`). Registra o filtro `shell_quote`, que transforma string, número ou booleano numa única palavra entre aspas simples POSIX e recusa listas e mapas. O item 3 vai mexer nesta mesma fábrica.
+- Slack: `fix issue`, `review pr` e `fix ci` só aceitam `^[0-9]{1,10}$`. `security audit` e `generate docs` só aceitam URL de repositório (target `.`) ou caminho relativo `[a-z0-9_./-]` sem `-` inicial e sem `..`.
+- Os 12 workflows embutidos foram revisados:
+  - Toda interpolação em `run:` passou a usar `| shell_quote`.
+  - `echo "{{ … }}"` virou `printf '%s\n' {{ … | shell_quote }}`.
+  - Heredocs alimentados por template viraram `printf`.
+  - `cat`/`mkdir` ganharam `--`.
+- **Ficaram sem filtro, de propósito:**
+  - `stack.*`: comandos que o próprio usuário configurou para serem executados.
+  - `scope.index`: inteiro.
+  - `steps.extract_issue_id.*`: saída de `grep -oE '[0-9]+$'`, só dígitos.
+
+**Testes.**
+- `tests/workflow_shell_quote.rs` (portão determinístico, regra 3): percorre o YAML de todos os workflows embutidos. Toda expressão `{{ … }}` dentro de `run:` precisa terminar em `| shell_quote` ou estar na lista de exceções, e não pode haver template dentro de heredoc. Um meta-teste prova que o portão pega `{{ target }}` sem filtro e template em heredoc.
+- `crates/stepyard-harness/tests/injection_negative.rs`: execução real em `sh -c` com um arquivo chamado `$(touch pwned).py; touch pwned2`. Com o filtro, o arquivo é lido como nome; o **controle** sem filtro executa os dois `touch`. O nome do arquivo segue a convenção que o portão G3 reserva para testes que montam `sh -c` de propósito. A primeira versão, dentro de `render.rs`, foi barrada pelo G3.
+- Unitários do filtro (`render.rs`): aspas, `;`, vazio, recusa de lista.
+- Slack (`src/slack/mod.rs`, exigem `--features slack`): recusa `1;id`, `#1$(id)`, `` `id` ``, `7|id`, `main`, `3&&id` e número com 11 dígitos; recusa caminhos com `;`, `$(…)`, `..`, `-rf` e `|`; aceita número, URL de issue, caminho relativo e URL de repositório.
+
+**Medido:**
+- **Ponta a ponta pela CLI** (`stepyard execute workflows/simple-test.yaml --no-sandbox -- "x'; touch M; echo '"`, com Postgres real):
+
+  | Workflow | v1 | v2 |
+  |---|---|---|
+  | Novo | não executou o `touch` | não executou o `touch` |
+  | Antigo (`HEAD`, controle) | **executou** | **executou** |
+
+  Um primeiro payload (`x; touch M`) não disparava nem no workflow antigo, porque o valor estava entre aspas simples. O controle mostrou que aquele instrumento não distinguia nada, e por isso o payload foi trocado.
+- **Mutante** no Slack (aceitar qualquer target): o teste reprova em `must refuse "fix issue 1;id"`. Restaurado.
+- Testes do Slack: 5/5. `cargo clippy -p stepyard-engine --features slack --all-targets -- -D warnings`: status 0. Essa feature continua fora do CI (MANUT-05, P2).
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.134 passaram, 0 falharam, 13 ignorados**.
+
+**Não coberto.**
+- Workflows de terceiros continuam podendo interpolar sem filtro. O portão cobre só os workflows embutidos.
+- O `target` de `git diff {{ target | shell_quote }}...HEAD` ainda pode começar com `-` e ser lido como opção do git. Não há execução de comando arbitrário, e isso fica como higiene para P2.

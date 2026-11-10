@@ -36,7 +36,7 @@ scopes:
     steps:
       - name: read_file
         type: cmd
-        run: "cat {{ scope.value }}"
+        run: "cat -- {{ scope.value | shell_quote }}"
 
       - name: audit
         type: chat
@@ -74,7 +74,7 @@ steps:
   - name: find_files
     type: cmd
     run: |
-      SEARCH_PATH="{{ args.PATH | default(value='.') }}"
+      SEARCH_PATH={{ args.PATH | default(value='.') | shell_quote }}
       find "$SEARCH_PATH" \
         -type f \
         \( -name "*.rs" -o -name "*.ts" -o -name "*.js" -o -name "*.py" \
@@ -137,7 +137,7 @@ steps:
   - name: save_report
     type: cmd
     run: |
-      echo "{{ steps.final_report.response }}" > security-audit-report.md
+      printf '%s\n' {{ steps.final_report.response | shell_quote }} > security-audit-report.md
       echo "Report saved to: security-audit-report.md"
 
   # 6. Print summary

@@ -20,7 +20,7 @@ steps:
 
   - name: show_target
     type: cmd
-    run: "echo Target is: {{ target }}"
+    run: "echo Target is: {{ target | shell_quote }}"
 
   - name: check_greet
     type: gate
