@@ -624,6 +624,18 @@ impl Engine {
     /// (`StepCompleted` | `StepFailed`) into the session log. Returns
     /// [`StepOutcome::WorkflowCompleted`] once every step has a completion
     /// event in the log.
+    ///
+    /// Runs inside a `session` tracing span carrying `session_id`, so every
+    /// diagnostic log line emitted while the step runs can be matched to its
+    /// session log. The span is ERROR level only so that a filter such as
+    /// `RUST_LOG=warn` keeps it: an INFO span would be filtered out and the
+    /// warnings logged under it would lose their `session_id`.
+    #[tracing::instrument(
+        name = "session",
+        level = "error",
+        skip_all,
+        fields(session_id = %self.session.id().as_uuid())
+    )]
     pub async fn step(&mut self) -> Result<StepOutcome, EngineError> {
         // Ask the log how far we are. "Completed" counts only include
         // successful StepCompleted events; a StepFailed means the workflow

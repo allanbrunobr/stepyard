@@ -16,14 +16,24 @@ use tracing_subscriber::EnvFilter;
 use stepyard_engine::cli::Cli;
 use stepyard_engine::{display, signal};
 
+/// Diagnostic logs. `RUST_LOG` sets the filter (default `info`).
+/// `STEPYARD_LOG_FORMAT=json` switches to one JSON object per line, with a
+/// timestamp and the fields of the enclosing spans (for example the
+/// `session_id` of `stepyard_harness::Engine::step`), for runs nobody watches.
+/// The default stays the compact text format without timestamps.
+fn init_tracing() {
+    let builder = tracing_subscriber::fmt().with_env_filter(
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+    );
+    match std::env::var("STEPYARD_LOG_FORMAT").as_deref() {
+        Ok("json") => builder.json().init(),
+        _ => builder.without_time().init(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .without_time()
-        .init();
+    init_tracing();
 
     // Register SIGINT/SIGTERM handlers SYNCHRONOUSLY before anything else
     // kicks off — in particular, before the `tokio::select!` below spawns

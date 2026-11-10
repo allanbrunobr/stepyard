@@ -24,7 +24,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | 5 | Higiene: pool de banco morto da API; `allow(dead_code)` que não suprimiam nada | MANUT-16, MANUT-09 (parcial) | ✅ feito | `1e23944` |
 | 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI pendente) | ✅ feito | `2f67af8` |
 | 7 | Guard do diretório de build calibrado e documentado | MANUT-14 (parcial) | ✅ feito | `c731327` |
-| 8 | Referências a invariantes inexistentes, comentário errado sobre `parallel`, `exclude` órfãos | MANUT-12 (parcial) | ✅ feito | `1b91937` + (este) |
+| 8 | Referências a invariantes inexistentes, comentário errado sobre `parallel`, `exclude` órfãos | MANUT-12 (parcial) | ✅ feito | `1b91937`, `8c1cb61` |
+| 9 | Logs de diagnóstico com `session_id` e formato JSON opcional | MANUT-15 (parcial) | ✅ feito | (este) |
 
 ---
 
@@ -228,6 +229,35 @@ Só comentários e documentação mudaram, então não há mutante.
 | `Epic N` | 15 | 10 |
 
 Trocar cada uma por uma descrição de comportamento é trabalho manual: cerca de 500 comentários em 60+ arquivos, cada um exigindo ler o código ao redor. Não vale fazer isso antes da desativação do v1, que apaga boa parte deles. Também não pus um portão no `audit-patterns.sh` contra ocorrências novas. Com centenas de casos existentes, ele precisaria de uma linha de base, e esse mecanismo o script não tem.
+
+## 9. Logs de diagnóstico sem horário e sem sessão — ✅ (parcial)
+
+**Defeito (MANUT-15).**
+- Os logs de `tracing` da CLI saíam sem horário e sem `session_id`, e não havia nenhum span no código. Uma linha de log não podia ser ligada ao log da sessão (`.stepyard/logs/<sessão>.jsonl`).
+- O `RUST_LOG` não aparecia em nenhum documento.
+
+**Correção.**
+- `src/main.rs`: com `STEPYARD_LOG_FORMAT=json` (opt-in), cada linha vira um objeto JSON com `timestamp` e os campos dos spans ativos. O padrão segue o texto compacto sem horário, porque a CLI, o despacho remoto e os testes leem essa saída. Feature `json` do `tracing-subscriber`; o lock ganhou só o `tracing-serde` 0.2.0.
+- `stepyard_harness::Engine::step` roda dentro de um span `session{session_id}`, o que vale também para quem usa a biblioteca. O span é de nível **ERROR**. Na primeira versão ele era INFO, e **o teste reprovou**: com `RUST_LOG=warn`, o `EnvFilter` descartava o span, e justamente os avisos perdiam o `session_id`.
+- `docs/CONFIG.md` ganhou a seção "Diagnostic logs": a diferença entre o log de sessão e os logs de diagnóstico, mais `RUST_LOG` e `STEPYARD_LOG_FORMAT`.
+
+**Teste** (`tests/cli_v2_log_json.rs`, binário v2 com Postgres real): um `repeat` sem gate de saída atinge `max_iterations`, e o harness emite um `warn` dentro do passo. Com `STEPYARD_LOG_FORMAT=json` e `RUST_LOG=warn`, esse aviso tem de sair como JSON com `timestamp` e com `span.session_id` igual ao id da sessão gravada no banco para aquele tenant.
+
+**Medido:**
+- Antes do teste, rodei o binário à mão num workflow `cmd` simples. Nenhum evento de log acontece dentro do passo, nem em `debug`. O span só aparece quando há eventos no caminho do passo: o `max_iterations` do `repeat`, os avisos de workspace e tar do orquestrador e a sincronização do contêiner.
+- **Mutantes**, todos reprovando o teste:
+  - span INFO: o aviso sai sem `span`;
+  - sem `#[instrument]`: `left: None`, `right: Some(<uuid>)`;
+  - sem o ramo `json`: "no JSON max_iterations warning".
+  - Restaurados.
+- Portões do CI e clippy `--features slack`: todos com status 0. Linux (`rust:1.88`, `-Dwarnings`): os três perfis com status 0.
+- Suíte completa: **844 passaram** (+1), 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
+
+**Não coberto.**
+- A reconciliação de inicialização roda antes de existir sessão.
+- As tarefas criadas com `spawn` dentro do `parallel` não herdam o span.
+- Os cerca de 270 `println!`/`eprintln!` são a interface da CLI, não logs.
+- Não há métricas.
 
 ## Fora do escopo dos itens: limpeza de worktrees (pedida à parte)
 

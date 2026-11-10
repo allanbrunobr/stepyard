@@ -171,3 +171,20 @@ output is cut on a character boundary and ends with a
 `…[stepyard: output truncated, N more bytes …]` marker; later steps that read
 `{{ steps.X.stdout }}` see the same capped value. The engine reads the log back
 several times per step, so a very large value here slows every later step.
+
+## Diagnostic logs
+
+Two kinds of logs exist:
+
+- **The session log**: every event of a run (step started, completed,
+  failed, outputs). It is stored in the database and, unless
+  `--no-file-logs` or `STEPYARD_NO_FILE_LOGS=1` is set, mirrored to
+  `.stepyard/logs/<session_id>.jsonl`. It is the record of what the workflow
+  did.
+- **Diagnostic logs** from the CLI itself (startup reconcile, sandbox and
+  workspace warnings), written to stdout through `tracing`.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `RUST_LOG` | `info` | Filter for diagnostic logs, e.g. `warn`, `debug`, `stepyard_harness=debug`. |
+| `STEPYARD_LOG_FORMAT` | text | `json` writes one JSON object per line with a `timestamp` and, for lines logged while a v2 step runs, `span.session_id`. Use it for runs nobody watches (remote dispatch, CI) to match a line to `.stepyard/logs/<session_id>.jsonl`. The default text format has no timestamps. |
