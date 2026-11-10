@@ -24,7 +24,7 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | 5 | Higiene: pool de banco morto da API; `allow(dead_code)` que não suprimiam nada | MANUT-16, MANUT-09 (parcial) | ✅ feito | `1e23944` |
 | 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI pendente) | ✅ feito | `2f67af8` |
 | 7 | Guard do diretório de build calibrado e documentado | MANUT-14 (parcial) | ✅ feito | `c731327` |
-| 8 | Referências a invariantes inexistentes, comentário errado sobre `parallel`, `exclude` órfãos | MANUT-12 (parcial) | ✅ feito | (este) |
+| 8 | Referências a invariantes inexistentes, comentário errado sobre `parallel`, `exclude` órfãos | MANUT-12 (parcial) | ✅ feito | `1b91937` + (este) |
 
 ---
 
@@ -139,7 +139,9 @@ Resultado: **24 linhas removidas em 15 arquivos Rust**.
 - Job TypeScript: build da API e do web, e testes da API, todos com status 0.
 - Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
 
-Não há mutante: a mudança não altera comportamento. A prova é a compilação sem aviso nos três perfis e a suíte verde.
+- **Linux** (verificado depois, junto com o item 8): `cargo check --locked` da árvore de trabalho num contêiner `rust:1.88`, com `RUSTFLAGS=-Dwarnings`, aprova (status 0) os três perfis: padrão `--workspace --all-targets`, `--features slack` e `--no-default-features --features sqlite`. A varredura original só tinha compilado no macOS.
+
+Não há mutante: a mudança não altera comportamento. A prova é a compilação sem aviso nos três perfis, em macOS e em Linux, junto com a suíte verde.
 
 ## 6. MSRV declarada e lint que não verificava nada — ✅ (parcial)
 
@@ -199,16 +201,19 @@ Não há mutante: a mudança não altera comportamento. A prova é a compilaçã
 - O `Cargo.toml` tinha `exclude` para `PROMPT.md`, `EPICS-AND-STORIES.md` e `territory_map.json`, que não existem no repositório nem no histórico.
 
 **Correção.**
-- A `ARCHITECTURE.md` ganhou duas invariantes, com o que o código de fato assume:
-  - **7**: o motor v2 não guarda estado entre passos; tudo é relido do log de sessão;
-  - **8**: sessões concorrentes não interferem umas nas outras (`SandboxLifecycle` é `Send + Sync`; `tests/concurrent_sessions.rs`).
-- As 21 citações agora apontam para "ARCHITECTURE invariant 7/8"; a antiga 3 virou a 5 (contêineres descartáveis) e a 2 virou a 1 (log só de acréscimo).
+- A `ARCHITECTURE.md` ganhou:
+  - a **invariante 7**: sessões concorrentes não interferem umas nas outras. Ela tem evidência: `SandboxLifecycle` é `Send + Sync`, `tests/concurrent_sessions.rs` e `tests/cli_concurrent_runs.rs`, e o lease da P1 (`557b852`) faz a reconciliação só falhar sessões cujo dono sumiu;
+  - uma subseção **"Design rule with known gaps"** com a **regra 8**: o motor v2 *deveria* não guardar estado entre passos. Ela **não** fica na lista "These hold today", porque hoje não vale. A subseção nomeia as exceções abertas: BUG-HARNESS-03 (`parallel` só grava os eventos dos sub-passos no fim), BUG-HARNESS-04 (turnos de chat dentro de escopo fora do histórico), BUG-HARNESS-07 (o replay de escopo só recupera `cmd`) e a CLI sem comando de retomada. O commit `1b91937` a listava, errado, como invariante válida (número 7), contradizendo esses achados e o `437dcf3`. A revisão apontou o erro, e o commit seguinte corrigiu e renumerou.
+- As citações agora apontam para a ARCHITECTURE:
+  - as 16 de "Invariante 11" e a "Invariante 2, 11" do crate de sessão → "ARCHITECTURE invariant 8" / "invariants 1 and 8";
+  - as 3 de "Invariante 9" → "ARCHITECTURE invariant 7";
+  - a "Invariante 3" → invariante 5 (contêineres descartáveis).
 - O cabeçalho do adaptador descreve o que acontece com `parallel`: adaptado no nível superior e rejeitado dentro de outro escopo (`NestedScopesNotSupported`, porque é contêiner).
 - Os três `exclude` órfãos saíram.
 
 **Medido:**
 - `rg 'Invariante [0-9]'` em .rs/.toml/.yml/.ts/.sh: de 21 para **0**.
-- Portões do CI: todos com status 0. Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
+- Portões do CI: todos com status 0. Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0. A correção da numeração foi verificada outra vez do mesmo jeito, com o mesmo resultado.
 
 Só comentários e documentação mudaram, então não há mutante.
 

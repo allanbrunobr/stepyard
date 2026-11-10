@@ -313,7 +313,7 @@ impl Engine {
     /// Session write failures propagate as an anyhow::Error so the caller can
     /// decide whether to continue — the engine's policy is to abort on a lost
     /// write since the v2 contract requires every event to be replayable
-    /// (ARCHITECTURE invariant 7).
+    /// (ARCHITECTURE invariant 8).
     async fn emit_event(&self, evt: Event) -> anyhow::Result<()> {
         if let Some(ref session) = self.session {
             let payload = serde_json::to_value(&evt)?;

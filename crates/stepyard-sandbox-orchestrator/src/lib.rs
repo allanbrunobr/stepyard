@@ -102,7 +102,7 @@ pub struct ExecOptions {
 /// The contract every sandbox backend implements.
 ///
 /// Implementors are `Send + Sync` so the harness can share a single
-/// orchestrator across concurrent sessions (ARCHITECTURE invariant 8).
+/// orchestrator across concurrent sessions (ARCHITECTURE invariant 7).
 #[async_trait]
 pub trait SandboxLifecycle: Send + Sync {
     /// Create a brand-new sandbox for this `session_id`.
@@ -220,7 +220,7 @@ pub trait SandboxLifecycle: Send + Sync {
 /// [`SandboxLifecycle`] trait-object surface.
 ///
 /// The harness shares `Arc<dyn SandboxLifecycle>` across tasks
-/// (ARCHITECTURE invariant 8). These checks are never invoked; the compiler typechecks
+/// (ARCHITECTURE invariant 7). These checks are never invoked; the compiler typechecks
 /// them so that any change which makes a method's returned future `!Send`
 /// (e.g. switching to `#[async_trait(?Send)]`) breaks the build before
 /// the harness can spawn it.

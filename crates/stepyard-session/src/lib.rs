@@ -44,7 +44,7 @@
 //! # Architecture reference
 //!
 //! See `ARCHITECTURE.md`, section "`crates/stepyard-session`" and
-//! invariants 1 and 7. Schema is in
+//! invariants 1 and 8. Schema is in
 //! `crates/stepyard-session/migrations/`.
 
 // `#[async_trait]` marks generated trait methods `#[must_use]` while they

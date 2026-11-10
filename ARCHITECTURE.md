@@ -116,14 +116,27 @@ These hold today. Breaking one is a bug.
    that the engine needs.
 6. **Library crates return typed errors** (`thiserror`). `anyhow` stays in the
    binary.
-7. **The v2 engine keeps no state between steps.** Whatever a step needs from
-   earlier steps (outputs, scope progress, chat history, agent session ids) is
-   read back from the session log, not held in memory. Code comments cite
-   this as "invariant 7".
-8. **Concurrent sessions do not affect each other.** The harness shares one
+7. **Concurrent sessions do not affect each other.** The harness shares one
    `SandboxLifecycle` (`Send + Sync`) across sessions. Cancelling or failing
    one session does not change the others
-   (`crates/stepyard-harness/tests/concurrent_sessions.rs`).
+   (`crates/stepyard-harness/tests/concurrent_sessions.rs`). The startup
+   reconcile (PostgreSQL build) only fails sessions whose owner no longer
+   holds the session lease (`tests/cli_concurrent_runs.rs`).
+
+### Design rule with known gaps
+
+8. **The v2 engine should keep no state between steps.** What a step needs
+   from earlier steps (outputs, scope progress, chat history, agent session
+   ids) should be read back from the session log, not held in memory. Code
+   comments cite this as "invariant 8". It does **not** fully hold today:
+   - `parallel` writes its sub-steps' `StepStarted`/`StepCompleted` only after
+     every sub-step finishes, so a crash mid-way leaves no record of them;
+   - chat turns of steps inside a scope body never reach the chat history;
+   - replay inside a scope recovers only `cmd` outputs, not `agent`/`chat`;
+   - the CLI has no resume command (only the library's
+     `Engine::resume_existing`).
+
+   Until these are fixed, do not rely on rule 8 for crash recovery.
 
 ## Direction
 

@@ -4,7 +4,7 @@
 //! serves many sessions concurrently without data races, and that the
 //! Postgres `UNIQUE(session_id, seq)` constraint keeps session logs pristine
 //! under load. One of the ten sessions is cancelled mid-flight to prove
-//! that a cancel signal does not contaminate its siblings (ARCHITECTURE invariant 8,
+//! that a cancel signal does not contaminate its siblings (ARCHITECTURE invariant 7,
 //! NFC2).
 //!
 //! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
