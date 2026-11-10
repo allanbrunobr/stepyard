@@ -63,7 +63,7 @@ The CLI has two engines:
 
 | Engine | Status | Use it when |
 |--------|--------|-------------|
-| `v2` (default) | Session log in PostgreSQL or SQLite; it survives a crash, but the CLI has no resume command (a later run marks the orphaned session `failed` and starts a new one) | Most workflows, on the host or in a Docker/Podman container |
+| `v2` (default) | Session log in PostgreSQL or SQLite; it survives a crash, but the CLI has no resume command. A later run starts a new session; in the PostgreSQL build it also marks the orphaned one `failed`, in the SQLite build it stays `running` | Most workflows, on the host or in a Docker/Podman container |
 | `v1` (`--engine v1`) | Legacy | You need `{{ stack }}` / `{{ prompts.* }}`, `--dry-run`, `--repo`, or dashboard events. With a container sandbox, v1 only runs in `--repo OWNER/REPO` mode: it refuses to mount and re-own your working directory (use `--no-sandbox` to run it on the host) |
 
 Read [Known limitations of v2](#known-limitations-of-v2) before you depend on the default engine.

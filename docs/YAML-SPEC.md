@@ -73,11 +73,11 @@ Available in any rendered string (`run`, `prompt`, `condition`, `message`, `item
 | `{{ args.<key> }}`                    | Values set via `--var KEY=VALUE`                             |
 | `{{ steps.<name>.stdout / stderr / exit_code }}` | Step outputs (cmd)                                |
 | `{{ steps.<name>.response }}`         | Agent/chat response text                                     |
-| `{{ steps.<name>.session_id }}`       | Captured Claude CLI session id (agent steps)                 |
+| `{{ steps.<name>.session_id }}`       | Captured Claude CLI session id (agent steps) — **v1 only**   |
 | `{{ steps.<name>.output }}`           | Parsed output (see `output_type:`) — **v1 only**             |
 | `{{ <name>.output }}`                 | Shorthand — top-level access to any step — **v1 only**       |
 | `{{ from("<name>").output }}`         | Alternate accessor (useful for names with dashes) — **v1 only** |
-| `{{ session_id }}`                    | First captured Claude session for the workflow run           |
+| `{{ session_id }}`                    | First captured Claude session for the workflow run — **v1 only** |
 | `{{ scope.value }} / scope.index`     | Inside repeat/map/call scopes                                |
 | `{{ stack.* }}`                       | Detected stack info when `prompts/registry.yaml` exists — **v1 only** |
 
@@ -89,7 +89,9 @@ value contains. Do not wrap it in more quotes: write `cat -- {{ scope.value |
 shell_quote }}`, not `cat "{{ scope.value | shell_quote }}"`. Tera's
 `get_env` is disabled in Stepyard templates; pass values with `--var KEY=VALUE`.
 
-### Template operators
+### Template operators (v1 only)
+
+The v2 engine renders plain Tera paths; `stepyard validate` refuses these operators on v2.
 
 - `?` — safe accessor: `{{ foo.bar? }}` returns `""` if missing instead of failing.
 - `!` — strict accessor: `{{ foo.bar! }}` fails the step if missing (default for bare paths).
@@ -111,6 +113,9 @@ stepyard execute hello.yaml -- world
 ```
 
 ## Full example with all top-level fields
+
+This example uses `output_type` and `{{ steps.list_files.output }}`, which are
+**v1 only**: run it with `--engine v1` (`stepyard validate` refuses it on v2).
 
 ```yaml
 name: review-pr
@@ -155,7 +160,7 @@ steps:
 
 ## Validation
 
-Run `stepyard validate workflow.yaml` to check a workflow before execution. By default it also runs the checks of the v2 engine (the one `execute` uses by default); `--engine v1` applies only the v1 rules. Validation catches:
+Run `stepyard validate workflow.yaml` to check a workflow before execution. By default it also runs the checks of the v2 engine (the one `execute` uses by default), including a refusal of the names and operators marked **v1 only** above; `--engine v1` applies only the v1 rules. Validation catches:
 
 - Missing required fields (`name`, `steps`, step-type–specific fields)
 - Unknown `type:` values

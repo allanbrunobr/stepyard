@@ -332,6 +332,14 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **README**: dizia que o v2 "resumes after a crash", contra a ARCHITECTURE. Agora diz que o log sobrevive, mas a CLI não retoma.
 - **Mensagem do chat**: para uma `base_url` com `user@`, a recusa explica que credenciais na URL nunca são aceitas, em vez de mandar listar o prefixo.
 
+**Quarta rodada, no `afe898d`: 8 achados vivos (3 assuntos), corrigidos.**
+- **O `validate` do v2 só pegava `stack`/`prompts`.** Ficavam de fora os outros nomes e operadores que a YAML-SPEC marca como v1 only: `{{ steps.X.output }}`, `{{ X.output }}`, `from("X")`, `{{ steps.X.session_id }}`, `{{ session_id }}`, os acessores `?`/`!`. Agora ele recusa todos, olhando só dentro de `{{ … }}`.
+  - Um teste unitário confere cada nome e operador, e também que templates v2 válidos (`!=` e `{%- -%}`, por exemplo) não são acusados.
+  - O "Full example" da YAML-SPEC agora diz que é v1 only. Um teste o extrai do próprio documento: ele é recusado no v2 e passa no v1.
+  - Mutante (ignorar `.output`): o teste do exemplo falha.
+- **YAML-SPEC**: `{{ session_id }}`, `{{ steps.X.session_id }}` e a seção de operadores agora levam a marca v1 only.
+- **README**: o run posterior marca a sessão órfã como `failed` só no build PostgreSQL. No build SQLite (o binário pré-compilado), ela fica `running`.
+
 ## O que ficou de fora da P3
 
 ### Pulado por ordem (decisão do Allan ou major de dependência)
