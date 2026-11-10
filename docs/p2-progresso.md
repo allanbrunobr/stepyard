@@ -23,7 +23,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 6 | Upload de artefatos acima de 100 KB (parser por rota, autenticação antes do corpo grande) | SEG-TS-06 (SEG-TS-05/08 pendentes) | ✅ feito | `99fcdf2` |
 | 7 | `stepyard validate` valida para o motor padrão (v2) | BUG-CLI-13, MANUT-06 | ✅ feito | `1a08590` |
 | 8 | Integridade dos testes: testes de binário que nunca rodavam; mock que confundia `destroy` e `destroy_by_session` | TEST-04, TEST-01 (TEST-02/03/13, MANUT-05 dependem de `.github/`) | ✅ feito | `1d70483`, `8c28951` |
-| 8b | A suíte de testes registrava worktrees no repositório do desenvolvedor | achado novo | ✅ feito | (este) |
+| 8b | A suíte de testes registrava worktrees no repositório do desenvolvedor | achado novo | ✅ feito | `54b9af9` |
+| 9 | Dependências npm vulneráveis, sem troca de major (18 → 7) | SEG-TS-12 (majors pendentes) | ✅ feito | (este) |
 
 ---
 
@@ -231,3 +232,20 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 
     git worktree list --porcelain | awk '/^worktree .*\/orca\/workspaces\/stepyard\/analise\/.*stepyard-session-/{print $2}'   # revisar
     # depois, para cada caminho listado: git worktree remove --force <caminho>; e por fim: git worktree prune
+
+## 9. Dependências npm vulneráveis, sem troca de major — ✅ (parcial)
+
+**Defeito (SEG-TS-12).** `npm audit` medido: 18 vulnerabilidades (2 críticas, 8 altas, 7 moderadas, 1 baixa), entre elas `body-parser` (alcançável antes da autenticação da API) e `react-router`/`react-router-dom` (dependência direta do dashboard).
+
+**Correção** (só o que não troca de major):
+- `npm audit fix` no lockfile do workspace: `body-parser`, `postcss`, `nanoid`, `browserslist`, `source-map-js`, `@babel/core`, `fast-copy` e outros transitivos.
+- `react-router-dom` `^7.14.0` → `^7.18.5` (resolve `react-router` 7.18.5) e `express` `^4.21.0` → `^4.22.3` (traz `qs` 6.16.2). O `npm update` dentro da faixa antiga **não** movia a resolução, então o mínimo foi fixado no manifesto. O npm também reordenou o `dotenv` no `package.json` da API, uma mudança só cosmética.
+
+**Medido:** `npm audit` foi de **18 → 7** (0 baixas, 4 moderadas, 1 alta, 2 críticas). `npm ci` a partir do lockfile novo, builds da API e do web e os 28 testes da API: todos com status 0.
+
+**Pendente (exige major, revisar com cuidado):**
+- `vite` 5 → 8 (com `esbuild`): o dev server do dashboard, que a stack de "produção" documentada expõe (SEG-TS-04).
+- `vitest` 3 → 5 (com `@vitest/mocker` e `tinypool`): só desenvolvimento.
+- `node-cron` 3 → 4 (com `uuid`): o agendador de limpeza da API.
+
+Os lockfiles obsoletos de `packages/api` e `packages/web` (SEG-TS-13) e a falta de auditoria automática no CI (fora de escopo: `.github/`) continuam.
