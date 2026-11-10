@@ -327,6 +327,11 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **`STEPYARD_LOG_FORMAT=json` e despacho.** O `docs/CONFIG.md` recomendava o JSON para correlacionar o despacho remoto com a sessão, mas o despacho roda no v1, que não tem o span. O texto foi corrigido.
 - **Rustdoc do `StepOutputSnapshot`** (`event.rs`): dizia que a saída é gravada inteira e que o limite ficava "para um PR futuro". Atualizado.
 
+**Terceira rodada, no `c88cbe9`: 3 achados vivos, corrigidos.**
+- **`stepyard validate`** dizia "valid for --engine v2" para um workflow com `{{ stack.* }}` ou `{{ prompts.* }}`. O v2 não renderiza esses nomes: o passo falha na hora de renderizar, depois que os passos anteriores já rodaram. O validate do v2 agora recusa esses nomes, lendo os valores do YAML (comentários não contam). O teste dos workflows embutidos valida cada um para o motor que ele declara: `fix-ci` e `fix-test` passam no v1 e são recusados no v2. Mutante: 2 testes falham.
+- **README**: dizia que o v2 "resumes after a crash", contra a ARCHITECTURE. Agora diz que o log sobrevive, mas a CLI não retoma.
+- **Mensagem do chat**: para uma `base_url` com `user@`, a recusa explica que credenciais na URL nunca são aceitas, em vez de mandar listar o prefixo.
+
 ## O que ficou de fora da P3
 
 ### Pulado por ordem (decisão do Allan ou major de dependência)

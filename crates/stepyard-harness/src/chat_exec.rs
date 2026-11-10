@@ -274,6 +274,11 @@ fn base_url_allowed_by(url: &str, allow_list: Option<&str>) -> Result<(), String
             .unwrap_or(false);
     if allowed {
         Ok(())
+    } else if authority.contains('@') {
+        Err(format!(
+            "chat base_url `{url}` carries credentials before `@`; that is never \
+             allowed, not even when its prefix is in {CHAT_BASE_URL_ALLOW_VAR}"
+        ))
     } else {
         Err(format!(
             "chat base_url `{url}` is not a loopback endpoint; list its prefix in \
@@ -622,6 +627,15 @@ mod tests {
             "https://evil.net/v1",
         ] {
             assert!(base_url_allowed_by(bad, list).is_err(), "{bad}");
+        }
+        // The refusal of userinfo says why, instead of asking to list it.
+        for with_user in [
+            "https://key@gw.corp.example/v1",
+            "http://user@localhost:4000",
+        ] {
+            let err =
+                base_url_allowed_by(with_user, Some("https://key@gw.corp.example")).unwrap_err();
+            assert!(err.contains("credentials before `@`"), "{with_user}: {err}");
         }
         assert!(base_url_allowed_by("https://llm.corp.example", None).is_err());
     }
