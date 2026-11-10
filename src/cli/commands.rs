@@ -976,6 +976,34 @@ pub async fn execute(
         SandboxRuntime::Docker | SandboxRuntime::Podman => sandbox_mode,
     };
 
+    if effective_sandbox_mode != SandboxMode::Disabled {
+        // SEG-RUST-01 / BUG-MOTOR-04: the v1 Docker sandbox bind-mounts the
+        // host working directory read-write at /workspace and runs
+        // `chown -R` on it, so the container writes (and re-owns) the user's
+        // real files. Only `--repo` mode, which mounts a scratch directory
+        // and clones inside the container, stays available on v1.
+        if args.engine == "v1" && args.repo.is_none() {
+            bail!(
+                "--engine v1 with a container sandbox bind-mounts your working directory \
+                 read-write and changes its owner; use the default --engine v2 (it copies \
+                 the project into the container), --engine v1 --repo OWNER/REPO, or \
+                 --no-sandbox"
+            );
+        }
+        // SEG-RUST-03: workflow-declared volumes must stay inside the project.
+        let declared = crate::sandbox::SandboxConfig::from_global_config(&workflow.config.global);
+        let project_dir = std::env::current_dir().context("failed to resolve current directory")?;
+        let allow_outside = std::env::var(crate::sandbox::config::ALLOW_WORKFLOW_MOUNTS_ENV)
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        crate::sandbox::config::check_workflow_volumes(
+            &declared.volumes,
+            &project_dir,
+            allow_outside,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+    }
+
     // Validate container runtime availability if sandbox mode is active
     if effective_sandbox_mode != SandboxMode::Disabled {
         if let Err(e) = sandbox::require_runtime(sandbox_runtime).await {

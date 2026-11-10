@@ -22,11 +22,12 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | ✅ feito | `8f084a3` |
 | 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 (parcial) | ✅ feito | `2e0a0d7` |
 | 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | ✅ feito | `916aaa3` |
-| 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | ✅ feito | (este) |
-| 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01, BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | pendente | |
+| 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | ✅ feito | `584bbee` |
+| 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01 (parcial), BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | ✅ feito | (este) |
 
 ## Pendências que são do Allan (exigem conta, login, gasto ou segredo)
 
+- **`AUTO_VOLUMES` do sandbox v1** (`src/sandbox/config.rs`): no modo `--repo`, usado pelo Slack e pelo despacho, o contêiner ainda recebe `~/.claude` em **leitura e escrita** e `~/.ssh` somente leitura. Um agente manipulado pelo repositório analisado pode plantar hooks ou configurações em `~/.claude` que depois rodam no host, e pode ler as chaves SSH. Não mexi nisso porque montar `~/.claude` só para leitura ou tirar `~/.ssh` pode quebrar a autenticação do Claude CLI (OAuth) e o envio de commits por SSH de dentro do contêiner, e verificar isso exige a sua conta. Sugestão: testar `~/.claude` como `:ro`, com cópia só do arquivo de credencial, e trocar o remoto SSH por HTTPS com `GH_TOKEN`.
 - **Imagem no M1:** a imagem `stepyard-sandbox:latest` (1,63 GB) foi **construída por mim** no daemon remoto `m1-docker` durante o mutante M4 do item 6. Sem a recusa, o v2 seguiu adiante e o pré-voo construiu a imagem. Os itens 9 e 10 usaram essa imagem nos testes Docker. Não a removi: apagar algo fora do repositório não é permitido nesta sessão. Fica a seu critério (`docker --context m1-docker rmi stepyard-sandbox:latest`).
 
 - **Rotacionar `GH_TOKEN`, `ANTHROPIC_API_KEY` e a senha do banco** em qualquer ambiente onde a stack compose rodou com despacho por SSH. Os valores estão em claro nos logs do contêiner da API (SEG-TS-02). A correção de código do item 4 impede novos vazamentos, mas não apaga os que já aconteceram.
@@ -296,3 +297,34 @@ A API respondia 202, o processo filho morria, e o run ficava em `dispatching` pa
 - No timeout, o processo que estourou o tempo ainda roda dentro do contêiner durante a cópia de volta, então um arquivo que ele estava escrevendo pode chegar pela metade. Matar só os processos do `docker exec` (BUG-HARNESS-05) fica para P2.
 - O cancelamento (`finalise_cancel`) continua sem cópia de volta, e esse comportamento não mudou.
 - Os testes Docker não rodam no CI (TEST-02, P2).
+
+## 10. Sandbox: volumes do YAML e bloqueio do v1 no diretório do host — ✅
+
+**Defeitos.**
+- **SEG-RUST-03:** `config.global.sandbox.volumes`, no YAML do workflow ou no `.stepyard/config.yaml` do projeto analisado, ia sem filtro para `docker run -v` nos **dois** motores. Um workflow de terceiro podia montar `/`, `$HOME` ou `/var/run/docker.sock` e sair do sandbox, justamente no modo em que o usuário pediu isolamento.
+- **SEG-RUST-01 / BUG-MOTOR-04:** fora do modo `--repo`, o sandbox v1 monta o diretório de trabalho do host em leitura e escrita em `/workspace`, extrai a cópia por cima dele e roda `chown -R stepyard` nele. O contêiner escreve nos arquivos reais e troca o dono deles (no Linux, uid 1000).
+- **ARQ-04 / SEG-RUST-11:** as cópias do v1 (`copy_workspace`/`copy_results`) montam `sh -c` com dados do YAML e não recusam symlink. O fix `925bb8b` entrou só no v2. Essas cópias só rodam no modo do diretório do host.
+
+**Correção** (`src/cli/commands.rs`, `src/sandbox/config.rs`), aplicada antes de qualquer contato com o runtime de contêiner:
+- **v1 com sandbox e sem `--repo`: recusado**, com mensagem que aponta as três saídas (v2 padrão, que copia o projeto; `--engine v1 --repo OWNER/REPO`; `--no-sandbox`). Isso elimina o bind mount do diretório do host, o `chown -R` e os dois caminhos de cópia via shell do v1. O modo `--repo`, usado pelo Slack e pelo despacho, monta um diretório temporário e clona dentro do contêiner, e continua disponível.
+- **`check_workflow_volumes`**, nos dois motores: recusa entrada cuja origem no host resolve **fora do diretório do projeto**. Symlinks são resolvidos e `..` é normalizado, inclusive quando o caminho ainda não existe. Volumes nomeados, volumes anônimos e caminhos dentro do projeto passam. Opt-in do usuário: `STEPYARD_ALLOW_WORKFLOW_MOUNTS=1` no ambiente do `stepyard`, que um arquivo de workflow não consegue definir. A verificação vale também para volumes vindos dos defaults do próprio usuário, então quem monta algo de fora por `~/.stepyard` precisa do opt-in.
+- **Documentação:** `docs/DOCKER-SANDBOX.md` (seção nova de volumes declarados e o modo do v1 recusado) e `docs/SLACK.md`. Consequência: mensagem no Slack **sem** URL de repositório não roda mais com sandbox. Antes, rodava no diretório do próprio bot, com bind mount e `chown`.
+
+**Testes.**
+- Unitários (`src/sandbox/config.rs`): aceita `./data`, caminho absoluto dentro do projeto, volume nomeado, volume anônimo e caminho ainda inexistente dentro do projeto. Recusa `/`, `docker.sock`, `~/.ssh`, `~`, `../outside`, `<projeto>/../elsewhere` e um **symlink** dentro do projeto que aponta para fora. O opt-in libera.
+- Binário (`tests/cli_sandbox_policy.rs`): `DOCKER_HOST` aponta para um socket inexistente, para que um teste que deixasse passar errado não chegue a nenhum daemon real.
+  - v1 com sandbox no diretório do host → recusado;
+  - v1 `--repo` e v1 `--no-sandbox` → não barrados pela política;
+  - v2 com `/:/host`, `docker.sock` e `~/.ssh` → recusados, citando a entrada;
+  - volumes do projeto passam; o opt-in tira a recusa e o run para em seguida no Docker inexistente.
+
+**Medido:**
+- **Mutantes:** M1 (sem o bloqueio do v1) reprova só o teste do v1; M2 (política que aceita tudo) reprova só o teste dos volumes. Restaurados.
+- O teste já existente que roda v1 (`tests/injection_negative.rs:217`) usa `--no-sandbox` e não é afetado.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.176 passaram, 0 falharam, 16 ignorados**. Job SQLite: verde.
+
+**Não coberto.**
+- `AUTO_VOLUMES` do modo `--repo` (`~/.claude` rw e `~/.ssh` ro): é pendência sua, porque exige conta para verificar (veja a seção de pendências acima).
+- `image:` do YAML continua livre. A imagem roda sem montagens do host além das permitidas, então o risco é menor, e fica para P2.
+- O diretório fixo de `/tmp` no modo `--repo` do v1 (BUG-MOTOR-03) é P2.
+- O hook de portão de push da sessão barrou uma vez o comando de commit deste item, por falso positivo: o texto do documento continha a palavra do comando de envio. Nada rodou naquela tentativa. O texto foi reescrito, e nenhum envio foi feito.
