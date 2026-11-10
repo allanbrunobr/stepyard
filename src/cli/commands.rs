@@ -258,6 +258,12 @@ pub struct ExecArgs {
 pub struct ValidateArgs {
     /// Path to the workflow YAML file
     pub workflow: PathBuf,
+
+    /// Engine to validate for, as `execute --engine`: `v2` (the default)
+    /// also runs the v1→v2 adapter and the harness checks, which reject
+    /// workflows the v1 validator accepts.
+    #[arg(long, value_name = "v1|v2", default_value = "v2", value_parser = parse_engine)]
+    pub engine: String,
 }
 
 #[derive(Args)]
@@ -1483,8 +1489,24 @@ pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
 
     let errors = validator::validate(&workflow);
     if errors.is_empty() {
+        // BUG-CLI-13: `validate` used to apply only the v1 rules, so it
+        // approved workflows the default engine then refused at run time.
+        // Check what `execute --engine v2` checks before any step runs.
+        if args.engine == "v2" {
+            let mut with_defaults = workflow.clone();
+            with_defaults.config = crate::config::apply_defaults(&with_defaults.config);
+            let v2 = harness_adapter::adapt(&with_defaults)
+                .map_err(|e| e.to_string())
+                .and_then(|wf| wf.validate().map_err(|e| e.to_string()));
+            if let Err(e) = v2 {
+                eprintln!("Validation errors (--engine v2, the default):");
+                eprintln!("  - {}", display_text(&e));
+                bail!("not runnable on --engine v2; it passes `stepyard validate --engine v1`");
+            }
+        }
         println!(
-            "\x1b[32m✓\x1b[0m Workflow is valid: {}",
+            "\x1b[32m✓\x1b[0m Workflow is valid for --engine {}: {}",
+            args.engine,
             display_text(&workflow.name)
         );
         Ok(())

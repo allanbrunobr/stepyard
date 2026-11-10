@@ -296,7 +296,7 @@ Details: [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 | Command | Purpose |
 |---------|---------|
 | `stepyard execute <file> [flags] -- [target]` | Run a workflow |
-| `stepyard validate <file>` | Check a workflow without running it |
+| `stepyard validate <file>` | Check a workflow without running it, for the default v2 engine (`--engine v1` checks only the v1 rules) |
 | `stepyard inspect <file>` | Show config layers, scopes, and the step graph |
 | `stepyard list` | List workflows in `.`, `./workflows/`, and `~/.stepyard/workflows/` |
 | `stepyard init <name> [--template blank\|fix-issue\|code-review\|security-audit]` | Create a workflow from a template |

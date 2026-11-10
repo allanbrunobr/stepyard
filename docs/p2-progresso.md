@@ -20,7 +20,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 3 | Perdas de trabalho: diretório por execução no `--repo` do v1, commits feitos no contêiner, sessão presa após conflito de merge | BUG-MOTOR-03, BUG-MOTOR-01, BUG-HARNESS-06 | ✅ feito | `029fef2` |
 | 4 | Contrato de eventos do dashboard (`null` recusado pela API; fixture compartilhado) | ARQ-03 (BUG-CLI-08 pendente) | ✅ feito | `9addfd9` |
 | 5 | Pânicos por fatiamento de UTF-8 no Slack e no `remote status` | BUG-CLI-06, BUG-MOTOR-14, BUG-CLI-10 (BUG-CLI-09 pendente) | ✅ feito | `29cb4d5` |
-| 6 | Upload de artefatos acima de 100 KB (parser por rota, autenticação antes do corpo grande) | SEG-TS-06 (SEG-TS-05/08 pendentes) | ✅ feito | (este) |
+| 6 | Upload de artefatos acima de 100 KB (parser por rota, autenticação antes do corpo grande) | SEG-TS-06 (SEG-TS-05/08 pendentes) | ✅ feito | `99fcdf2` |
+| 7 | `stepyard validate` valida para o motor padrão (v2) | BUG-CLI-13, MANUT-06 | ✅ feito | (este) |
 
 ---
 
@@ -172,3 +173,20 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 **Não coberto.**
 - **SEG-TS-08** (cookie `Secure` decidido por `req.hostname`): atrás do proxy do Vite, o host visto pela API é `api`, então o cookie sai `Secure` mesmo no deploy HTTP documentado, e o navegador o descarta. A correção depende de como o proxy de produção repassa host e protocolo (`trust proxy`, `X-Forwarded-*`), e trocar a regra sem esse deploy à mão poderia afrouxar o `Secure` em produção. Fica para verificação com o deploy real.
 - **SEG-TS-05** (um único segredo para telemetria, despacho e login; sem rate limit): é desenho de credenciais e precisa de decisão sua.
+
+## 7. `stepyard validate` valida para o motor padrão — ✅
+
+**Defeito (BUG-CLI-13 / MANUT-06).** O `validate` só rodava o validador do v1 e aprovava workflows que o v2, o motor padrão do `execute`, recusava ao rodar. Exemplo: um `cmd` com `config.timeout: 30` (número sem unidade) passava no `validate` e falhava no `execute`.
+
+**Correção** (`src/cli/commands.rs`): o `validate` ganhou `--engine v1|v2`, com padrão `v2`, como o `execute`. Em `v2`, depois do validador do v1, ele aplica os defaults, roda o adaptador v1→v2 e a validação do harness: as mesmas checagens que o `execute` faz antes de rodar qualquer passo. Em caso de erro, informa a falha do v2 e que o arquivo passa em `--engine v1`. README e `docs/YAML-SPEC.md` foram atualizados.
+
+**Testes** (`tests/cli_validate.rs`, binário real, sem banco nem Docker):
+- o caso `timeout: 30` reprova por padrão, citando `--engine v2` e `timeout`;
+- com `--engine v1`, passa;
+- os 12 workflows embutidos passam no `validate` padrão.
+
+**Medido:**
+- **Mutante** (checagem do v2 desligada): o primeiro teste reprova. Restaurado.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.199 passaram, 0 falharam, 18 ignorados**. Job SQLite: verde.
+
+**Não coberto.** A correção de `ARCHITECTURE.md`, `YAML-SPEC.md` e `STEP-TYPES.md` onde prometem o que o v2 não faz (ARQ-05, MANUT-03) não entrou neste item.

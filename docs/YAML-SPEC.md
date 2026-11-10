@@ -156,7 +156,7 @@ steps:
 
 ## Validation
 
-Run `stepyard validate workflow.yaml` to check syntax before execution. Validation catches:
+Run `stepyard validate workflow.yaml` to check a workflow before execution. By default it also runs the checks of the v2 engine (the one `execute` uses by default); `--engine v1` applies only the v1 rules. Validation catches:
 
 - Missing required fields (`name`, `steps`, step-type–specific fields)
 - Unknown `type:` values
