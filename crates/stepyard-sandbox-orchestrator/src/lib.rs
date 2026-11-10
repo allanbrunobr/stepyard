@@ -377,3 +377,48 @@ mod tests {
         assert!(matches!(err, SandboxError::InteractiveNotSupported));
     }
 }
+
+/// Split a step's env into the `--env NAME` argv elements and the
+/// `(NAME, value)` pairs to set on the container CLI process (SEG-RUST-12).
+///
+/// `docker exec --env NAME` / `podman exec --env NAME` copy the value from
+/// the CLI's own environment, so values never appear on the argv, which any
+/// local user can read with `ps`. Keys are sorted for deterministic argv.
+pub fn env_by_name(
+    env: &std::collections::HashMap<String, String>,
+) -> (Vec<String>, Vec<(String, String)>) {
+    let mut pairs: Vec<(String, String)> =
+        env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut argv = Vec::with_capacity(pairs.len() * 2);
+    for (k, _) in &pairs {
+        argv.push("--env".to_string());
+        argv.push(k.clone());
+    }
+    (argv, pairs)
+}
+
+#[cfg(test)]
+mod env_by_name_tests {
+    use super::env_by_name;
+
+    #[test]
+    fn values_stay_off_the_argv() {
+        let env = [
+            ("TOKEN".to_string(), "s3cr3t".to_string()),
+            ("A".to_string(), "x=y".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let (argv, pairs) = env_by_name(&env);
+        assert_eq!(argv, ["--env", "A", "--env", "TOKEN"]);
+        assert!(!argv.iter().any(|a| a.contains("s3cr3t") || a.contains('=')));
+        assert_eq!(
+            pairs,
+            vec![
+                ("A".into(), "x=y".into()),
+                ("TOKEN".into(), "s3cr3t".into())
+            ]
+        );
+    }
+}

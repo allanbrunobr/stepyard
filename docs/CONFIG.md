@@ -146,3 +146,19 @@ Requires `--engine v1` today — the v2 harness rejects `--dry-run`.
 - `YAML-SPEC.md` — overall workflow schema
 - `STEP-TYPES.md` — which config keys each step type honors
 - `DOCKER-SANDBOX.md` — sandbox and API proxy settings
+
+## Host secrets and workflows
+
+Workflow files, the project's `.stepyard/` files and prompts can come from a
+repository you do not control, so two host-side controls are off by default
+and can only be lifted from the environment of `stepyard` (a workflow cannot
+set them):
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `STEPYARD_ENV_ALLOW` | empty | Comma-separated host variable names that `env:` values of the form `${NAME}` may read even though the name looks like a credential (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*_KEY`, `DATABASE_URL`, …). Other names (`${HOME}`, `${CI}`) expand as before. |
+| `STEPYARD_CHAT_BASE_URL_ALLOW` | empty | Comma-separated URL prefixes a chat step may use as `base_url`. Loopback endpoints (`http://localhost:…`, `http://127.0.0.1:…`, `http://[::1]:…`) are always allowed; any other `base_url` is refused before the request, so a workflow cannot send the key read from `api_key_env` to its own server. |
+
+Environment values passed to `cmd` steps in a Docker/Podman sandbox reach the
+container through the CLI's environment (`docker exec --env NAME`), not on the
+command line, so they do not show up in `ps`.

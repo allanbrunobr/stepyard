@@ -39,6 +39,8 @@ fn cascade_overlay_and_host_expansion() {
     // SAFETY: Rust edition 2021 — `set_var` is safe; #[serial] prevents
     // parallel-test contamination.
     std::env::set_var("GITHUB_TOKEN", "abc123");
+    // A secret-like host variable needs the user's opt-in (P2-1, SEG-RUST-05).
+    std::env::set_var("STEPYARD_ENV_ALLOW", "OTHER, GITHUB_TOKEN");
 
     let defaults = Defaults::with_env(env_map(&[("SHARED", "def"), ("ONLY_DEF", "x")]));
     let workflow_env = env_map(&[("FOO", "workflow-foo"), ("SHARED", "wf")]);
@@ -52,6 +54,12 @@ fn cascade_overlay_and_host_expansion() {
     assert_eq!(resolved.get("ONLY_DEF").map(String::as_str), Some("x"));
     assert_eq!(resolved.get("TOKEN").map(String::as_str), Some("abc123"));
     assert_eq!(resolved.len(), 4);
+
+    // Without the opt-in the same secret-like reference is refused.
+    std::env::remove_var("STEPYARD_ENV_ALLOW");
+    let err = resolve_env(&defaults, &workflow_env, &step_env)
+        .expect_err("a secret-like ${VAR} needs STEPYARD_ENV_ALLOW");
+    assert!(err.to_string().contains("STEPYARD_ENV_ALLOW"), "{err}");
 
     std::env::remove_var("GITHUB_TOKEN");
 }

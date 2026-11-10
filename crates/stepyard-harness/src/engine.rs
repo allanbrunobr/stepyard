@@ -2817,6 +2817,12 @@ pub fn resolve_env(
         // Copy the captured var name out of `v` before mutating `v`.
         let var_name_opt = parse_host_var(v.as_str()).map(str::to_string);
         if let Some(var_name) = var_name_opt {
+            if !host_var_allowed(&var_name) {
+                return Err(EngineError::InvalidState(format!(
+                    "`${{{var_name}}}` looks like a secret: a workflow may read it from the \
+                     host only if you list it in {ENV_ALLOW_VAR} (comma-separated names)"
+                )));
+            }
             let resolved = std::env::var(&var_name).map_err(|_| {
                 EngineError::InvalidState(format!("host env variable not set: {var_name}"))
             })?;
@@ -2824,6 +2830,43 @@ pub fn resolve_env(
         }
     }
     Ok(env)
+}
+
+/// Environment variable in which the *user* lists host variables that
+/// workflows may read through `${VAR}` even though their name looks like a
+/// secret (SEG-RUST-05). A workflow file cannot set it.
+pub const ENV_ALLOW_VAR: &str = "STEPYARD_ENV_ALLOW";
+
+/// Whether a workflow, defaults file or step may expand `${name}` from the
+/// host. Workflow YAML and the analysed repository's `.stepyard/defaults.yaml`
+/// are not trusted, and the expanded value lands in commands that may run in
+/// a container or be sent elsewhere, so names that look like credentials are
+/// refused unless the user allow-lists them.
+pub fn host_var_allowed(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    let secret_like = [
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRIVATE",
+        "AUTH",
+        "COOKIE",
+        "SESSION",
+        "DATABASE_URL",
+        "_KEY",
+        "APIKEY",
+    ]
+    .iter()
+    .any(|marker| upper.contains(marker))
+        || upper.ends_with("KEY");
+    if !secret_like {
+        return true;
+    }
+    std::env::var(ENV_ALLOW_VAR)
+        .map(|list| list.split(',').any(|item| item.trim() == name))
+        .unwrap_or(false)
 }
 
 /// Match the exact-form `${VAR}` pattern and return the inner key.
@@ -3533,5 +3576,33 @@ mod send_check {
         assert_send_future(Engine::resume_existing(
             config, pool, session_id, workflow, lifecycle,
         ));
+    }
+
+    /// P2-1 (analysis 2026-11-09, SEG-RUST-05): `${VAR}` with a secret-like
+    /// name is refused unless the user allow-lists it.
+    #[test]
+    fn secret_like_host_vars_need_the_user_allowlist() {
+        for benign in ["HOME", "CI", "LANG", "STEPYARD_TARGET_DIR"] {
+            assert!(host_var_allowed(benign), "{benign}");
+        }
+        for secret in [
+            "GH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "DATABASE_URL",
+            "DB_PASSWORD",
+            "SSH_PRIVATE_KEY_PATH",
+            "OPENAI_APIKEY",
+        ] {
+            assert!(!host_var_allowed(secret), "{secret}");
+        }
+        let err = resolve_env(
+            &Defaults::default(),
+            &HashMap::from([("T".to_string(), "${GH_TOKEN}".to_string())]),
+            &HashMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains(ENV_ALLOW_VAR), "{err}");
     }
 }

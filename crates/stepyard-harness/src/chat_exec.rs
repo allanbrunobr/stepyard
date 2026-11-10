@@ -213,6 +213,56 @@ pub(crate) enum ChatApiKeyError {
     NotUnicode { step: String, key: String },
 }
 
+/// Environment variable in which the *user* lists URL prefixes that chat
+/// steps may use as `base_url` (comma-separated).
+pub const CHAT_BASE_URL_ALLOW_VAR: &str = "STEPYARD_CHAT_BASE_URL_ALLOW";
+
+/// Whether a chat step may send its request (with the API key read from
+/// `api_key_env`) to `base_url` (SEG-RUST-05). A workflow could otherwise set
+/// `base_url: https://attacker.example` with `api_key_env: GH_TOKEN` and have
+/// the host send the token as an API key. Loopback endpoints (Ollama, a local
+/// LiteLLM) are allowed; anything else must start with a prefix the user
+/// listed in `STEPYARD_CHAT_BASE_URL_ALLOW`.
+pub fn chat_base_url_allowed(url: &str) -> Result<(), String> {
+    let lower = url.trim().to_ascii_lowercase();
+    let after_scheme = lower
+        .strip_prefix("http://")
+        .or_else(|| lower.strip_prefix("https://"))
+        .unwrap_or("");
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    // Parse the host as an IP: a prefix test would accept 127.0.0.1.evil.example.
+    let loopback = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+    if !after_scheme.is_empty() && !authority.contains('@') && loopback {
+        return Ok(());
+    }
+    let allowed = std::env::var(CHAT_BASE_URL_ALLOW_VAR)
+        .map(|list| {
+            list.split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .any(|prefix| url.trim().starts_with(prefix))
+        })
+        .unwrap_or(false);
+    if allowed {
+        Ok(())
+    } else {
+        Err(format!(
+            "chat base_url `{url}` is not a loopback endpoint; list its prefix in \
+             {CHAT_BASE_URL_ALLOW_VAR} to allow it"
+        ))
+    }
+}
+
 /// Resolve `api_key_env` (a variable NAME) to its value.
 ///
 /// Precedence, per the field contract at
@@ -504,6 +554,30 @@ mod tests {
                 assert_eq!(k, key);
             }
             other => panic!("expected NotSet, got {other:?}"),
+        }
+    }
+
+    /// P2-1 (analysis 2026-11-09, SEG-RUST-05)
+    #[test]
+    fn chat_base_url_allows_loopback_and_refuses_the_rest() {
+        for ok in [
+            "http://localhost:11434",
+            "http://127.0.0.1:4000/v1",
+            "http://[::1]:8080",
+            "https://localhost",
+        ] {
+            assert_eq!(chat_base_url_allowed(ok), Ok(()), "{ok}");
+        }
+        for bad in [
+            "https://evil.example",
+            "http://127.0.0.1.evil.example",
+            "http://localhost@evil.example",
+            "http://localhost.evil.example",
+            "ftp://localhost",
+            "localhost:11434",
+        ] {
+            let err = chat_base_url_allowed(bad).expect_err(bad);
+            assert!(err.contains(CHAT_BASE_URL_ALLOW_VAR), "{bad}: {err}");
         }
     }
 }
