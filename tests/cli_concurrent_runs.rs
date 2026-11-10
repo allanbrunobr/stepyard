@@ -91,6 +91,10 @@ async fn wait_for_lease(pool: &sqlx::PgPool, session: Uuid) {
 
 async fn second_run_spares_the_first(engine: &str) {
     let Ok(url) = std::env::var("DATABASE_URL") else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };

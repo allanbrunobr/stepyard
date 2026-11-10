@@ -13,6 +13,10 @@ mod support;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_huge_step_output_is_capped_in_the_session_log() {
     let Ok(url) = std::env::var("DATABASE_URL") else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };

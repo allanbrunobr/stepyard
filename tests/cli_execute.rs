@@ -18,6 +18,10 @@ fn db_url() -> Option<String> {
 #[test]
 fn v2_executes_cmd_only_workflow_to_completion() {
     let Some(url) = db_url() else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };
@@ -47,6 +51,10 @@ fn v2_executes_cmd_only_workflow_to_completion() {
 #[test]
 fn v2_rejects_dry_run() {
     let Some(url) = db_url() else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };
@@ -76,6 +84,10 @@ fn v2_rejects_dry_run() {
 #[test]
 fn v1_engine_still_works_when_explicit() {
     let Some(url) = db_url() else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };
@@ -103,6 +115,10 @@ fn v1_engine_still_works_when_explicit() {
 #[test]
 fn default_engine_is_v2_and_still_works() {
     let Some(url) = db_url() else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };

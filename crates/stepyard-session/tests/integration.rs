@@ -38,6 +38,10 @@ async fn pool() -> Option<sqlx::PgPool> {
 macro_rules! db_test {
     ($pool:ident, $body:block) => {{
         let Some($pool) = pool().await else {
+            assert!(
+                std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+                "STEPYARD_SESSION_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+            );
             eprintln!("[skip] STEPYARD_SESSION_DATABASE_URL not set");
             return;
         };

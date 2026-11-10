@@ -67,6 +67,10 @@ fn sigterm_yields_exit_143_within_grace() {
         return;
     };
     let Ok(db_url) = std::env::var("STEPYARD_HARNESS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };

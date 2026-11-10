@@ -75,6 +75,10 @@ impl StepExecutor for BlockingExecutor {
 #[tokio::test(flavor = "current_thread")]
 async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
@@ -206,6 +210,10 @@ async fn step_timeout_emits_event_destroys_sandbox_and_returns_step_failed() {
 #[tokio::test(flavor = "current_thread")]
 async fn step_with_no_timeout_is_not_affected_by_timeout_branch() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };

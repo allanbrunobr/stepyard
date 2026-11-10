@@ -17,6 +17,10 @@ mod support;
 
 fn run(yaml: &str) -> Option<assert_cmd::assert::Assert> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return None;
     };

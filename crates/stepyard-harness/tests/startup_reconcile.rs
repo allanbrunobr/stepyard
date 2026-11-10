@@ -117,6 +117,10 @@ async fn container_alive(name: &str) -> bool {
 #[tokio::test(flavor = "current_thread")]
 async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
