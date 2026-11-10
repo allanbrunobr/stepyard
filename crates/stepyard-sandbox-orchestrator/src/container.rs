@@ -180,7 +180,8 @@ impl ContainerHandle {
 
     /// Copy `changes` from `container_dir` to `host_dir`: modified files are
     /// copied, deleted files are removed. Paths that are absolute or contain
-    /// `..` are skipped.
+    /// `..` are skipped. A symlink, or a path that walks through one, is an
+    /// error: `docker cp` would otherwise plant that link on the host.
     pub async fn copy_out(
         &self,
         container_dir: &str,
@@ -194,6 +195,11 @@ impl ContainerHandle {
                 report.skipped.push(rel.clone());
                 continue;
             };
+            if rel.contains('\0') || rel.contains('\n') || host_has_symlink_parent(host_dir, rel) {
+                return Err(SandboxError::ExecFailed(format!(
+                    "refusing to copy {rel}: a parent on the host is a symlink or the path contains a control character"
+                )));
+            }
             match change {
                 ChangedPath::Deleted(_) => match tokio::fs::remove_file(&dest).await {
                     Ok(()) => report.deleted.push(rel.clone()),
@@ -206,6 +212,13 @@ impl ContainerHandle {
                     }
                 },
                 ChangedPath::Modified(_) => {
+                    if host_final_is_symlink(host_dir, rel) {
+                        return Err(SandboxError::ExecFailed(format!(
+                            "refusing to copy {rel}: the host path is a symlink"
+                        )));
+                    }
+                    self.ensure_container_path_stays_inside(container_dir, rel)
+                        .await?;
                     if let Some(parent) = dest.parent() {
                         tokio::fs::create_dir_all(parent).await.map_err(|e| {
                             SandboxError::ExecFailed(format!(
@@ -235,11 +248,79 @@ impl ContainerHandle {
                             String::from_utf8_lossy(&out.stderr).trim()
                         )));
                     }
+                    if host_final_is_symlink(host_dir, rel) {
+                        let _ = tokio::fs::remove_file(&dest).await;
+                        return Err(SandboxError::ExecFailed(format!(
+                            "refusing to copy {rel}: the copied path is a symlink"
+                        )));
+                    }
                     report.copied.push(rel.clone());
                 }
             }
         }
         Ok(report)
+    }
+
+    /// Refuse a container path that is a symlink or that walks through one.
+    ///
+    /// The relative path is a positional argument of a fixed script. It is
+    /// not interpolated into the script text.
+    async fn ensure_container_path_stays_inside(
+        &self,
+        container_dir: &str,
+        rel: &str,
+    ) -> Result<(), SandboxError> {
+        const SCRIPT: &str = r#"
+container=$1
+rel=$2
+case $container in
+  /*) ;;
+  *) echo "container workspace must be absolute" >&2; exit 2 ;;
+esac
+case $rel in
+  ""|/*) echo "refusing path" >&2; exit 3 ;;
+esac
+if [ -L "$container" ]; then echo "workspace is a symlink" >&2; exit 4; fi
+cur=$container
+rest=$rel
+while [ -n "$rest" ]; do
+  part=${rest%%/*}
+  if [ "$rest" = "$part" ]; then
+    rest=
+  else
+    rest=${rest#*/}
+  fi
+  case $part in
+    ""|.) continue ;;
+    ..) echo "refusing parent segment" >&2; exit 3 ;;
+  esac
+  cur=$cur/$part
+  if [ -L "$cur" ]; then echo "refusing symlink" >&2; exit 4; fi
+  if [ ! -e "$cur" ]; then echo "path is missing in the container" >&2; exit 5; fi
+done
+exit 0
+"#;
+        let out = Command::new(&self.binary)
+            .args([
+                "exec",
+                &self.name,
+                "sh",
+                "-c",
+                SCRIPT,
+                "sh",
+                container_dir,
+                rel,
+            ])
+            .output()
+            .await
+            .map_err(|e| SandboxError::ExecFailed(format!("{} exec: {e}", self.binary)))?;
+        if !out.status.success() {
+            return Err(SandboxError::ExecFailed(format!(
+                "refusing to copy {rel}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -272,6 +353,30 @@ fn safe_join(host_dir: &Path, rel: &str) -> Option<PathBuf> {
         return None;
     }
     Some(host_dir.join(rel_path))
+}
+
+fn host_has_symlink_parent(host_dir: &Path, rel: &str) -> bool {
+    let mut cur = host_dir.to_path_buf();
+    let mut comps: Vec<_> = Path::new(rel).components().collect();
+    comps.pop();
+    for comp in comps {
+        cur.push(comp);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(meta) if meta.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+            Err(_) => return true,
+        }
+    }
+    false
+}
+
+fn host_final_is_symlink(host_dir: &Path, rel: &str) -> bool {
+    match std::fs::symlink_metadata(host_dir.join(rel)) {
+        Ok(meta) => meta.file_type().is_symlink(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
 }
 
 fn shell_quote(s: &str) -> String {
@@ -338,6 +443,49 @@ mod tests {
             .unwrap();
         assert_eq!(report.skipped, vec!["../escape", "/abs"]);
         assert!(report.copied.is_empty() && report.deleted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn copy_out_rejects_a_symlink_parent_on_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "keep").unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("escape")).unwrap();
+        let err = handle()
+            .copy_out(
+                "/workspace",
+                &[ChangedPath::Modified("escape/secret".into())],
+                dir.path(),
+            )
+            .await
+            .expect_err("symlink parent must be refused");
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("secret")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_out_rejects_a_symlink_file_on_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, "keep").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("leak")).unwrap();
+        let err = handle()
+            .copy_out(
+                "/workspace",
+                &[ChangedPath::Modified("leak".into())],
+                dir.path(),
+            )
+            .await
+            .expect_err("symlink file must be refused");
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+        assert!(std::fs::symlink_metadata(dir.path().join("leak"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     #[test]

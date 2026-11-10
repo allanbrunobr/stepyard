@@ -1,8 +1,10 @@
 //! Round trip of a project through a session container: copy in, change
 //! files in the container, list the changes with git, copy them back.
 //!
-//! Gated on `STEPYARD_TEST_DOCKER=1`. Uses `alpine` and installs `git` with
-//! `apk` (needs network), so it does not depend on the full sandbox image.
+//! Ignored unless `STEPYARD_TEST_DOCKER=1` and Cargo is passed `--ignored`.
+//! Uses `alpine` and installs `git` with `apk` (needs network), so it does
+//! not depend on the full sandbox image. The workflow file is unchanged:
+//! CI does not pass `--ignored`, so these tests stay listed as ignored.
 
 use std::time::Duration;
 
@@ -32,11 +34,12 @@ fn docker_enabled() -> bool {
 }
 
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn project_round_trips_through_the_session_container() {
-    if !docker_enabled() {
-        eprintln!("skipping: STEPYARD_TEST_DOCKER != 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
     let host = tempfile::tempdir().unwrap();
     std::fs::write(host.path().join("keep.txt"), "same\n").unwrap();
     std::fs::write(host.path().join("edit.txt"), "before\n").unwrap();
@@ -108,4 +111,77 @@ async fn project_round_trips_through_the_session_container() {
     assert_eq!(read("new/file.txt"), "n\n");
     assert_eq!(read("keep.txt"), "same\n");
     assert!(!host.path().join("gone.txt").exists());
+}
+
+#[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
+async fn copy_out_refuses_a_symlink_that_points_outside_the_workspace() {
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
+    let host = tempfile::tempdir().unwrap();
+    std::fs::write(host.path().join("keep.txt"), "same\n").unwrap();
+
+    let lifecycle = DockerLifecycle::new(DockerLifecycleConfig {
+        image: "alpine:latest".into(),
+        shell: "sh".into(),
+    });
+    let session = Uuid::new_v4();
+    let opts = CreateOptions {
+        workdir: Some("/workspace".into()),
+        ..CreateOptions::default()
+    };
+    timeout(STEP_TIMEOUT, lifecycle.create_with_options(session, &opts))
+        .await
+        .expect("create timed out")
+        .expect("create");
+    let handle = lifecycle
+        .container_handle(session)
+        .expect("docker has a handle");
+    let _cleanup = RemoveOnDrop(handle.name.clone());
+
+    let result = timeout(STEP_TIMEOUT, async {
+        handle
+            .copy_in(host.path(), "/workspace", &[])
+            .await
+            .expect("copy_in");
+        let out = handle
+            .sh("set -e; apk add --no-cache -q git >/dev/null; \
+                 cd /workspace; git init -q && git add -A && \
+                 git -c user.name=t -c user.email=t@t commit -qm base; \
+                 ln -s /etc/passwd leak")
+            .await
+            .expect("sh");
+        assert!(
+            out.status.success(),
+            "container setup failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        handle
+            .copy_out(
+                "/workspace",
+                &[ChangedPath::Modified("leak".into())],
+                host.path(),
+            )
+            .await
+    })
+    .await
+    .expect("symlink copy timed out");
+
+    let err = result.expect_err("symlink must not be copied to the host");
+    assert!(
+        err.to_string().contains("symlink") || err.to_string().contains("refusing"),
+        "{err}"
+    );
+    let leak = host.path().join("leak");
+    if leak.exists() {
+        assert!(
+            !std::fs::symlink_metadata(&leak)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "docker cp left a symlink on the host"
+        );
+    }
 }
