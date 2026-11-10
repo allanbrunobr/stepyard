@@ -162,3 +162,12 @@ set them):
 Environment values passed to `cmd` steps in a Docker/Podman sandbox reach the
 container through the CLI's environment (`docker exec --env NAME`), not on the
 command line, so they do not show up in `ps`.
+
+## Step output kept in the session log
+
+`cmd`, `agent` and `chat` output (stdout and stderr, each) is kept in the
+session log up to `STEPYARD_MAX_STEP_OUTPUT_BYTES` (default 1 MiB). Longer
+output is cut on a character boundary and ends with a
+`…[stepyard: output truncated, N more bytes …]` marker; later steps that read
+`{{ steps.X.stdout }}` see the same capped value. The engine reads the log back
+several times per step, so a very large value here slows every later step.

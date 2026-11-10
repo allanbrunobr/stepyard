@@ -2289,6 +2289,7 @@ impl Engine {
     // ── Internals ───────────────────────────────────────────────────────
 
     pub(crate) async fn emit(&self, event: Event) -> Result<(), EngineError> {
+        let event = cap_step_output(event, max_step_output_bytes());
         let payload = serde_json::to_value(&event)
             .map_err(|e| EngineError::InvalidState(format!("serialize: {e}")))?;
         self.session.append(payload).await?;
@@ -2786,6 +2787,52 @@ pub(crate) enum CmdOutcome {
     /// `IdleTimeoutFired` + `StepFailed` + sandbox destroy +
     /// `finalise_fail` already emitted.
     IdleTimedOut { idle_ms: u64 },
+}
+
+/// Default cap on `stdout` and `stderr` each, per step, in the session log.
+pub const DEFAULT_MAX_STEP_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// `STEPYARD_MAX_STEP_OUTPUT_BYTES`, or [`DEFAULT_MAX_STEP_OUTPUT_BYTES`].
+pub fn max_step_output_bytes() -> usize {
+    std::env::var("STEPYARD_MAX_STEP_OUTPUT_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|n: &usize| *n > 0)
+        .unwrap_or(DEFAULT_MAX_STEP_OUTPUT_BYTES)
+}
+
+/// Cap the output a `StepCompleted` event carries into the session log
+/// (BUG-HARNESS-08). Every step's full stdout/stderr used to be persisted —
+/// a build log of hundreds of MB went into one JSONB row — and the log is
+/// replayed in full several times per step, so the cost grew with every
+/// step. Each stream keeps its first `max` bytes (cut on a char boundary)
+/// plus a marker saying how much was dropped; later steps see the same
+/// capped value, because they read outputs back from the log.
+pub fn cap_step_output(mut event: Event, max: usize) -> Event {
+    if let Event::StepCompleted {
+        output: Some(ref mut snap),
+        ..
+    } = event
+    {
+        cap_text(&mut snap.stdout, max);
+        cap_text(&mut snap.stderr, max);
+    }
+    event
+}
+
+fn cap_text(text: &mut String, max: usize) {
+    if text.len() <= max {
+        return;
+    }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let dropped = text.len() - end;
+    text.truncate(end);
+    text.push_str(&format!(
+        "\n…[stepyard: output truncated, {dropped} more bytes; raise STEPYARD_MAX_STEP_OUTPUT_BYTES to keep more]"
+    ));
 }
 
 /// Overlay `defaults` < `workflow_env` < `step_env` (later layers win) and
@@ -3611,5 +3658,66 @@ mod send_check {
         .unwrap_err()
         .to_string();
         assert!(err.contains(ENV_ALLOW_VAR), "{err}");
+    }
+
+    /// BUG-HARNESS-08: step output is capped before it reaches the log.
+    #[test]
+    fn step_output_is_capped_on_a_char_boundary_with_a_marker() {
+        let big = format!("é{}", "a".repeat(3000));
+        let event = Event::StepCompleted {
+            step_name: "s".into(),
+            step_type: "cmd".into(),
+            duration_ms: 1,
+            timestamp: chrono::Utc::now(),
+            input_tokens: None,
+            output_tokens: None,
+            cost_usd: None,
+            sandboxed: false,
+            output: Some(StepOutputSnapshot {
+                stdout: big.clone(),
+                stderr: "short".into(),
+                exit_code: 0,
+            }),
+            scope_context: None,
+            gate_outcome: None,
+            agent_session_id: None,
+        };
+        // 1 byte: the cut falls inside the 2-byte "é" and must back off to 0.
+        let Event::StepCompleted {
+            output: Some(snap), ..
+        } = cap_step_output(event.clone(), 1)
+        else {
+            unreachable!()
+        };
+        assert!(snap
+            .stdout
+            .starts_with("\n…[stepyard: output truncated, 3002 more bytes"));
+        assert!(snap
+            .stderr
+            .starts_with("s\n…[stepyard: output truncated, 4 more bytes"));
+        let Event::StepCompleted {
+            output: Some(snap), ..
+        } = cap_step_output(event.clone(), 1000)
+        else {
+            unreachable!()
+        };
+        assert!(snap.stdout.starts_with(&big[..1000]));
+        assert!(snap.stdout.contains("2002 more bytes"));
+        assert_eq!(snap.stderr, "short", "a stream under the cap is untouched");
+        let Event::StepCompleted {
+            output: Some(snap), ..
+        } = cap_step_output(event, 1 << 20)
+        else {
+            unreachable!()
+        };
+        assert_eq!(snap.stdout, big, "under the default cap nothing changes");
+        let other = Event::WorkflowStarted {
+            timestamp: chrono::Utc::now(),
+        };
+        assert_eq!(
+            serde_json::to_value(cap_step_output(other.clone(), 1)).unwrap(),
+            serde_json::to_value(other).unwrap(),
+            "other events pass through unchanged"
+        );
     }
 }

@@ -18,7 +18,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | # | Item | Achados | Status | Commit |
 |---|---|---|---|---|
 | 1 | O binário deixa de redeclarar a árvore de módulos da lib | ARQ-11, MANUT-10, TEST-05 | ✅ feito | `7b26a58` |
-| 2 | Portões de auditoria que falhavam abertos (G4 do xtask; G1/G2 sem prefixo; autoteste dos portões) | BUG-CLI-15, TEST-08, TEST-06 (TEST-07/SEG-RUST-13 parcial) | ✅ feito | (este) |
+| 2 | Portões de auditoria que falhavam abertos (G4 do xtask; G1/G2 sem prefixo; autoteste dos portões) | BUG-CLI-15, TEST-08, TEST-06 (TEST-07/SEG-RUST-13 parcial) | ✅ feito | `eb95d08` |
+| 3 | Saída de passo limitada no log de sessão (1 MiB por stream, configurável) | BUG-HARNESS-08 (BUG-HARNESS-03 pendente) | ✅ feito | (este) |
 
 ---
 
@@ -72,3 +73,22 @@ Isto **não** tem mutante: é uma reorganização, e a prova é a igualdade das 
 - `harness/src/process_group.rs:132`.
 
 Fazer isso direito exige um mecanismo de exceção por linha, como o comentário `audit: … exempt - reason:` do G4, que o script de regex não tem. Excluir arquivos inteiros enfraqueceria o portão. Também não estendi a Rule7a para `std::thread::sleep`, porque os testes de polling limitado (por exemplo `cli_concurrent_runs`) usam esse padrão legitimamente.
+
+## 3. Saída de passo sem limite no log de sessão — ✅ (parcial)
+
+**Defeito (BUG-HARNESS-08).** O stdout/stderr **inteiro** de cada passo ia para uma linha JSONB do log de sessão. O log é relido por completo várias vezes por passo (`progress_from_log` e os `replay` do `scope.rs`), então o custo crescia a cada passo. Um log de build de centenas de MB acabava numa única linha.
+
+**Correção** (`crates/stepyard-harness/src/engine.rs`): no `emit`, ponto único por onde todo evento passa antes do log, `cap_step_output` limita o `stdout` e o `stderr` do snapshot de `StepCompleted` a `STEPYARD_MAX_STEP_OUTPUT_BYTES` cada (padrão 1 MiB). O corte é feito numa fronteira de caractere e termina com o marcador `…[stepyard: output truncated, N more bytes …]`. Como os passos seguintes leem a saída do log, todos veem o mesmo valor limitado. `docs/CONFIG.md` documenta a variável.
+
+**Testes.**
+- Unitário: corte numa fronteira de caractere (limite de 1 byte cai dentro do `é` e recua), contagem de bytes descartados no marcador, stream abaixo do limite intacto, outros eventos inalterados.
+- **Ponta a ponta pelo binário v2 com Postgres real** (`tests/cli_v2_output_cap.rs`): um passo que imprime 3.000.000 bytes, seguido de outro passo. A maior linha de `session_events` da sessão fica entre 1 MiB e 1,2 MB.
+
+**Medido:**
+- **Mutante** (sem o limite no `emit`): o teste reprova com a maior linha em **3.000.192 bytes**, a saída inteira. Com o limite, fica em torno de 1 MiB. Restaurado.
+- Os dois testes caíram em erros **meus** antes de passar: comparar `Event` com `==` (o tipo não implementa `PartialEq`) e uma expectativa errada sobre um stream acima do limite. Ambos corrigidos no teste; a função não mudou.
+- Portões do CI: todos com status 0. Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
+
+**Não coberto.**
+- O log continua sendo relido por completo várias vezes por passo. Agora o custo é limitado por passo, mas segue linear no número de passos por releitura. Cache ou leitura incremental é uma mudança maior no harness.
+- O `parallel` ainda só grava `StepStarted`/`StepCompleted` dos sub-passos no fim (BUG-HARNESS-03).
