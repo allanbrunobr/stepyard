@@ -21,11 +21,13 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | ✅ feito | `a64c4d1` |
 | 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | ✅ feito | `8f084a3` |
 | 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 (parcial) | ✅ feito | `2e0a0d7` |
-| 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | ✅ feito | (este) |
-| 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | pendente | |
+| 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | ✅ feito | `916aaa3` |
+| 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | ✅ feito | (este) |
 | 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01, BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | pendente | |
 
 ## Pendências que são do Allan (exigem conta, login, gasto ou segredo)
+
+- **Imagem no M1:** a imagem `stepyard-sandbox:latest` (1,63 GB) foi **construída por mim** no daemon remoto `m1-docker` durante o mutante M4 do item 6. Sem a recusa, o v2 seguiu adiante e o pré-voo construiu a imagem. Os itens 9 e 10 usaram essa imagem nos testes Docker. Não a removi: apagar algo fora do repositório não é permitido nesta sessão. Fica a seu critério (`docker --context m1-docker rmi stepyard-sandbox:latest`).
 
 - **Rotacionar `GH_TOKEN`, `ANTHROPIC_API_KEY` e a senha do banco** em qualquer ambiente onde a stack compose rodou com despacho por SSH. Os valores estão em claro nos logs do contêiner da API (SEG-TS-02). A correção de código do item 4 impede novos vazamentos, mas não apaga os que já aconteceram.
 
@@ -267,3 +269,30 @@ A API respondia 202, o processo filho morria, e o run ficava em `dispatching` pa
 - **Mutante**, que é o código antigo (config inline só): reprova o teste de ponta a ponta e o unitário de falha; os de tolerância continuam passando. Restaurado.
 - O clippy barrou a primeira versão (alias que gerava 4 empréstimos desnecessários), e o alias saiu.
 - Portões do CI: todos com status 0. Suíte completa com banco: **1.162 passaram, 0 falharam, 13 ignorados**. Job SQLite: smoke 5/5 e session 11/11.
+
+## 9. Workspace v2: timeout e caminhos excluídos — ✅
+
+**Defeitos.**
+- **BUG-HARNESS-02:** em três pontos (timeout de cmd, idle-timeout de cmd e timeout de sub-passo de `parallel`), o harness fazia `docker rm -f` no contêiner da sessão **antes** de `finalise_fail`, que é quem copia o `/workspace` de volta. Tudo o que passos anteriores tinham mudado se perdia. O item 7 tornou isso mais provável, porque o v2 agora aplica timeouts.
+- **SEG-RUST-08:** a cópia de ida exclui `target`, `node_modules`, `.stepyard`, `.venv` e `__pycache__` por componente de caminho, mas o `.git` copiado ainda lista os arquivos versionados sob eles. O `git status` dentro do contêiner os reportava como deletados, e a cópia de volta **os apagava no host** (por exemplo `.stepyard/defaults.yaml` e `src/target/mod.rs`).
+
+**Correção** (`crates/stepyard-harness`):
+- Nos três pontos, a ordem passou a ser `finalise_fail()` (copia de volta, destrói o contêiner e marca a sessão) e só então `destroy_by_session`. Este último é idempotente e continua parando o processo que estourou o tempo quando não há workspace de contêiner. O portão G4 (emit-before-IO) segue verde.
+- `container_workspace::without_excluded_deletions`: antes da cópia de volta, descarta as **deleções** de caminhos que casam com um padrão de exclusão, com a mesma regra do tar: padrão sem `/` casa qualquer componente, com `*` e `?`; padrão com `/` casa o prefixo. Adições e modificações seguem como antes.
+
+**Testes.**
+- **Ponta a ponta com Docker real (M1) e Postgres real** (`tests/v2_container_workspace_docker.rs`, `#[ignore]` pela convenção do projeto; roda com `STEPYARD_TEST_DOCKER=1 … -- --ignored`), pelo binário v2 com `--sandbox-runtime docker` num repositório git temporário:
+  1. o passo 1 cria um arquivo e o passo 2 estoura o timeout de 3 s → o arquivo chega ao host;
+  2. o mesmo com o timeout num sub-passo de `parallel`;
+  3. arquivos versionados em `.stepyard/`, `src/target/` e `web/node_modules/` sobrevivem a um run que altera o `README.md`, e a alteração real é copiada.
+- Unitários: filtragem das deleções (incluindo `targets/`, que **não** é excluído, e uma adição em `target/`, que é mantida) e casamento de padrões no estilo tar.
+
+**Medido:**
+- **Antes da correção**, os testes 1 e 3 **reprovaram** no código atual. O teste 3 reprovou primeiro por erro meu de fixture (`.stepyard/defaults.yaml` com conteúdo que o CLI não aceita). Corrigido o fixture, ele reprovou pelo motivo certo: "`.stepyard/defaults.yaml` was deleted from the host by the copy-back".
+- **Depois da correção**, os 3 passam. **Mutante** que desfaz só a reordenação no `parallel`: o teste 2 reprova; restaurado. Nenhum contêiner `stepyard-session-*` sobrou no M1.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.164 passaram, 0 falharam, 16 ignorados** (+3 testes Docker, rodados à parte com `--ignored`). Job SQLite: verde.
+
+**Não coberto.**
+- No timeout, o processo que estourou o tempo ainda roda dentro do contêiner durante a cópia de volta, então um arquivo que ele estava escrevendo pode chegar pela metade. Matar só os processos do `docker exec` (BUG-HARNESS-05) fica para P2.
+- O cancelamento (`finalise_cancel`) continua sem cópia de volta, e esse comportamento não mudou.
+- Os testes Docker não rodam no CI (TEST-02, P2).

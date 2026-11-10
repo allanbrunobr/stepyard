@@ -2634,11 +2634,14 @@ impl Engine {
             sandboxed: false,
         })
         .await?;
+        // Copy the workspace back before tearing the container down
+        // (BUG-HARNESS-02); the destroy then only stops what is left.
+        let result = self.finalise_fail().await;
         let _ = self
             .lifecycle()
             .destroy_by_session(*self.session().id().as_uuid())
             .await;
-        self.finalise_fail().await
+        result
     }
 
     /// Compute the synthetic container stdout. `outputs:` template (step-

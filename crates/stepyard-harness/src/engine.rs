@@ -469,6 +469,8 @@ impl Engine {
                 .changed_paths(&ws.container_dir)
                 .await
                 .map_err(|e| e.to_string())?;
+            let changes =
+                crate::container_workspace::without_excluded_deletions(changes, &ws.exclude);
             container
                 .handle
                 .copy_out(&ws.container_dir, &changes, &ws.host_dir)
@@ -1092,8 +1094,13 @@ impl Engine {
                 sandboxed: true,
             })
             .await?;
-            let _ = self.lifecycle.destroy_by_session(session_uuid).await;
+            // Copy the workspace back and mark the session failed BEFORE
+            // tearing the container down: removing it first lost every
+            // change earlier steps made in /workspace (BUG-HARNESS-02). The
+            // destroy still stops the timed-out process when there is no
+            // container workspace; after a copy-back it is a no-op.
             self.finalise_fail().await?;
+            let _ = self.lifecycle.destroy_by_session(session_uuid).await;
             return Ok(CmdOutcome::TimedOut { configured_ms });
         }
 
@@ -1183,8 +1190,9 @@ impl Engine {
                     sandboxed: true,
                 })
                 .await?;
-                let _ = self.lifecycle.destroy_by_session(session_uuid).await;
+                // Copy back first, then destroy (see the timeout path above).
                 self.finalise_fail().await?;
+                let _ = self.lifecycle.destroy_by_session(session_uuid).await;
                 Ok(CmdOutcome::IdleTimedOut { idle_ms })
             }
             Err(e) => {
