@@ -20,8 +20,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | ✅ feito | `9adbd5d` |
 | 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | ✅ feito | `a64c4d1` |
 | 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | ✅ feito | `8f084a3` |
-| 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 (parcial) | ✅ feito | (este) |
-| 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | pendente | |
+| 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 (parcial) | ✅ feito | `2e0a0d7` |
+| 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | ✅ feito | (este) |
 | 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | pendente | |
 | 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01, BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | pendente | |
 
@@ -252,3 +252,18 @@ A API respondia 202, o processo filho morria, e o run ficava em `dispatching` pa
 **Não coberto.**
 - `idle_timeout` e os demais campos que o adaptador ainda descarta (`output_type`, `async_exec`, `events`, `plugins`; ARQ-06) não entraram aqui. Recusar esses campos com erro é uma mudança maior, que fica para P2.
 - O `chat` continua com o caminho próprio de timeout, que já existia.
+
+## 8. v1 `parallel` honra o `fail_on_error` resolvido — ✅
+
+**Defeito.** No v1, o `parallel` calculava o config resolvido de cada sub-passo (`resolve_scope_step_config`, linha 62) e o **descartava** em `dispatch_step` (`_config`), reconstruindo o config só com o inline do passo. Com isso, o default `cmd.fail_on_error: true` se perdia, `get_bool` caía em `false`, e um `cargo test` que saía com 101 dentro de um `parallel` era registrado como sucesso. O teste antigo do módulo já denunciava o problema: para forçar uma falha, usava um tipo de passo não suportado, porque um `cmd` com `exit 1` não falhava.
+
+**Correção** (`src/steps/parallel.rs`): `dispatch_step` usa o config resolvido nas quatro camadas, como map, repeat e call já faziam. O motor v1 passa o `ConfigManager` ao `ParallelExecutor` (`src/engine/mod.rs:995`), então a correção vale na execução real.
+
+**Testes.**
+- Unitários: com os defaults embutidos, `exit 101` em um sub-passo faz o `parallel` falhar; com `fail_on_error: false` inline, a falha é tolerada.
+- **Ponta a ponta pelo binário v1 com Postgres real** (`tests/cli_v1_parallel_fail_on_error.rs`): o run falha quando um sub-passo sai com 101 e termina com sucesso quando o sub-passo declara `fail_on_error: false`.
+
+**Medido:**
+- **Mutante**, que é o código antigo (config inline só): reprova o teste de ponta a ponta e o unitário de falha; os de tolerância continuam passando. Restaurado.
+- O clippy barrou a primeira versão (alias que gerava 4 empréstimos desnecessários), e o alias saiu.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.162 passaram, 0 falharam, 13 ignorados**. Job SQLite: smoke 5/5 e session 11/11.
