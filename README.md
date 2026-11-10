@@ -64,7 +64,7 @@ The CLI has two engines:
 | Engine | Status | Use it when |
 |--------|--------|-------------|
 | `v2` (default) | Session log in PostgreSQL or SQLite, resumes after a crash | Most workflows, on the host or in a Docker/Podman container |
-| `v1` (`--engine v1`) | Legacy | You need `{{ stack }}` / `{{ prompts.* }}`, `--dry-run`, `--repo`, or dashboard events |
+| `v1` (`--engine v1`) | Legacy | You need `{{ stack }}` / `{{ prompts.* }}`, `--dry-run`, `--repo`, or dashboard events. With a container sandbox, v1 only runs in `--repo OWNER/REPO` mode: it refuses to mount and re-own your working directory (use `--no-sandbox` to run it on the host) |
 
 Read [Known limitations of v2](#known-limitations-of-v2) before you depend on the default engine.
 
@@ -166,7 +166,7 @@ To start a workflow of your own, run `stepyard init my-workflow --template blank
 | `security-audit` | Scans the codebase for OWASP-style problems | v1, v2 |
 | `generate-docs` | Writes Markdown documentation for source files | v1, v2 |
 | `refactor`, `flaky-test-fix`, `weekly-report` | Refactors from a description, finds flaky tests, summarizes a week of git activity | v1, v2 |
-| `fix-ci`, `fix-test` | Detects the stack, runs lint or tests, and fixes failures in a loop | **v1 only** |
+| `fix-ci`, `fix-test` | Detects the stack, runs lint or tests, and fixes failures in a loop | **v1 only** (with `--repo OWNER/REPO`, or `--no-sandbox` on a local checkout) |
 | `hello-world-cmd`, `hello-world`, `simple-test` | Smoke tests | v1, v2 |
 
 Each file starts with a usage comment. You can change them or write your own.
@@ -180,7 +180,7 @@ description: "Summarize a GitHub issue"
 steps:
   - name: issue
     type: cmd
-    run: "gh issue view {{ target }} --json title,body"
+    run: "gh issue view {{ target | shell_quote }} --json title,body"
 
   - name: explain
     type: chat
@@ -190,10 +190,7 @@ steps:
 
   - name: print
     type: cmd
-    run: |
-      cat <<'EOF'
-      {{ steps.explain.response }}
-      EOF
+    run: "printf '%s\\n' {{ steps.explain.response | shell_quote }}"
 ```
 
 ```bash
@@ -288,11 +285,11 @@ Details: [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 | Feature | Status in v2 |
 |---------|--------------|
 | `{{ stack.* }}`, `{{ prompts.* }}` | Not rendered. Use `--engine v1` |
-| `--dry-run` | Rejected. Use `--engine v1` or `stepyard inspect` |
-| `--quiet`, `--resume`, `--repo` | Ignored (`--verbose` works: it prints cmd output) |
+| `--dry-run`, `--repo`, `--resume`, `--json` | Rejected with an error. Use `--engine v1` (or `stepyard inspect` for a dry run) |
+| `--quiet` | No effect (a warning says so; `--verbose` works: it prints cmd output) |
 | `parallel:` on `map` | Ignored. Items run one after another (v1 also runs them one after another by default) |
 | `config.events.dashboard` | Not sent. Dashboard events work only with v1 |
-| `--timeout` | Has no effect in either engine. Set `config.global.timeout` or a step `timeout:` |
+| `--timeout` | Has no effect in either engine (a warning says so). Set `config.global.timeout` or a step `timeout:` |
 
 ## CLI overview
 

@@ -175,9 +175,9 @@ steps:
       echo "============================================================"
       echo " Refactoring Complete"
       echo "============================================================"
-      echo "Goal: {{ target }}"
+      printf 'Goal: %s\n' {{ target | shell_quote }}
       echo ""
       echo "Plan:"
-      echo "{{ steps.plan.response }}"
+      printf '%s\n' {{ steps.plan.response | shell_quote }}
       echo ""
       echo "✅ Lint passing | ✅ Tests passing"

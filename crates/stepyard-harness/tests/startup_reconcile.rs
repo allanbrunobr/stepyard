@@ -131,15 +131,32 @@ async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
         .await
         .expect("new session");
     let seeded_id = seeded.id();
+    // Reconcile only touches sessions older than LEASE_GRACE whose owner no
+    // longer holds the lease. Nobody holds this one; backdate it past grace.
+    sqlx::query("UPDATE sessions SET started_at = NOW() - INTERVAL '1 hour' WHERE id = $1")
+        .bind(*seeded_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("backdate seeded session");
 
-    let orphan_uuid = Uuid::new_v4();
+    // The orphan container belongs to a session this database knows is
+    // over (completed); reconcile must remove it. A container whose UUID this
+    // database does not know belongs to another database/project sharing the
+    // daemon and must survive (P1-1 follow-up, analysis 2026-11-09).
+    let mut dead = Session::new(&pool, Uuid::new_v4(), tenant.clone())
+        .await
+        .expect("new dead session");
+    dead.complete().await.expect("complete dead session");
+    let orphan_uuid = *dead.id().as_uuid();
     let orphan_name = format!("stepyard-session-{orphan_uuid}");
-    // RAII: guarantees the orphan container is torn down even if reconcile
+    let foreign_name = format!("stepyard-session-{}", Uuid::new_v4());
+    // RAII: guarantees both containers are torn down even if reconcile
     // panics or an assertion blows up mid-way.
     let _guard = ContainerCleanup {
-        names: vec![orphan_name.clone()],
+        names: vec![orphan_name.clone(), foreign_name.clone()],
     };
     spawn_orphan(&orphan_name).await;
+    spawn_orphan(&foreign_name).await;
     assert!(
         container_alive(&orphan_name).await,
         "orphan container should exist after spawn"
@@ -189,6 +206,10 @@ async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
     assert!(
         !container_alive(&orphan_name).await,
         "orphan container should be destroyed",
+    );
+    assert!(
+        container_alive(&foreign_name).await,
+        "a container of a session unknown to this database must be kept",
     );
 
     // ── act: second reconcile (idempotency) ─────────────────────────────

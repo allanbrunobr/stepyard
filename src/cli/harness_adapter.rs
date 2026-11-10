@@ -229,6 +229,14 @@ pub enum AdapterError {
     )]
     ChatInvalidTimeout { name: String, value: String },
 
+    #[error("step `{name}` has an invalid `config.{key}` ({value}) — expected {expected}")]
+    InvalidStepConfig {
+        name: String,
+        key: &'static str,
+        value: String,
+        expected: &'static str,
+    },
+
     #[error(
         "parallel step `{name}` has no `steps:` block — parallel must list at \
          least one sub-step (v1 parity)"
@@ -403,12 +411,11 @@ fn with_inherited_type_config(def: &WorkflowDef) -> WorkflowDef {
     let mut out = def.clone();
     let chat = def.config.chat.clone();
     let agent = def.config.agent.clone();
-    if chat.is_empty() && agent.is_empty() {
-        return out;
-    }
+    let manager = crate::config::ConfigManager::new(def.config.clone());
     let apply = |steps: &mut Vec<StepDef>| {
         for step in steps.iter_mut() {
             inherit_step_config(step, &chat, &agent);
+            resolve_runtime_config(step, &manager);
         }
     };
     apply(&mut out.steps);
@@ -417,6 +424,81 @@ fn with_inherited_type_config(def: &WorkflowDef) -> WorkflowDef {
     }
     out
 }
+
+/// Keys of the v1 four-layer config (global < type < name pattern < step)
+/// that the v2 harness honours for `cmd` and `agent` steps. Before this, the
+/// adapter dropped them: `fail_on_error: false` (used by 10 of the 12 shipped
+/// workflows) aborted the run on the first non-zero exit, and every `timeout`
+/// (`config.global.timeout`, `config.cmd.timeout`, a step's own) was ignored,
+/// so cmd and agent steps ran without any limit.
+const RESOLVED_CMD_KEYS: &[&str] = &["timeout", "fail_on_error"];
+const RESOLVED_AGENT_KEYS: &[&str] = &["timeout"];
+
+/// Writes the v1-resolved value of [`RESOLVED_CMD_KEYS`] /
+/// [`RESOLVED_AGENT_KEYS`] into the step's own `config:` (recursing into
+/// `parallel` bodies), using the same [`crate::config::ConfigManager`] the
+/// v1 engine uses, so both engines agree on the effective value.
+fn resolve_runtime_config(step: &mut StepDef, manager: &crate::config::ConfigManager) {
+    if let Some(children) = step.steps.as_mut() {
+        for child in children.iter_mut() {
+            resolve_runtime_config(child, manager);
+        }
+    }
+    let keys = match step.step_type {
+        StepType::Cmd => RESOLVED_CMD_KEYS,
+        StepType::Agent => RESOLVED_AGENT_KEYS,
+        _ => return,
+    };
+    let resolved = manager.resolve(&step.name, &step.step_type, &step.config);
+    for key in keys {
+        if let Some(value) = resolved.values.get(*key) {
+            if let Ok(yaml) = serde_yaml::to_value(value) {
+                step.config.insert((*key).to_string(), yaml);
+            }
+        }
+    }
+}
+
+/// Parses a v1 `config.timeout` (`"60s"`, `"500ms"`, `"5m"`, bare `"30"` =
+/// seconds — v1 grammar, `src/config/mod.rs`). A malformed or non-string
+/// value is a load-time error instead of v1's silent fallback.
+fn config_timeout(s: &StepDef) -> Result<Option<Duration>, AdapterError> {
+    let invalid = |value: String| AdapterError::InvalidStepConfig {
+        name: s.name.clone(),
+        key: "timeout",
+        value,
+        expected: "a duration string such as \"60s\", \"500ms\" or \"5m\"",
+    };
+    let raw = match s.config.get("timeout") {
+        None | Some(serde_yaml::Value::Null) => return Ok(None),
+        Some(serde_yaml::Value::String(v)) => v.as_str(),
+        Some(other) => return Err(invalid(format!("{other:?}"))),
+    };
+    crate::config::parse_duration(raw)
+        .map(Some)
+        .ok_or_else(|| invalid(format!("{raw:?}")))
+}
+
+/// Reads `config.fail_on_error`. Missing means `true`, the v1 default for
+/// cmd steps, which also keeps the old v2 behaviour for workflows adapted
+/// without defaults.
+fn config_fail_on_error(s: &StepDef) -> Result<bool, AdapterError> {
+    match s.config.get("fail_on_error") {
+        None | Some(serde_yaml::Value::Null) => Ok(true),
+        Some(serde_yaml::Value::Bool(b)) => Ok(*b),
+        Some(other) => Err(AdapterError::InvalidStepConfig {
+            name: s.name.clone(),
+            key: "fail_on_error",
+            value: format!("{other:?}"),
+            expected: "true or false",
+        }),
+    }
+}
+
+/// v1 fallbacks when no layer sets `timeout` (`src/steps/cmd.rs`,
+/// `src/steps/agent.rs`).
+const V1_CMD_TIMEOUT: Duration = Duration::from_secs(60);
+const V1_AGENT_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn inherit_step_config(
     step: &mut StepDef,
@@ -480,7 +562,10 @@ fn adapt_cmd(s: &StepDef) -> Result<Step, AdapterError> {
     let cmd = s.run.clone().ok_or_else(|| AdapterError::CmdMissingRun {
         name: s.name.clone(),
     })?;
-    Ok(Step::cmd(s.name.clone(), cmd).with_env(s.env.clone()))
+    Ok(Step::cmd(s.name.clone(), cmd)
+        .with_env(s.env.clone())
+        .with_timeout(config_timeout(s)?.unwrap_or(V1_CMD_TIMEOUT))
+        .with_allow_failure(!config_fail_on_error(s)?))
 }
 
 fn adapt_gate(s: &StepDef, position: StepPosition) -> Result<Step, AdapterError> {
@@ -540,7 +625,9 @@ fn adapt_agent(s: &StepDef) -> Result<Step, AdapterError> {
             name: s.name.clone(),
         })?;
 
-    let mut step = Step::agent(s.name.clone(), prompt).with_env(s.env.clone());
+    let mut step = Step::agent(s.name.clone(), prompt)
+        .with_env(s.env.clone())
+        .with_timeout(config_timeout(s)?.unwrap_or(V1_AGENT_TIMEOUT));
 
     // v1 surfaced agent knobs through the untyped `config:` bag
     // (`src/workflow/schema.rs:128`). Translate the seven string keys the
@@ -2099,6 +2186,135 @@ scopes:
             checked += 1;
         }
         assert!(checked > 0, "no workflows found in {}", dir.display());
+    }
+
+    /// P1-7 (analysis 2026-11-09, BUG-CLI-02 / MANUT-01 / MANUT-02): the
+    /// adapter used to drop `config` of cmd/agent steps entirely.
+    #[test]
+    fn cmd_and_agent_timeout_and_fail_on_error_follow_the_four_v1_layers() {
+        let yaml = r#"
+name: layers
+config:
+  global:
+    timeout: 300s
+  cmd:
+    timeout: 45s
+    fail_on_error: true
+  patterns:
+    "slow_*":
+      timeout: 15m
+steps:
+  - name: plain
+    type: cmd
+    run: "true"
+  - name: lint
+    type: cmd
+    run: "false"
+    config:
+      fail_on_error: false
+  - name: own
+    type: cmd
+    run: "true"
+    config:
+      timeout: 10s
+  - name: slow_build
+    type: cmd
+    run: "true"
+  - name: think
+    type: agent
+    prompt: "go"
+  - name: fan
+    type: parallel
+    steps:
+      - name: inner
+        type: cmd
+        run: "false"
+        config:
+          fail_on_error: false
+"#;
+        let file = write_tmp(yaml);
+        let def = parser::parse_file(file.path()).unwrap();
+        let plan = adapt(&def).unwrap();
+        let by_name = |name: &str| plan.steps.iter().find(|s| s.name == name).unwrap();
+
+        // type layer beats global
+        assert_eq!(by_name("plain").timeout, Some(Duration::from_secs(45)));
+        assert!(!by_name("plain").allow_failure);
+        // step layer
+        assert!(by_name("lint").allow_failure);
+        assert_eq!(by_name("own").timeout, Some(Duration::from_secs(10)));
+        // name-pattern layer beats type
+        assert_eq!(
+            by_name("slow_build").timeout,
+            Some(Duration::from_secs(900))
+        );
+        // agents get the global layer (v1 parity)
+        assert_eq!(by_name("think").timeout, Some(Duration::from_secs(300)));
+        // parallel bodies are resolved too
+        let inner = plan
+            .scopes
+            .values()
+            .flat_map(|s| s.steps.iter())
+            .find(|s| s.name == "inner")
+            .expect("parallel body step");
+        assert!(inner.allow_failure);
+        assert_eq!(inner.timeout, Some(Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn without_any_config_cmd_and_agent_get_the_v1_fallback_timeouts() {
+        let file = write_tmp(
+            "name: bare\nsteps:\n  - name: c\n    type: cmd\n    run: \"true\"\n  - name: a\n    type: agent\n    prompt: \"go\"\n",
+        );
+        let plan = adapt(&parser::parse_file(file.path()).unwrap()).unwrap();
+        assert_eq!(plan.steps[0].timeout, Some(V1_CMD_TIMEOUT));
+        assert!(
+            !plan.steps[0].allow_failure,
+            "missing fail_on_error keeps failing"
+        );
+        assert_eq!(plan.steps[1].timeout, Some(V1_AGENT_TIMEOUT));
+    }
+
+    #[test]
+    fn malformed_timeout_or_fail_on_error_is_a_load_error_not_a_silent_default() {
+        for (key, value) in [
+            ("timeout", "\"soon\""),
+            ("timeout", "30"),
+            ("fail_on_error", "\"no\""),
+        ] {
+            let file = write_tmp(&format!(
+                "name: bad\nsteps:\n  - name: c\n    type: cmd\n    run: \"true\"\n    config:\n      {key}: {value}\n"
+            ));
+            let err = adapt(&parser::parse_file(file.path()).unwrap()).unwrap_err();
+            assert!(
+                matches!(err, AdapterError::InvalidStepConfig { .. }),
+                "{key}={value}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_fix_issue_lint_step_tolerates_failure_on_v2() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("workflows/fix-issue.yaml");
+        let mut def = parser::parse_file(&path).unwrap();
+        def.config = crate::config::apply_defaults(&def.config);
+        let plan = adapt(&def).unwrap();
+        let lint = plan
+            .scopes
+            .values()
+            .flat_map(|s| s.steps.iter())
+            .find(|s| s.name == "lint")
+            .expect("lint step");
+        assert!(
+            lint.allow_failure,
+            "fix-issue.yaml sets fail_on_error: false on lint"
+        );
+        assert_eq!(
+            lint.timeout,
+            Some(Duration::from_secs(60)),
+            "embedded cmd default"
+        );
     }
 
     #[test]

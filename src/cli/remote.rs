@@ -37,7 +37,8 @@ pub enum RemoteCommand {
         #[arg(long)]
         repo: Option<String>,
 
-        /// Branch to check out inside the container. Forwarded as `--var branch=<value>`.
+        /// Branch name for the workflow. Forwarded as `--var BRANCH=<value>`
+        /// (read it with `{{ args.BRANCH }}`); the engine does not check it out.
         #[arg(long)]
         branch: Option<String>,
 
@@ -115,6 +116,11 @@ fn parse_kv_vars(raw: &[String]) -> Result<HashMap<String, String>> {
             .ok_or_else(|| anyhow!("--var expects KEY=VALUE, got `{}`", entry))?;
         if k.is_empty() {
             bail!("--var key cannot be empty in `{}`", entry);
+        }
+        // Same rule as `stepyard execute --var`; checked here so a bad key
+        // fails on the client instead of after the API answered 202.
+        if !super::commands::is_valid_template_var_key(k) {
+            bail!("--var key `{}` must match [A-Z_][A-Z0-9_]*", k);
         }
         out.insert(k.to_string(), v.to_string());
     }
@@ -448,9 +454,19 @@ mod tests {
 
     #[test]
     fn parse_kv_vars_accepts_multiple() {
-        let got = parse_kv_vars(&["foo=1".into(), "bar=two".into()]).unwrap();
-        assert_eq!(got.get("foo"), Some(&"1".to_string()));
-        assert_eq!(got.get("bar"), Some(&"two".to_string()));
+        let got = parse_kv_vars(&["FOO=1".into(), "BAR=two".into()]).unwrap();
+        assert_eq!(got.get("FOO"), Some(&"1".to_string()));
+        assert_eq!(got.get("BAR"), Some(&"two".to_string()));
+    }
+
+    #[test]
+    fn parse_kv_vars_rejects_keys_the_engine_would_refuse() {
+        // P1-6: `--var foo=1` used to be accepted here, answered 202 by the
+        // API, and then killed the detached `stepyard execute` in clap.
+        for bad in ["foo=1", "branch=main", "1X=1", "A-B=1"] {
+            let err = parse_kv_vars(&[bad.into()]).unwrap_err();
+            assert!(err.to_string().contains("[A-Z_][A-Z0-9_]*"), "{bad}: {err}");
+        }
     }
 
     #[test]

@@ -47,7 +47,7 @@ Then:
 ```bash
 stepyard remote exec fix-issue --repo allanbrunobr/test-project -- 42
 stepyard remote exec code-review --branch feature/xyz -- PR-123
-stepyard remote exec my-workflow --var foo=1 --var bar=two -- target-value
+stepyard remote exec my-workflow --var FOO=1 --var BAR=two -- target-value
 
 stepyard remote status --limit 5
 stepyard remote status --workflow fix-issue
@@ -55,12 +55,24 @@ stepyard remote status --workflow fix-issue
 stepyard remote logs <run_id>
 ```
 
+The API runs every dispatch with `--engine v1`: only v1 clones `--repo` and
+reports to the dashboard. `--branch` reaches the workflow as `{{ args.BRANCH }}`
+(both engines; `{{ vars.BRANCH }}` also works) — the engine does not check the
+branch out, the workflow decides what to do with it —
+and `--var` keys must match `[A-Z_][A-Z0-9_]*` (checked by the client and by
+the API before anything is spawned). A run whose engine exits before reporting
+is marked `dispatch_failed`, with the path of its dispatch log.
+
 Remote dispatch is repo-mode by default: every run must provide `--repo` or
 `default_repo`. The API rejects repo-less dispatches because that path depends
 on a host workspace mounted/copied into a per-run sandbox, which is not a stable
 remote contract. Operators can temporarily restore the old behavior with
 `STEPYARD_DISPATCH_ALLOW_LOCAL_WORKSPACE=true`, but that is an explicit
-compatibility escape hatch, not the supported remote mode.
+compatibility escape hatch, not the supported remote mode. Since dispatches run
+`--engine v1`, and v1 refuses to put the host working directory in a container
+sandbox (it would bind-mount and re-own it), a repo-less dispatch only runs when
+the engine host has the container sandbox off (`STEPYARD_SANDBOX=local`);
+otherwise it ends as `dispatch_failed` with the reason in its dispatch log.
 
 ## VPS deployment (Dashboard API)
 

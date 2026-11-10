@@ -279,7 +279,7 @@ fn resolve_prompt_content(fn_name: &str, ctx: &Context) -> Result<String, StepEr
     })?;
 
     // Render the prompt file itself as a Tera template with the current context
-    let mut tera = tera::Tera::default();
+    let mut tera = stepyard_harness::template_engine();
     tera.add_raw_template("__prompt__", &content).map_err(|e| {
         StepError::Template(format!(
             "Prompt template error in '{}': {e}",

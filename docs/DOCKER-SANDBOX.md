@@ -18,9 +18,9 @@ no partial state. Use `--no-sandbox` to run locally on the host instead.
 ```bash
 stepyard execute workflow.yaml -- <target>               # sandboxed by default (v2 engine)
 stepyard execute --no-sandbox workflow.yaml -- <target>  # run on host
-stepyard execute --repo OWNER/REPO workflow.yaml -- <target>  # clone repo inside the container
+stepyard execute --engine v1 --repo OWNER/REPO workflow.yaml -- <target>  # clone repo inside the container (v1 only)
 stepyard execute --sandbox-runtime podman workflow.yaml -- <target>  # use Podman instead of Docker
-stepyard execute --engine v1 workflow.yaml -- <target>   # legacy engine (deprecated)
+stepyard execute --engine v1 --no-sandbox workflow.yaml -- <target>  # legacy engine (deprecated) on the host
 ```
 
 The default engine is **v2** (`stepyard-harness` + `stepyard-sandbox-orchestrator`).
@@ -65,12 +65,26 @@ A non-empty `allow` or `deny` list only adds `--network bridge` when the
 container is created. It does not block `169.254.169.254` or any other
 destination. Do not treat the list as an egress filter.
 
+## Workflow-declared volumes
+
+`config.global.sandbox.volumes` in a workflow (or in the project's
+`.stepyard/config.yaml`) is passed to `docker run -v`. Both engines refuse an
+entry whose host source resolves **outside the project directory** — `/`,
+`$HOME`, `~/.ssh`, `/var/run/docker.sock`, `../elsewhere`, or a symlink inside
+the project that points outside — before any container starts. Named volumes
+(`cache:/cache`), anonymous volumes (`/data`) and paths inside the project are
+accepted. If you trust a workflow that needs an outside mount, set
+`STEPYARD_ALLOW_WORKFLOW_MOUNTS=1` in the environment of `stepyard`; a workflow
+file cannot set it.
+
 ## Workspace modes
 
 - **CWD copy (default):** the host's current working directory is copied into
-  the container's `workspace` path. On v2, files that changed are copied back
-  to the host when the workflow ends. On v1, the workspace is a bind mount, so
-  writes are already on the host.
+  the container's `workspace` path, and files that changed are copied back to
+  the host when the workflow ends (v2). On v1 this mode is **refused**: v1
+  bind-mounts the working directory read-write and runs `chown -R` on it, so
+  the container would write and re-own your real files. Use the default v2
+  engine, `--engine v1 --repo OWNER/REPO`, or `--no-sandbox`.
 - **Repo clone (`--repo OWNER/REPO`):** the container clones the given repo at
   start, using `GH_TOKEN`/`GITHUB_TOKEN` (or `gh auth token` fallback). The
   host CWD is not copied. Useful for CI-style isolation.

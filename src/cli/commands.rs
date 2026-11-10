@@ -89,7 +89,7 @@ fn parse_cli_var(raw: &str) -> Result<CliVar, String> {
     })
 }
 
-fn is_valid_template_var_key(key: &str) -> bool {
+pub(crate) fn is_valid_template_var_key(key: &str) -> bool {
     let mut chars = key.chars();
     match chars.next() {
         Some('A'..='Z') | Some('_') => {}
@@ -457,7 +457,7 @@ async fn execute_v2(
     ));
 
     #[cfg(feature = "postgres")]
-    {
+    let lease_pool = {
         let pool = connect_pg(args.json).await?;
 
         // D8 startup reconcile (Story 2.4). Runs unconditionally before any
@@ -476,13 +476,22 @@ async fn execute_v2(
             .await
             .context("startup reconcile failed")?;
         tracing::debug!(?reconcile_report, "startup reconcile report");
-    }
+        pool
+    };
 
     let store = build_store(args.no_file_logs).await?;
     // A second handle for the live progress view (read-only replays).
     let progress_store = store.clone();
     let session = open_session_with_store(store, &workflow.name).await?;
     let session_id = session.id();
+    // Liveness lease: while this value lives, a concurrent `stepyard execute`
+    // against the same database sees this session as owned and its startup
+    // reconcile leaves the session and its container alone. It must outlive
+    // the engine run, so it stays bound until `execute_v2` returns.
+    #[cfg(feature = "postgres")]
+    let _session_lease = crate::startup::SessionLease::acquire(&lease_pool, *session_id.as_uuid())
+        .await
+        .context("failed to take the session liveness lease")?;
 
     let lifecycle: Arc<dyn SandboxLifecycle> = match sandbox_runtime {
         SandboxRuntime::Local => Arc::new(LocalShellLifecycle::new()),
@@ -838,6 +847,44 @@ pub async fn exec(args: ExecArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `execute` flags that only the v1 engine implements. v2 used to accept and
+/// silently ignore them: `--repo` ran the workflow on the current directory
+/// instead of the repository, `--resume` started over, `--json` printed the
+/// decorative output a script would then fail to parse. Refusing them makes
+/// the caller (a user, the dashboard dispatcher, `stepyard remote`) choose
+/// `--engine v1` explicitly.
+fn v2_unsupported_flags(args: &ExecuteArgs) -> Vec<&'static str> {
+    let mut flags = Vec::new();
+    if args.repo.is_some() {
+        flags.push("--repo");
+    }
+    if args.resume.is_some() {
+        flags.push("--resume");
+    }
+    if args.json {
+        flags.push("--json");
+    }
+    if args.dry_run {
+        flags.push("--dry-run");
+    }
+    flags
+}
+
+/// Flags accepted for compatibility that change nothing; say so instead of
+/// letting the caller believe they took effect.
+fn ignored_flag_warnings(args: &ExecuteArgs) -> Vec<&'static str> {
+    let mut warnings = Vec::new();
+    if args.timeout.is_some() {
+        warnings.push(
+            "--timeout is not implemented and is ignored; set `timeout` in the workflow config",
+        );
+    }
+    if args.quiet && args.engine == "v2" {
+        warnings.push("--quiet has no effect with --engine v2");
+    }
+    warnings
+}
+
 pub async fn execute(
     args: ExecuteArgs,
     shutdown_tx: Arc<broadcast::Sender<()>>,
@@ -852,6 +899,18 @@ pub async fn execute(
             "unknown --engine value `{}` (expected `v1` or `v2`)",
             display_text(other)
         ),
+    }
+    if args.engine == "v2" {
+        let unsupported = v2_unsupported_flags(&args);
+        if !unsupported.is_empty() {
+            bail!(
+                "--engine v2 (the default) does not support {}; rerun with --engine v1",
+                unsupported.join(", ")
+            );
+        }
+    }
+    for warning in ignored_flag_warnings(&args) {
+        eprintln!("warning: {warning}");
     }
 
     let workflow_path = resolve_workflow_path(&args.workflow)?;
@@ -917,6 +976,36 @@ pub async fn execute(
         SandboxRuntime::Docker | SandboxRuntime::Podman => sandbox_mode,
     };
 
+    // `--dry-run` only prints the plan: no container is created, so neither
+    // policy applies (it is v1-only, and refusing it left no dry-run at all).
+    if effective_sandbox_mode != SandboxMode::Disabled && !args.dry_run {
+        // SEG-RUST-01 / BUG-MOTOR-04: the v1 Docker sandbox bind-mounts the
+        // host working directory read-write at /workspace and runs
+        // `chown -R` on it, so the container writes (and re-owns) the user's
+        // real files. Only `--repo` mode, which mounts a scratch directory
+        // and clones inside the container, stays available on v1.
+        if args.engine == "v1" && args.repo.is_none() {
+            bail!(
+                "--engine v1 with a container sandbox bind-mounts your working directory \
+                 read-write and changes its owner; use the default --engine v2 (it copies \
+                 the project into the container), --engine v1 --repo OWNER/REPO, or \
+                 --no-sandbox"
+            );
+        }
+        // SEG-RUST-03: workflow-declared volumes must stay inside the project.
+        let declared = crate::sandbox::SandboxConfig::from_global_config(&workflow.config.global);
+        let project_dir = std::env::current_dir().context("failed to resolve current directory")?;
+        let allow_outside = std::env::var(crate::sandbox::config::ALLOW_WORKFLOW_MOUNTS_ENV)
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        crate::sandbox::config::check_workflow_volumes(
+            &declared.volumes,
+            &project_dir,
+            allow_outside,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+    }
+
     // Validate container runtime availability if sandbox mode is active
     if effective_sandbox_mode != SandboxMode::Disabled {
         if let Err(e) = sandbox::require_runtime(sandbox_runtime).await {
@@ -949,9 +1038,7 @@ pub async fn execute(
     match args.engine.as_str() {
         "v1" => {} // fall through to legacy path
         "v2" => {
-            if args.dry_run {
-                bail!("--engine v2 does not support --dry-run yet (Story 2.4)");
-            }
+            // --dry-run, --repo, --resume and --json were refused above.
             return execute_v2(
                 args,
                 workflow,
@@ -979,6 +1066,22 @@ pub async fn execute(
     } else {
         let store = build_store(args.no_file_logs).await?;
         Some(open_session_with_store(store, &workflow.name).await?)
+    };
+    // Liveness lease, as on v2: a concurrent `stepyard execute` runs the
+    // startup reconcile, which fails every `running` session whose lease it
+    // can take. Dashboard dispatch and the Slack bot run on v1, so v1 must
+    // hold it too. Kept bound until `execute` returns.
+    #[cfg(feature = "postgres")]
+    let _session_lease = match &session {
+        Some(s) => {
+            let pool = connect_pg(args.json).await?;
+            Some(
+                crate::startup::SessionLease::acquire(&pool, *s.id().as_uuid())
+                    .await
+                    .context("failed to take the session liveness lease")?,
+            )
+        }
+        None => None,
     };
 
     let opts = EngineOptions {

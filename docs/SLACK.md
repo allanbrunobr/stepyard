@@ -116,7 +116,10 @@ In the Slack channel, run `/invite @YourBot`, then mention it.
 | `@bot fix ci <pr-url>` | `fix-ci.yaml` |
 
 When the message contains a GitHub URL, the bot passes `--repo owner/repo` to
-the workflow.
+the workflow, and v1 clones it inside the sandbox. Without a URL, the bot would
+run in its own working directory, and the v1 sandbox refuses that mode (it
+bind-mounts and re-owns the directory): include the repository URL in the
+message, or run the bot with sandboxing disabled on purpose.
 
 ## Security notes
 

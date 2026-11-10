@@ -46,7 +46,7 @@ scopes:
       - name: run
         type: cmd
         run: |
-          PATTERN="{{ args.PATTERN | default(value='') }}"
+          PATTERN={{ args.PATTERN | default(value='') | shell_quote }}
           if [ -f "package.json" ]; then
             if [ -n "$PATTERN" ]; then
               npm test -- --testNamePattern="$PATTERN" 2>&1
@@ -95,11 +95,11 @@ steps:
   - name: combined_results
     type: cmd
     run: |
-      echo "=== Run 1 ===" && echo "{{ steps.test_run_1.outputs }}"
-      echo "=== Run 2 ===" && echo "{{ steps.test_run_2.outputs }}"
-      echo "=== Run 3 ===" && echo "{{ steps.test_run_3.outputs }}"
-      echo "=== Run 4 ===" && echo "{{ steps.test_run_4.outputs }}"
-      echo "=== Run 5 ===" && echo "{{ steps.test_run_5.outputs }}"
+      echo "=== Run 1 ===" && printf '%s\n' {{ steps.test_run_1.outputs | shell_quote }}
+      echo "=== Run 2 ===" && printf '%s\n' {{ steps.test_run_2.outputs | shell_quote }}
+      echo "=== Run 3 ===" && printf '%s\n' {{ steps.test_run_3.outputs | shell_quote }}
+      echo "=== Run 4 ===" && printf '%s\n' {{ steps.test_run_4.outputs | shell_quote }}
+      echo "=== Run 5 ===" && printf '%s\n' {{ steps.test_run_5.outputs | shell_quote }}
 
   # 3. Analyze flakiness patterns
   - name: analyze
@@ -217,4 +217,4 @@ steps:
       echo "============================================================"
       echo " Flaky Test Fix Complete"
       echo "============================================================"
-      echo "{{ steps.verify_analysis.response }}"
+      printf '%s\n' {{ steps.verify_analysis.response | shell_quote }}

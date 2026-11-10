@@ -7,8 +7,15 @@ import { basename, join } from 'path';
 import { requireAuth, requireDashboardAuth } from '../auth';
 import { pool } from '../db';
 import { logger } from '../logger';
+import { forwardAsyncErrors } from '../errors';
+import {
+  allowedDispatchLogPath,
+  buildSshCommand,
+  dispatchLogDir,
+  readDispatchLogChunk,
+} from '../dispatch';
 
-export const workflowsRouter = Router();
+export const workflowsRouter = forwardAsyncErrors(Router());
 
 function envFlag(name: string): boolean {
   const value = process.env[name]?.trim().toLowerCase();
@@ -107,6 +114,7 @@ workflowsRouter.get('/workflows/export', requireDashboardAuth, async (req: Reque
   res.write(csvHeader);
 
   const client = await pool.connect();
+  let broken: Error | undefined;
   try {
     const query = `
       SELECT r.started_at, r.user_name, r.workflow, r.target, r.repo, r.status,
@@ -151,7 +159,7 @@ workflowsRouter.get('/workflows/export', requireDashboardAuth, async (req: Reque
     await client.query('COMMIT');
     res.end();
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    broken = await client.query('ROLLBACK').then(() => undefined, (e: Error) => e);
     logger.error(err, 'Failed to export CSV');
     if (!res.headersSent) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to export CSV' } });
@@ -159,7 +167,7 @@ workflowsRouter.get('/workflows/export', requireDashboardAuth, async (req: Reque
       res.end();
     }
   } finally {
-    client.release();
+    client.release(broken);
   }
 });
 
@@ -230,7 +238,10 @@ workflowsRouter.get('/workflows/distinct', requireDashboardAuth, async (_req: Re
 
 // --- GET /workflows/:runId/logs/stream (SSE snapshots for remote CLI) ---
 
-const TERMINAL_STATUSES = new Set(['completed', 'success', 'failed', 'cancelled', 'canceled']);
+// `dispatch_failed`: the engine exited before reporting (see the dispatch
+// handler). Without it the log stream never sent `done` for such a run and
+// `stepyard remote logs` hung.
+export const TERMINAL_STATUSES = new Set(['completed', 'success', 'failed', 'cancelled', 'canceled', 'dispatch_failed']);
 const MAX_LOG_CHUNK_BYTES = 8192;
 
 interface WorkflowSnapshot {
@@ -261,50 +272,8 @@ function writeSse(res: Response, event: string, data: unknown): void {
 }
 
 function dispatchLogPath(snapshot: WorkflowSnapshot): string | null {
-  const path = snapshot.run.dispatch_log_path;
-  return typeof path === 'string' && path.length > 0 ? path : null;
-}
-
-function readDispatchLogChunk(path: string, offset: number): { text: string; nextOffset: number; hasMore: boolean } | null {
-  try {
-    const stat = statSync(path);
-    if (!stat.isFile() || stat.size <= offset) {
-      return null;
-    }
-
-    const bytesToRead = Math.min(stat.size - offset, MAX_LOG_CHUNK_BYTES);
-    const fd = openSync(path, 'r');
-    try {
-      const buffer = Buffer.alloc(bytesToRead);
-      const bytesRead = readSync(fd, buffer, 0, bytesToRead, offset);
-      return {
-        text: sanitizeLogText(buffer.subarray(0, bytesRead).toString('utf8')),
-        nextOffset: offset + bytesRead,
-        hasMore: stat.size > offset + bytesRead,
-      };
-    } finally {
-      closeSync(fd);
-    }
-  } catch (err) {
-    logger.warn({ err, path }, 'Unable to read dispatch log chunk');
-    return null;
-  }
-}
-
-function sanitizeLogText(input: string): string {
-  let output = '';
-  for (const char of input) {
-    const cp = char.codePointAt(0);
-    if (cp == null) continue;
-    const allowedControl = char === '\n' || char === '\r' || char === '\t';
-    const bidiOverride = (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069);
-    if ((!allowedControl && cp <= 0x1f) || cp === 0x7f || (cp >= 0x80 && cp <= 0x9f) || bidiOverride) {
-      output += `\\u{${cp.toString(16).padStart(4, '0')}}`;
-    } else {
-      output += char;
-    }
-  }
-  return output;
+  // Rows written before the fix may hold any path; validate on every read.
+  return allowedDispatchLogPath(snapshot.run.dispatch_log_path);
 }
 
 const UUID_PARAM = z.string().uuid();
@@ -394,7 +363,7 @@ workflowsRouter.get('/workflows/:runId/logs/stream', requireDashboardAuth, async
       const logPath = dispatchLogPath(snapshot);
       let logHasMore = false;
       if (logPath) {
-        const chunk = readDispatchLogChunk(logPath, logOffset);
+        const chunk = readDispatchLogChunk(logPath, logOffset, MAX_LOG_CHUNK_BYTES);
         if (chunk && chunk.text.length > 0) {
           logOffset = chunk.nextOffset;
           logHasMore = chunk.hasMore;
@@ -658,7 +627,11 @@ const dispatchSchema = z.object({
     .regex(/^[\w.-]+\/[\w.-]+$/, 'repo must be OWNER/REPO')
     .optional(),
   branch: z.string().max(200).optional(),
-  vars: z.record(z.string(), z.string()).optional(),
+  // Same key rule as `stepyard execute --var` (clap rejects anything else, and
+  // that used to happen in the detached child after this API answered 202).
+  vars: z
+    .record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/, 'var keys must match [A-Z_][A-Z0-9_]*'), z.string())
+    .optional(),
 });
 
 workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, res: Response) => {
@@ -695,9 +668,12 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
     return;
   }
 
-  const stepyardArgs: string[] = ['execute'];
+  // --engine v1 explicitly: v2 (the CLI default) refuses --repo and does not
+  // report to the dashboard, so a dispatched run would never leave
+  // `dispatching`. Same choice as the Slack bot.
+  const stepyardArgs: string[] = ['execute', '--engine', 'v1'];
   if (repo) stepyardArgs.push('--repo', repo);
-  if (branch) stepyardArgs.push('--var', `branch=${branch}`);
+  if (branch) stepyardArgs.push('--var', `BRANCH=${branch}`);
   if (vars) {
     for (const [k, v] of Object.entries(vars)) {
       stepyardArgs.push('--var', `${k}=${v}`);
@@ -712,7 +688,7 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
   // Override the binary with STEPYARD_BINARY.
   // Log file for the detached process. Persists after the api request returns
   // so operators can inspect failures post-hoc. Written to /tmp; container-local.
-  const logDir = process.env.STEPYARD_DISPATCH_LOG_DIR || '/tmp';
+  const logDir = dispatchLogDir();
   try { mkdirSync(logDir, { recursive: true }); } catch {}
   const runId = randomUUID();
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -725,9 +701,11 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
   };
 
   const sshHost = process.env.STEPYARD_DISPATCH_SSH_HOST;
-  const [binary, args] = sshHost
+  // In SSH mode the forwarded secrets travel on the child's stdin, never in
+  // argv (visible in `ps`) or in this log line.
+  const { binary, args, stdin } = sshHost
     ? buildSshCommand(sshHost, stepyardArgs, dispatchEnv)
-    : [process.env.STEPYARD_BINARY || 'stepyard', stepyardArgs];
+    : { binary: process.env.STEPYARD_BINARY || 'stepyard', args: stepyardArgs, stdin: null };
 
   logger.info(
     { binary, args, workflow, target, repo, branch, sshHost: !!sshHost, runId, logPath },
@@ -758,12 +736,28 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
     const logFd = openSync(logPath, 'a');
     const child = spawn(binary, args, {
       detached: true,
-      stdio: ['ignore', logFd, logFd],
+      stdio: [stdin === null ? 'ignore' : 'pipe', logFd, logFd],
       env: dispatchEnv,
     });
     child.on('error', (err) => {
       logger.error({ err, args }, 'Spawned stepyard emitted error event');
     });
+    // A child that dies before reporting any event (bad flag, missing binary,
+    // ssh refused) used to leave the run in `dispatching` forever.
+    // markDispatchFailed only touches rows no event has updated yet.
+    child.on('exit', (code, signal) => {
+      if (code !== 0) {
+        const why = signal ? `signal ${signal}` : `exit code ${code}`;
+        void markDispatchFailed(runId, `stepyard exited before reporting (${why}); see ${logPath}`);
+      }
+    });
+    if (stdin !== null && child.stdin) {
+      // EPIPE when ssh exits early must not crash the API process.
+      child.stdin.on('error', (err) => {
+        logger.warn({ err, runId }, 'Dispatch stdin closed early');
+      });
+      child.stdin.end(stdin);
+    }
     child.unref();
     closeSync(logFd);
     const pid = child.pid;
@@ -791,65 +785,6 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
 
 // --- Helpers ---
 
-/**
- * Wrap a stepyard invocation in an SSH call. The remote side runs the engine
- * via `bash -lc '<envs> exec stepyard ...'` so the host's PATH is loaded and
- * workflow-level env vars are forwarded from STEPYARD_SSH_ENV_FORWARD.
- *
- * STEPYARD_SSH_ENV_FORWARD accepts a comma-separated list of:
- *   - `NAME`          → forward `NAME=$NAME` (simple)
- *   - `NAME:SOURCE`   → forward `NAME=$SOURCE` (remap — e.g. when the api
- *                       container's DATABASE_URL points at `db` but the host
- *                       needs `localhost`)
- */
-function buildSshCommand(sshHost: string, stepyardArgs: string[], env: NodeJS.ProcessEnv): [string, string[]] {
-  const forward = (process.env.STEPYARD_SSH_ENV_FORWARD || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const exports: string[] = [];
-  for (const name of ['STEPYARD_DASHBOARD_RUN_ID', 'STEPYARD_DISPATCH_LOG_PATH']) {
-    const value = env[name];
-    if (value != null) {
-      exports.push(`${name}=${shellQuote(value)}`);
-    }
-  }
-  for (const entry of forward) {
-    const [target, source] = entry.includes(':') ? entry.split(':', 2) : [entry, entry];
-    const value = process.env[source];
-    if (value) {
-      exports.push(`${target}=${shellQuote(value)}`);
-    }
-  }
-  // Ensure a clean git-enabled CWD for the engine. Required when not in --repo
-  // mode because stepyard's sandbox_up expects a git repo to copy as workspace.
-  // The dir is created idempotently and reused across dispatches.
-  const ws = process.env.STEPYARD_DISPATCH_WORKSPACE || '/tmp/stepyard-dispatch-ws';
-  const prep = [
-    `mkdir -p ${shellQuote(ws)}`,
-    `cd ${shellQuote(ws)}`,
-    `[ -d .git ] || { git init -q && echo dispatch > .dispatch && git add .dispatch && git -c user.email=stepyard@localhost -c user.name=Stepyard commit -qm init ; }`,
-  ].join(' && ');
-  // Use an absolute path so we don't rely on the login shell's PATH order.
-  // Some hosts have multiple stepyard binaries (e.g. ~/.cargo/bin vs /usr/local/bin)
-  // which may be different versions. Override with STEPYARD_HOST_BINARY.
-  const stepyardBin = process.env.STEPYARD_HOST_BINARY || '/usr/local/bin/stepyard';
-  const remoteCmd = `${prep} && ${exports.join(' ')} exec ${shellQuote(stepyardBin)} ${stepyardArgs.map(shellQuote).join(' ')}`;
-  // ssh concatenates remote argv with spaces before feeding it to the remote
-  // shell, which then re-parses. Pass the bash invocation as ONE argument so
-  // the `&&` / quoting in remoteCmd survives.
-  // Unknown and changed host keys are refused. BatchMode has no prompt,
-  // so a missing known_hosts entry fails the dispatch instead of accepting
-  // whichever key the server offers.
-  const sshArgs = [
-    '-o', 'StrictHostKeyChecking=yes',
-    '-o', 'BatchMode=yes',
-    sshHost,
-    `bash -lc ${shellQuote(remoteCmd)}`,
-  ];
-  return ['ssh', sshArgs];
-}
-
 async function markDispatchFailed(runId: string, message: string): Promise<void> {
   try {
     await pool.query(
@@ -861,11 +796,6 @@ async function markDispatchFailed(runId: string, message: string): Promise<void>
   } catch (err) {
     logger.warn({ err, runId }, 'Failed to mark dispatch as failed');
   }
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_\-./=:,@%+]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function csvEscape(value: string): string {

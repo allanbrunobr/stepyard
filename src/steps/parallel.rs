@@ -119,37 +119,30 @@ fn make_child_ctx(parent: &Context) -> Context {
 
 async fn dispatch_step(
     step: &StepDef,
-    _config: &StepConfig,
+    config: &StepConfig,
     ctx: &Context,
     _scopes: &HashMap<String, ScopeDef>,
     sandbox: &SharedSandbox,
 ) -> Result<StepOutput, StepError> {
-    // Build config from step's inline config (convert yaml -> json)
-    let values: HashMap<String, serde_json::Value> = step
-        .config
-        .iter()
-        .map(|(k, v)| {
-            (
-                k.clone(),
-                serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
-            )
-        })
-        .collect();
-    let step_config = StepConfig { values };
+    // `config` is the four-layer resolved config (global < type < pattern <
+    // step) computed by the caller with `resolve_scope_step_config`, as
+    // map/repeat/call do. It used to be ignored in favour of the step's
+    // inline config only, which lost the `cmd.fail_on_error: true` default:
+    // a sub-step exiting non-zero was recorded as success (BUG-MOTOR-08).
 
     match step.step_type {
         StepType::Cmd => {
             CmdExecutor
-                .execute_sandboxed(step, &step_config, ctx, sandbox)
+                .execute_sandboxed(step, config, ctx, sandbox)
                 .await
         }
         StepType::Agent => {
             AgentExecutor
-                .execute_sandboxed(step, &step_config, ctx, sandbox)
+                .execute_sandboxed(step, config, ctx, sandbox)
                 .await
         }
-        StepType::Gate => GateExecutor.execute(step, &step_config, ctx).await,
-        StepType::Chat => ChatExecutor.execute(step, &step_config, ctx).await,
+        StepType::Gate => GateExecutor.execute(step, config, ctx).await,
+        StepType::Chat => ChatExecutor.execute(step, config, ctx).await,
         _ => Err(StepError::Fail(format!(
             "Step type '{}' not supported in parallel",
             step.step_type
@@ -227,6 +220,53 @@ mod tests {
 
         let result = executor.execute(&step, &config, &ctx).await;
         assert!(result.is_ok(), "Expected success: {:?}", result.err());
+    }
+
+    fn defaults_manager() -> Option<Arc<ConfigManager>> {
+        let config =
+            crate::config::apply_defaults(&crate::workflow::schema::WorkflowConfig::default());
+        Some(Arc::new(ConfigManager::new(config)))
+    }
+
+    /// P1-8 (analysis 2026-11-09, BUG-MOTOR-08): with the embedded defaults
+    /// (`cmd.fail_on_error: true`), a sub-step that exits non-zero must fail
+    /// the parallel step. It used to be recorded as success.
+    #[tokio::test]
+    async fn parallel_cmd_exiting_non_zero_fails_with_the_resolved_defaults() {
+        let scopes = HashMap::new();
+        let step = parallel_step(
+            "parallel_exit",
+            vec![
+                cmd_step("ok_step", "echo ok"),
+                cmd_step("bad_step", "exit 101"),
+            ],
+        );
+        let executor = ParallelExecutor::new(&scopes, None).with_config_manager(defaults_manager());
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &StepConfig::default(), &ctx).await;
+        assert!(
+            result.is_err(),
+            "exit 101 must fail the parallel step: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_cmd_with_inline_fail_on_error_false_still_tolerates_failure() {
+        let scopes = HashMap::new();
+        let mut tolerant = cmd_step("tolerant", "exit 3");
+        tolerant
+            .config
+            .insert("fail_on_error".into(), serde_yaml::Value::Bool(false));
+        let step = parallel_step("parallel_tolerant", vec![tolerant]);
+        let executor = ParallelExecutor::new(&scopes, None).with_config_manager(defaults_manager());
+        let ctx = Context::new(String::new(), HashMap::new());
+
+        let result = executor.execute(&step, &StepConfig::default(), &ctx).await;
+        assert!(
+            result.is_ok(),
+            "inline fail_on_error: false wins: {result:?}"
+        );
     }
 
     #[tokio::test]

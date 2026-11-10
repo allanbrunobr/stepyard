@@ -3,8 +3,9 @@ import { z } from 'zod';
 import { secretMatches } from '../auth';
 import { pool } from '../db';
 import { logger } from '../logger';
+import { forwardAsyncErrors } from '../errors';
 
-export const eventsRouter = Router();
+export const eventsRouter = forwardAsyncErrors(Router());
 
 const StepSchema = z.object({
   step_name: z.string(),
@@ -17,7 +18,7 @@ const StepSchema = z.object({
   error: z.string().optional(),
 });
 
-const EventSchema = z.object({
+export const EventSchema = z.object({
   run_id: z.string().uuid(),
   user_name: z.string().min(1),
   workflow: z.string().min(1),
@@ -30,7 +31,9 @@ const EventSchema = z.object({
   started_at: z.string(),
   finished_at: z.string().optional(),
   error: z.string().optional(),
-  dispatch_log_path: z.string().optional(),
+  // dispatch_log_path is NOT accepted here: only the dispatch handler may
+  // set it (it is later opened and streamed back). Unknown keys are
+  // stripped by zod, so older CLIs that still send it keep working.
   event_version: z.number().int().min(1).default(1),
   steps: z.array(StepSchema).optional(),
 });
@@ -65,7 +68,9 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
   }
 
   const data = parsed.data;
+  // A rejection here (Postgres down) is forwarded to the error middleware.
   const client = await pool.connect();
+  let broken: Error | undefined;
 
   try {
     await client.query('BEGIN');
@@ -98,7 +103,7 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
         data.repo ?? null, data.status, data.duration_ms ?? null,
         data.total_tokens ?? null, data.cost_usd ?? null,
         data.started_at, data.finished_at ?? null, data.error ?? null,
-        data.dispatch_log_path ?? null,
+        null, // dispatch_log_path: never from events; COALESCE keeps the dispatcher's value
         data.event_version,
       ]
     );
@@ -137,10 +142,12 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
       run_id: data.run_id,
     });
   } catch (err) {
-    await client.query('ROLLBACK');
+    // ROLLBACK on a dead connection rejects too; that must not escape the
+    // handler, and the broken client must be destroyed, not reused.
+    broken = await client.query('ROLLBACK').then(() => undefined, (e: Error) => e);
     logger.error(err, 'Failed to process event');
     res.status(500).json({ error: 'Internal server error' });
   } finally {
-    client.release();
+    client.release(broken);
   }
 });

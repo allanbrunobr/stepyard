@@ -89,6 +89,59 @@ pub(crate) fn setup_script(container_dir: &str, agent_user: Option<&str>) -> Str
     script
 }
 
+/// Drop `Deleted` entries for paths the copy-in never brought into the
+/// container.
+///
+/// Copy-in runs `tar --exclude=<pattern>`, and a pattern without `/` matches
+/// any path component, so tracked files such as `.stepyard/defaults.yaml` or
+/// `src/target/mod.rs` are absent from /workspace while the copied `.git`
+/// still lists them. `git status` then reports them deleted, and copy-out
+/// removed them from the host (SEG-RUST-08). The container's view of an
+/// excluded path is not authoritative, so its deletions are ignored.
+/// Additions and modifications are kept as before.
+pub(crate) fn without_excluded_deletions(
+    changes: Vec<stepyard_sandbox_orchestrator::ChangedPath>,
+    exclude: &[String],
+) -> Vec<stepyard_sandbox_orchestrator::ChangedPath> {
+    use stepyard_sandbox_orchestrator::ChangedPath;
+    changes
+        .into_iter()
+        .filter(|change| match change {
+            ChangedPath::Deleted(path) => !is_excluded(path, exclude),
+            ChangedPath::Modified(_) => true,
+        })
+        .collect()
+}
+
+/// Whether `path` (relative, `/`-separated) falls under an exclude pattern:
+/// a pattern with `/` matches that path prefix, one without `/` matches any
+/// single component (`*` and `?` wildcards supported, as in tar).
+fn is_excluded(path: &str, exclude: &[String]) -> bool {
+    let path = path.trim_start_matches("./");
+    exclude.iter().any(|pattern| {
+        let pattern = pattern.trim_start_matches("./").trim_end_matches('/');
+        if pattern.contains('/') {
+            path == pattern || path.starts_with(&format!("{pattern}/"))
+        } else {
+            path.split('/')
+                .any(|component| wildcard_match(pattern, component))
+        }
+    })
+}
+
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    fn go(p: &[u8], t: &[u8]) -> bool {
+        match (p.first(), t.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => go(&p[1..], t) || (!t.is_empty() && go(p, &t[1..])),
+            (Some(b'?'), Some(_)) => go(&p[1..], &t[1..]),
+            (Some(a), Some(b)) if a == b => go(&p[1..], &t[1..]),
+            _ => false,
+        }
+    }
+    go(pattern.as_bytes(), text.as_bytes())
+}
+
 pub(crate) fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
@@ -96,6 +149,45 @@ pub(crate) fn shell_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stepyard_sandbox_orchestrator::ChangedPath;
+
+    #[test]
+    fn deletions_under_excluded_components_are_ignored_but_real_changes_kept() {
+        let exclude = ContainerWorkspace::new("/h".into()).exclude;
+        let changes = vec![
+            ChangedPath::Deleted(".stepyard/defaults.yaml".into()),
+            ChangedPath::Deleted("src/target/mod.rs".into()),
+            ChangedPath::Deleted("web/node_modules/keep.js".into()),
+            ChangedPath::Deleted("app/__pycache__/x.pyc".into()),
+            ChangedPath::Deleted("removed-for-real.txt".into()),
+            ChangedPath::Deleted("targets/not-excluded.rs".into()),
+            ChangedPath::Modified("target/new-artifact".into()),
+            ChangedPath::Modified("README.md".into()),
+        ];
+        assert_eq!(
+            without_excluded_deletions(changes, &exclude),
+            vec![
+                ChangedPath::Deleted("removed-for-real.txt".into()),
+                ChangedPath::Deleted("targets/not-excluded.rs".into()),
+                ChangedPath::Modified("target/new-artifact".into()),
+                ChangedPath::Modified("README.md".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn exclude_patterns_support_paths_and_wildcards_like_tar() {
+        let exclude = vec![
+            "build/out".to_string(),
+            "*.log".to_string(),
+            "cache?".to_string(),
+        ];
+        assert!(is_excluded("build/out/a.o", &exclude));
+        assert!(!is_excluded("build/other/a.o", &exclude));
+        assert!(is_excluded("deep/dir/run.log", &exclude));
+        assert!(is_excluded("x/cache1/y", &exclude));
+        assert!(!is_excluded("x/cache12/y", &exclude));
+    }
 
     #[test]
     fn setup_script_creates_baseline_chowns_and_marks_ready() {

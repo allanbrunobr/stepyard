@@ -33,5 +33,6 @@
 #[allow(unused_imports)]
 #[cfg(feature = "postgres")]
 pub use stepyard_harness::startup::{
-    reconcile, reconcile_with_workspace_manager, ReconcileError, ReconcileReport,
+    reconcile, reconcile_with_workspace_manager, LeaseError, ReconcileError, ReconcileReport,
+    SessionLease, LEASE_GRACE,
 };

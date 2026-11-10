@@ -247,6 +247,109 @@ impl SandboxConfig {
     }
 }
 
+/// Environment variable with which the *user* (never the workflow file)
+/// allows sandbox volumes whose host source is outside the project.
+pub const ALLOW_WORKFLOW_MOUNTS_ENV: &str = "STEPYARD_ALLOW_WORKFLOW_MOUNTS";
+
+/// Refuse `config.global.sandbox.volumes` entries that bind-mount a host path
+/// outside the project directory (SEG-RUST-03).
+///
+/// The list reaches `docker run -v` / `podman run -v` unchanged on both
+/// engines, and it comes from files the user does not necessarily control:
+/// the workflow YAML and the project's `.stepyard/config.yaml`. A third-party
+/// workflow could mount `/`, `$HOME` or `/var/run/docker.sock` and leave the
+/// sandbox. Allowed without opt-in: named volumes (`cache:/cache`), anonymous
+/// volumes (`/data`) and host paths that resolve inside `project_dir`
+/// (symlinks are resolved, `..` is normalised). Everything else needs
+/// `STEPYARD_ALLOW_WORKFLOW_MOUNTS=1` in the environment of `stepyard`.
+pub fn check_workflow_volumes(
+    volumes: &[String],
+    project_dir: &std::path::Path,
+    allow_outside: bool,
+) -> Result<(), String> {
+    if allow_outside {
+        return Ok(());
+    }
+    let project = canonical_or_normalised(project_dir);
+    let outside: Vec<&String> = volumes
+        .iter()
+        .filter(|spec| match volume_host_source(spec) {
+            None => false,
+            Some(src) => {
+                let path = if let Some(rest) = src.strip_prefix("~") {
+                    match dirs::home_dir() {
+                        Some(home) => home.join(rest.trim_start_matches('/')),
+                        None => return true,
+                    }
+                } else {
+                    project_dir.join(src)
+                };
+                !canonical_or_normalised(&path).starts_with(&project)
+            }
+        })
+        .collect();
+    if outside.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "sandbox volume(s) {} mount a host path outside the project directory {}; \
+         a workflow must not reach host files outside the project. If you trust \
+         this workflow, set {ALLOW_WORKFLOW_MOUNTS_ENV}=1",
+        outside
+            .iter()
+            .map(|v| format!("`{v}`"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        project.display()
+    ))
+}
+
+/// Host source of a `-v` spec, or `None` for named/anonymous volumes.
+fn volume_host_source(spec: &str) -> Option<&str> {
+    let mut parts = spec.splitn(2, ':');
+    let first = parts.next()?;
+    parts.next()?; // a single part is an anonymous volume (container path)
+    let is_host_path = first.starts_with('/') || first.starts_with('.') || first.starts_with('~');
+    is_host_path.then_some(first)
+}
+
+/// Resolve symlinks when the path exists; otherwise normalise `.`/`..`
+/// lexically (resolving the longest existing ancestor).
+fn canonical_or_normalised(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::{Component, PathBuf};
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    // Canonicalise the longest existing ancestor so a symlinked parent
+    // (e.g. /tmp -> /private/tmp on macOS) compares equal.
+    let mut existing = out.clone();
+    let mut tail = Vec::new();
+    while !existing.exists() {
+        match existing.file_name() {
+            Some(name) => tail.push(name.to_os_string()),
+            None => break,
+        }
+        if !existing.pop() {
+            break;
+        }
+    }
+    let mut base = std::fs::canonicalize(&existing).unwrap_or(existing);
+    for name in tail.into_iter().rev() {
+        base.push(name);
+    }
+    base
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,5 +450,62 @@ sandbox:
         };
         let vols = cfg.effective_volumes();
         assert!(vols.is_empty(), "should filter out non-existent host paths");
+    }
+
+    // P1-10 (analysis 2026-11-09, SEG-RUST-03)
+    fn vols(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn workflow_volumes_inside_the_project_named_or_anonymous_are_allowed() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("data")).unwrap();
+        let inside = format!("{}/data:/data:ro", project.path().display());
+        let ok = vols(&[
+            "./data:/data",
+            &inside,
+            "cache:/cache",
+            "/scratch",
+            "./not-yet:/x",
+        ]);
+        assert_eq!(check_workflow_volumes(&ok, project.path(), false), Ok(()));
+    }
+
+    #[test]
+    fn workflow_volumes_reaching_outside_the_project_are_refused() {
+        let project = tempfile::tempdir().unwrap();
+        let sibling = format!("{}/../elsewhere:/x", project.path().display());
+        for spec in [
+            "/:/host",
+            "/var/run/docker.sock:/var/run/docker.sock",
+            "~/.ssh:/root/.ssh:ro",
+            "~:/home",
+            "../outside:/x",
+            sibling.as_str(),
+        ] {
+            let err =
+                check_workflow_volumes(&vols(&[spec]), project.path(), false).expect_err(spec);
+            assert!(err.contains(spec), "{spec}: {err}");
+            assert!(err.contains(ALLOW_WORKFLOW_MOUNTS_ENV), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_symlink_inside_the_project_pointing_outside_is_refused() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), project.path().join("link")).unwrap();
+        let err = check_workflow_volumes(&vols(&["./link:/x"]), project.path(), false);
+        assert!(err.is_err(), "symlink escaping the project must be refused");
+    }
+
+    #[test]
+    fn the_user_opt_in_allows_outside_mounts() {
+        let project = tempfile::tempdir().unwrap();
+        assert_eq!(
+            check_workflow_volumes(&vols(&["/:/host"]), project.path(), true),
+            Ok(())
+        );
     }
 }

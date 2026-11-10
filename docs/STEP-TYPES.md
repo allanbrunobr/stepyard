@@ -10,7 +10,7 @@ Runs `/bin/sh -c "<run>"` and captures stdout, stderr, exit code.
 ```yaml
 - name: count_files
   type: cmd
-  run: "find {{ target }} -name '*.rs' | wc -l"
+  run: "find {{ target | shell_quote }} -name '*.rs' | wc -l"
   output_type: integer
 ```
 
@@ -202,7 +202,7 @@ output is awaited when first referenced (lazily) or at workflow completion.
 
 - name: use_audit
   type: cmd
-  run: "echo {{ steps.slow_audit.response }}"   # awaits slow_audit here
+  run: "echo {{ steps.slow_audit.response | shell_quote }}"   # awaits slow_audit here
 ```
 
 Dry-run marks async steps with `⚡`.

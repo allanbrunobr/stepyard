@@ -62,7 +62,7 @@ steps:
   - name: checkout
     type: cmd
     run: |
-      gh pr checkout {{ target }}
+      gh pr checkout {{ target | shell_quote }}
 
   # 2. Install dependencies using the stack-specific install command
   - name: install

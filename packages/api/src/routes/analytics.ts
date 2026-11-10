@@ -1,8 +1,9 @@
 import { Router, Request, Response } from "express";
+import { forwardAsyncErrors } from '../errors';
 import { z } from "zod";
 import { pool } from "../db";
 
-const router = Router();
+const router = forwardAsyncErrors(Router());
 
 function isValidDate(value: string): boolean {
   const d = new Date(value + "T00:00:00Z");
