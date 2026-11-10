@@ -16,8 +16,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | 1 | Reconciliação de partida só para sessões órfãs | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | `529b532` |
 | 2 | Slack `target` + filtro `shell_quote` nos workflows | SEG-RUST-02, SEG-RUST-07 | ✅ feito | `fb6c43f` |
 | 3 | Tera sem `get_env` | SEG-RUST-04 | ✅ feito | `2d5ff9f` |
-| 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | ✅ feito | (este) |
-| 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | pendente | |
+| 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | ✅ feito | `9adbd5d` |
+| 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | ✅ feito | (este) |
 | 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | pendente | |
 | 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 | pendente | |
 | 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | pendente | |
@@ -142,3 +142,38 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 - O CLI Rust ainda envia `dispatch_log_path` (`src/events/subscribers.rs:206`). Agora é ignorado; a remoção do envio fica para P2.
 
 **Pendência do Allan:** a correção impede novos vazamentos, mas os logs já gravados pelo contêiner da API (`docker logs`) continuam com os valores. **Rotacionar `GH_TOKEN`, `ANTHROPIC_API_KEY` e a senha do banco** de qualquer ambiente onde o despacho SSH rodou.
+
+## 5. API resiliente a falhas do Postgres — ✅
+
+**Defeito.**
+- O `Pool` do `pg` não tinha listener de `'error'`. Quando um cliente ocioso perdia a conexão (restart do Postgres, falha de rede), o `EventEmitter` lançava exceção e o processo da API terminava.
+- Handlers `async` no Express 4 não encaminham rejeições: `pool.connect()` falhando, `ROLLBACK` numa conexão morta ou `setHeader` com valor inválido no export de CSV viravam *unhandled rejection*, que encerra o Node ≥ 15. Sob `tsx watch`, o processo não reinicia.
+
+**Correção** (`packages/api/src`):
+- `errors.ts` (novo):
+  - `forwardAsyncErrors(Router())` envolve todo handler registrado; rejeição ou exceção síncrona vira `next(err)`. Middleware de erro, de aridade 4, fica intocado.
+  - `errorHandler` responde JSON **sem** mensagem nem stack (podem conter SQL, caminhos ou string de conexão): 503 `DATABASE_UNAVAILABLE` para falha de conexão (códigos de rede e SQLSTATE 08xxx/57P0x), 500 para o resto, e o status 4xx do body-parser (JSON malformado, corpo grande demais). Em resposta de streaming já iniciada (CSV, SSE), só encerra.
+- Os quatro routers assíncronos (events, workflows, analytics, overview) passaram a usar o wrapper. `index.ts` registra o `errorHandler` depois de todas as rotas e um `unhandledRejection` que só registra no log, como última defesa.
+- `db.ts`: `pool.on('error', …)` registra no log e descarta o cliente; `connectionTimeoutMillis` (padrão 5 s, configurável por `POSTGRES_CONNECT_TIMEOUT_MS`) faz a requisição falhar rápido em vez de ficar pendurada.
+- `events.ts` e export de CSV: o `ROLLBACK` não pode mais escapar do `catch`. Se ele falhar, o cliente é liberado com `release(err)`, e o `pg` o **destrói** em vez de devolvê-lo ao pool.
+
+**Testes** (`packages/api/src/errors.test.ts`, 7 novos, com servidor HTTP real em porta efêmera):
+- Rejeição com código de conexão → 503 sem vazar a string de conexão; rejeição comum e exceção síncrona → 500 sem vazar o SQL; JSON malformado → 400; corpo grande → 413; nenhum `unhandledRejection` durante os testes.
+- `POST /api/events` com `pool.connect()` rejeitando → 503. Com `BEGIN` e `ROLLBACK` falhando → 500, e `release` recebe um `Error`.
+- O pool real tem listener de `'error'`, e emitir o evento não lança exceção.
+
+**Medido:**
+- **Ponta a ponta com Postgres real** (API rodando com `tsx` contra o Postgres efêmero no M1, depois `docker restart` no Postgres):
+
+  | Código | Antes do restart | Durante | Depois de o banco voltar | Processo da API |
+  |---|---|---|---|---|
+  | Novo | 201 | 503, depois 201 | 201 | **vivo**; o log registra "Idle Postgres client error; client discarded" |
+  | `HEAD` (controle) | 201 | sem resposta | sem resposta | **morreu** com `throw er; // Unhandled 'error' event` |
+
+  A primeira execução usava porta publicada aleatória, que mudou no restart e produziu um falso "503 depois de voltar". Refiz com porta fixa. Um primeiro "controle" também não valeu: um erro de shell meu (zsh sem divisão de palavras) fez rodar o código novo. Refeito em bash, com restauração por `trap`.
+- **Mutantes:** M1 (wrapper sem efeito) → 4 testes reprovam, com *unhandled rejection* registrada pelo vitest. M2 (sem `pool.on('error')`) → reprova o teste do pool. M3 (`release()` sem descartar) → reprova o teste do ROLLBACK. Restaurados.
+- Job TypeScript do CI: build da API, build do web e testes, todos com status 0 (**19/19**).
+
+**Não coberto.**
+- O segundo pool, morto, em `src/db/index.ts` (nada o importa; MANUT-16) não foi alterado.
+- O SSE de logs já tinha `.catch` no loop e não mudou.

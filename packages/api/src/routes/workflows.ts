@@ -7,6 +7,7 @@ import { basename, join } from 'path';
 import { requireAuth, requireDashboardAuth } from '../auth';
 import { pool } from '../db';
 import { logger } from '../logger';
+import { forwardAsyncErrors } from '../errors';
 import {
   allowedDispatchLogPath,
   buildSshCommand,
@@ -14,7 +15,7 @@ import {
   readDispatchLogChunk,
 } from '../dispatch';
 
-export const workflowsRouter = Router();
+export const workflowsRouter = forwardAsyncErrors(Router());
 
 function envFlag(name: string): boolean {
   const value = process.env[name]?.trim().toLowerCase();
@@ -113,6 +114,7 @@ workflowsRouter.get('/workflows/export', requireDashboardAuth, async (req: Reque
   res.write(csvHeader);
 
   const client = await pool.connect();
+  let broken: Error | undefined;
   try {
     const query = `
       SELECT r.started_at, r.user_name, r.workflow, r.target, r.repo, r.status,
@@ -157,7 +159,7 @@ workflowsRouter.get('/workflows/export', requireDashboardAuth, async (req: Reque
     await client.query('COMMIT');
     res.end();
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    broken = await client.query('ROLLBACK').then(() => undefined, (e: Error) => e);
     logger.error(err, 'Failed to export CSV');
     if (!res.headersSent) {
       res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to export CSV' } });
@@ -165,7 +167,7 @@ workflowsRouter.get('/workflows/export', requireDashboardAuth, async (req: Reque
       res.end();
     }
   } finally {
-    client.release();
+    client.release(broken);
   }
 });
 

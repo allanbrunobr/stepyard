@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { forwardAsyncErrors } from '../errors';
 import { pool } from '../db/pool';
 
 interface OverviewSummary {
@@ -18,7 +19,7 @@ interface PeakHour {
   count: number;
 }
 
-const router = Router();
+const router = forwardAsyncErrors(Router());
 
 function parseDateRange(req: Request): { from: Date; to: Date } {
   const now = new Date();

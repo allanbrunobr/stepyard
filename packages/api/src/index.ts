@@ -9,6 +9,7 @@ import { authRouter } from './routes/auth';
 import { eventsRouter } from './routes/events';
 import { workflowsRouter } from './routes/workflows';
 import { startCleanupScheduler } from './scheduler';
+import { errorHandler } from './errors';
 import analyticsRouter from './routes/analytics';
 import overviewRouter from './routes/overview';
 
@@ -32,6 +33,14 @@ app.use('/api', eventsRouter);
 app.use('/api', workflowsRouter);
 app.use('/api/overview', requireDashboardAuth, overviewRouter);
 app.use('/api/analytics', requireDashboardAuth, analyticsRouter);
+// Must be registered after every router.
+app.use(errorHandler);
+
+// Last line of defence: route handlers forward their errors, but a stray
+// rejection elsewhere (a timer, a listener) must be logged, not end the API.
+process.on('unhandledRejection', (reason) => {
+  logger.error({ err: reason }, 'Unhandled promise rejection');
+});
 
 async function start(): Promise<void> {
   await runMigrations();

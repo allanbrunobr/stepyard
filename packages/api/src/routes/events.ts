@@ -3,8 +3,9 @@ import { z } from 'zod';
 import { secretMatches } from '../auth';
 import { pool } from '../db';
 import { logger } from '../logger';
+import { forwardAsyncErrors } from '../errors';
 
-export const eventsRouter = Router();
+export const eventsRouter = forwardAsyncErrors(Router());
 
 const StepSchema = z.object({
   step_name: z.string(),
@@ -67,7 +68,9 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
   }
 
   const data = parsed.data;
+  // A rejection here (Postgres down) is forwarded to the error middleware.
   const client = await pool.connect();
+  let broken: Error | undefined;
 
   try {
     await client.query('BEGIN');
@@ -139,10 +142,12 @@ eventsRouter.post('/events', async (req: Request, res: Response) => {
       run_id: data.run_id,
     });
   } catch (err) {
-    await client.query('ROLLBACK');
+    // ROLLBACK on a dead connection rejects too; that must not escape the
+    // handler, and the broken client must be destroyed, not reused.
+    broken = await client.query('ROLLBACK').then(() => undefined, (e: Error) => e);
     logger.error(err, 'Failed to process event');
     res.status(500).json({ error: 'Internal server error' });
   } finally {
-    client.release();
+    client.release(broken);
   }
 });
