@@ -2,7 +2,8 @@
 
 Stepyard runs workflows inside a Docker container by default. Each step
 (or only agent steps, depending on the mode) executes in an isolated environment
-with bounded network and resource access.
+with resource limits. Network `allow` and `deny` lists are stored and are
+not enforced; see the configuration section.
 
 ## Requirements
 
@@ -47,7 +48,7 @@ config:
       workspace: "/workspace"              # mount point inside the container
       network:
         allow: ["api.anthropic.com", "api.github.com"]
-        deny:  ["169.254.169.254"]         # block cloud metadata endpoints
+        deny:  ["169.254.169.254"]         # recorded only; not enforced yet
       resources:
         cpus: 2
         memory: "2g"
@@ -60,10 +61,16 @@ config:
 See [`sandbox/config.rs`](../src/sandbox/config.rs) for the full option set and
 defaults. `from_global_config` parses the `config.global.sandbox` block.
 
+A non-empty `allow` or `deny` list only adds `--network bridge` when the
+container is created. It does not block `169.254.169.254` or any other
+destination. Do not treat the list as an egress filter.
+
 ## Workspace modes
 
 - **CWD copy (default):** the host's current working directory is copied into
-  the container's `workspace` path. Changes inside the container stay there.
+  the container's `workspace` path. On v2, files that changed are copied back
+  to the host when the workflow ends. On v1, the workspace is a bind mount, so
+  writes are already on the host.
 - **Repo clone (`--repo OWNER/REPO`):** the container clones the given repo at
   start, using `GH_TOKEN`/`GITHUB_TOKEN` (or `gh auth token` fallback). The
   host CWD is not copied. Useful for CI-style isolation.
@@ -143,7 +150,7 @@ the name printed at startup.
 | `docker daemon not reachable`                      | Start Docker Desktop; or pass `--no-sandbox`                |
 | `failed to clone <repo>`                           | `GH_TOKEN` missing or `gh auth status` stale                |
 | `image pull failed`                                | Authenticate to the registry or change `image`              |
-| Steps hang at network calls                        | Domain not in `network.allow`                               |
+| Steps hang at network calls                        | `network.allow` is not an egress filter; check DNS and the daemon |
 
 ## See also
 

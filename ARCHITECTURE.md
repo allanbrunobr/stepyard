@@ -25,7 +25,7 @@ There are two engines in the same binary:
 | Code | `src/engine/`, `src/steps/` | `crates/stepyard-harness/` |
 | State | In memory | Append-only session log, replayed on every step |
 | Crash recovery | No | Yes: a new process replays the log and continues |
-| Sandbox | Copies the project into the container and copies results back | Container per session, but the project is not copied in yet |
+| Sandbox | Copies the project into the container and copies results back | Copies the project into the session container. `cmd` and `agent` run there; changes are copied back. `chat` stays on the host |
 | Features | All | Same YAML; a few features are still v1-only (README, "Known limitations of v2") |
 
 v1 is the original engine. v2 is the rewrite around a durable session log; it
@@ -115,15 +115,19 @@ These hold today. Breaking one is a bug.
 
 ## Direction
 
-The main gap is the v2 sandbox. Today v2 creates a container per session and
-runs `cmd` steps in it, but it does not copy the project into the container,
-and `agent` / `chat` steps run on the host. The next step is to bring v1's
-workspace handling to v2: copy the project (or clone the repo) into the
-container, run agent steps there, and copy the results back. After that, v1
-can be retired.
+A container run on the default engine already copies the project into the
+session container (`HarnessConfig::container_workspace`), runs `cmd` and
+`agent` steps there, and copies the changes back. `chat` steps still run on
+the host. The same lifecycle is described in
+[`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 
-Other planned work:
+Still missing on v2:
 
-- Lift the remaining v2 limitations: nested scopes, `{{ stack.* }}` /
-  `{{ prompts.* }}`, `--dry-run`, `--resume <step>`, `--repo`, dashboard events.
-- Release binaries, so users do not need to build from source.
+- Dashboard events (`config.events.dashboard` is sent only by v1).
+- Nested scopes.
+- `{{ stack.* }}` and `{{ prompts.* }}`.
+- `--repo`.
+- `--dry-run`.
+
+Release binaries already exist. The prebuilt binary is the SQLite build; see
+the README install section.

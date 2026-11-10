@@ -1,20 +1,14 @@
 # Homebrew formula for Stepyard.
 #
-# NOT PUBLISHED YET. There is no tap and no GitHub Release with binaries.
-# The formula pulls the pre-compiled binaries that
-# `.github/workflows/release.yml` attaches to each `v*` tag. Before you
-# publish it:
-#   1. Push a `v<version>` tag that matches `version` below and let the
-#      Release workflow succeed.
-#   2. Replace each SHA256 placeholder with the value from the
-#      `checksums.sha256` asset of that release.
-#   3. Copy this file into a tap repository, for example
-#      https://github.com/allanbrunobr/homebrew-stepyard, then:
-#        brew tap allanbrunobr/stepyard
-#        brew install stepyard
+# Release v0.7.6 exists and publishes the SQLite binaries. This formula is
+# not in a Homebrew tap, so `brew install stepyard` does not work from this
+# file alone. The sha256 values are the hashes of those four release assets,
+# measured on 2026-11-09 from the public download URLs.
 #
-# Local test without a tap:
-#   brew install --build-from-source ./Formula/stepyard.rb
+# To publish it, copy this file into a tap repository, for example
+# https://github.com/allanbrunobr/homebrew-stepyard, then:
+#   brew tap allanbrunobr/stepyard
+#   brew install stepyard
 
 class Stepyard < Formula
   desc "Deterministic YAML workflows that orchestrate AI coding agents"
@@ -25,22 +19,22 @@ class Stepyard < Formula
   on_macos do
     on_arm do
       url "https://github.com/allanbrunobr/stepyard/releases/download/v#{version}/stepyard-macos-aarch64"
-      sha256 "REPLACE_WITH_MACOS_AARCH64_SHA256"
+      sha256 "7314200a975734db711b2c129dd18278ec7221efca7b140d89a75f09f3dbd40e"
     end
     on_intel do
       url "https://github.com/allanbrunobr/stepyard/releases/download/v#{version}/stepyard-macos-x86_64"
-      sha256 "REPLACE_WITH_MACOS_X86_64_SHA256"
+      sha256 "8ba2c949cd99642756b595e10c236eb42ace9421a237e742adaaedfc1fc59119"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/allanbrunobr/stepyard/releases/download/v#{version}/stepyard-linux-aarch64"
-      sha256 "REPLACE_WITH_LINUX_AARCH64_SHA256"
+      sha256 "630fa13e6bb71af79a747d98681bef416bdfc398377ff63d46219e83d812a755"
     end
     on_intel do
       url "https://github.com/allanbrunobr/stepyard/releases/download/v#{version}/stepyard-linux-x86_64"
-      sha256 "REPLACE_WITH_LINUX_X86_64_SHA256"
+      sha256 "0540cbc73fc0ecffcef62784ec8eff6bf5a87639ec45d8cf26466ea1dd32335f"
     end
   end
 
@@ -53,12 +47,15 @@ class Stepyard < Formula
 
   def caveats
     <<~EOS
-      The release binaries use the PostgreSQL session store. Export
-      DATABASE_URL before you run a workflow:
-        export DATABASE_URL="postgres://user:password@localhost:5432/stepyard"
+      This bottle is the SQLite release build. Sessions are stored in
+      .stepyard/sessions.db. This binary does not use DATABASE_URL.
 
-      Workflows run in a Docker container by default. Pass `--no-sandbox`
-      to run on the host instead.
+      Steps run on the host by default. To use a container, pass
+      `--sandbox-runtime docker` or `--sandbox-runtime podman`.
+
+      PostgreSQL (needed for `stepyard session` and the dashboard) is a
+      source install:
+        cargo install --locked --git https://github.com/allanbrunobr/stepyard
 
       AI steps need a provider key, for example:
         export ANTHROPIC_API_KEY="sk-ant-..."
