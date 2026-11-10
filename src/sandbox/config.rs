@@ -1,6 +1,3 @@
-// Sandbox config API — some items used only in integration paths
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};

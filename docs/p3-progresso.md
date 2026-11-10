@@ -20,7 +20,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | 1 | O binário deixa de redeclarar a árvore de módulos da lib | ARQ-11, MANUT-10, TEST-05 | ✅ feito | `7b26a58` |
 | 2 | Portões de auditoria que falhavam abertos (G4 do xtask; G1/G2 sem prefixo; autoteste dos portões) | BUG-CLI-15, TEST-08, TEST-06 (TEST-07/SEG-RUST-13 parcial) | ✅ feito | `eb95d08` |
 | 3 | Saída de passo limitada no log de sessão (1 MiB por stream, configurável) | BUG-HARNESS-08 (BUG-HARNESS-03 pendente) | ✅ feito | `a913232` |
-| 4 | `SessionId` no crate de contrato; o orquestrador deixa de depender do crate de sessão | ARQ-10 (ARQ-09 pendente) | ✅ feito | (este) |
+| 4 | `SessionId` no crate de contrato; o orquestrador deixa de depender do crate de sessão | ARQ-10 (ARQ-09 pendente) | ✅ feito | `78dc9e5` |
+| 5 | Higiene: pool de banco morto da API; `allow(dead_code)` que não suprimiam nada | MANUT-16, MANUT-09 (parcial) | ✅ feito | (este) |
 
 ---
 
@@ -109,3 +110,38 @@ Fazer isso direito exige um mecanismo de exceção por linha, como o comentário
 Não há mutante: é uma mudança de estrutura. A prova é o grafo de dependências junto com a suíte verde.
 
 **Não coberto: ARQ-09.** A reconciliação ainda usa SQL direto e `docker ps`, em vez dos traits `EventStore`/`SandboxLifecycle`. A correção da P1 (lease por *advisory lock* do PostgreSQL) depende de recursos específicos do Postgres que esses traits não modelam. Levar isso para os traits exige primeiro desenhar um "lease" abstrato no `EventStore`, com uma implementação para o SQLite, e fica para depois.
+
+## 5. Higiene: código morto da API e `allow(dead_code)` inócuos — ✅ (parcial)
+
+**MANUT-16.** `packages/api/src/db/index.ts` e `src/db/pool.ts` formavam um segundo pool de PostgreSQL que nenhuma rota usava, com um valor padrão embutido (`postgresql://postgres:postgres@localhost:5432/stepyard`). Os dois saíram. A única rota que importava dali (`routes/overview.ts`) passou a usar o módulo de banco real, `src/db.ts`.
+
+**MANUT-09.** O código tinha 50 `#[allow(dead_code)]`/`#![allow(dead_code)]` em 24 arquivos (52 com `tests/support`, fora da varredura), muitos com comentários como "wired into adapt_step in PR 5c" que não valiam mais. Fiz uma varredura mecânica, com script:
+1. remover todos os allows de linha inteira dos 24 arquivos;
+2. rodar `cargo check` em três perfis (padrão `--workspace --all-targets`, `--features slack`, `--no-default-features --features sqlite`), com timeout em cada um;
+3. restaurar o arquivo inteiro sempre que aparecia um aviso `never used/read/constructed`;
+4. repetir até não haver aviso.
+
+Convergiu em 2 rodadas: 7 arquivos voltaram ao original, porque os avisos eram reais (`harness/engine.rs`, `executor.rs`, `startup.rs`, `orchestrator/lib.rs`, `cli/remote.rs`, `engine/mod.rs`, `events/subscribers.rs`).
+
+Ajustes feitos à mão depois da varredura:
+- **voltaram** os dois allows de `process_group.rs` e `orchestrator/local.rs`. Eles existem para builds **não-Unix**, e a varredura só compila no macOS, então a falta de aviso aqui não prova nada sobre aqueles alvos;
+- saíram três comentários de cabeçalho que só justificavam o `#![allow]` removido.
+
+Resultado: **24 linhas removidas em 15 arquivos Rust**.
+
+**O que o instrumento não distingue.** Num crate lib, um item `pub` nunca gera aviso de código morto. Logo, a ausência de aviso nesses itens só mostra que o allow não suprimia nada, e **não** que o código é usado. Os plugins (`src/plugins/*`, `validate_plugin_configs`), por exemplo, continuam sem uso real (ARQ-12, ARQ-07). Sobram 24 allows nos 7 arquivos restaurados, mais 2 nos alvos não-Unix e 2 em `tests/support`. Os dos 7 arquivos marcam código de fato morto e saem junto com a desativação do v1 ou com uma revisão item a item.
+
+**Medido:**
+- Portões do CI: todos com status 0. Clippy `--features slack -D warnings`: 0.
+- Job TypeScript: build da API e do web, e testes da API, todos com status 0.
+- Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
+
+Não há mutante: a mudança não altera comportamento. A prova é a compilação sem aviso nos três perfis e a suíte verde.
+
+## Fora do escopo dos itens: limpeza de worktrees (pedida à parte)
+
+Das 235 worktrees registradas, **230** eram `stepyard-session-*` criadas por suítes de teste:
+- 226 em `.stepyard/workspaces` deste checkout;
+- 4 em `crates/stepyard-harness/.stepyard/workspaces`.
+
+Antes de remover, conferi que nenhuma estava travada (`locked`), nenhuma tinha processo aberto e nenhuma tinha alteração não commitada. Todas saíram com `git worktree remove --force`, sem nenhuma falha, e depois rodei `git worktree prune`. O checkout principal, as worktrees das sessões Orca e as 2 `stepyard-session-*` que ficam dentro do checkout principal **não** foram tocadas.

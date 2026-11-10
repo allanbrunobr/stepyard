@@ -16,7 +16,6 @@ pub struct StepConfig {
     pub values: HashMap<String, serde_json::Value>,
 }
 
-#[allow(dead_code)]
 impl StepConfig {
     pub fn get_str(&self, key: &str) -> Option<&str> {
         self.values.get(key).and_then(|v| v.as_str())

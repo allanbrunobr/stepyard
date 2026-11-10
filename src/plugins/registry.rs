@@ -3,12 +3,10 @@ use std::collections::HashMap;
 use super::PluginStep;
 
 /// Registry that stores and retrieves plugins by name
-#[allow(dead_code)]
 pub struct PluginRegistry {
     plugins: HashMap<String, Box<dyn PluginStep>>,
 }
 
-#[allow(dead_code)]
 impl PluginRegistry {
     pub fn new() -> Self {
         Self {

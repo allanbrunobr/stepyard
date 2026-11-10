@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { forwardAsyncErrors } from '../errors';
-import { pool } from '../db/pool';
+import { pool } from '../db';
 
 interface OverviewSummary {
   total_runs: number;
