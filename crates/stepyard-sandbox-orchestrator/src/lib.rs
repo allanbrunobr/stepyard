@@ -406,6 +406,12 @@ pub const HARDENING_ARGS: &[&str] = &[
 /// `docker exec --env NAME` / `podman exec --env NAME` copy the value from
 /// the CLI's own environment, so values never appear on the argv, which any
 /// local user can read with `ps`. Keys are sorted for deterministic argv.
+///
+/// Exception: a name the container CLI itself reads (see
+/// [`governs_container_cli`]) is not set on the CLI process, or a step's
+/// `PATH`, `HOME` or `DOCKER_HOST` meant for the container would decide which
+/// `docker` binary runs, which daemon it talks to or which config it loads.
+/// Those pass as `--env NAME=VALUE` on the argv, as before SEG-RUST-12.
 pub fn env_by_name(
     env: &std::collections::HashMap<String, String>,
 ) -> (Vec<String>, Vec<(String, String)>) {
@@ -413,11 +419,39 @@ pub fn env_by_name(
         env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     let mut argv = Vec::with_capacity(pairs.len() * 2);
-    for (k, _) in &pairs {
+    let mut by_name = Vec::with_capacity(pairs.len());
+    for (k, v) in pairs {
         argv.push("--env".to_string());
-        argv.push(k.clone());
+        if governs_container_cli(&k) {
+            argv.push(format!("{k}={v}"));
+        } else {
+            argv.push(k.clone());
+            by_name.push((k, v));
+        }
     }
-    (argv, pairs)
+    (argv, by_name)
+}
+
+/// Whether the docker/podman CLI (or the ssh it may spawn for a remote
+/// daemon) reads this variable for its own behaviour.
+pub fn governs_container_cli(name: &str) -> bool {
+    const EXACT: &[&str] = &["PATH", "HOME", "TMPDIR", "SHELL", "USER"];
+    const PREFIXES: &[&str] = &[
+        "DOCKER_",
+        "CONTAINER_",
+        "CONTAINERS_",
+        "PODMAN_",
+        "BUILDKIT_",
+        "BUILDX_",
+        "XDG_",
+        "SSH_",
+        "LD_",
+        "DYLD_",
+    ];
+    let upper = name.to_ascii_uppercase();
+    EXACT.contains(&name)
+        || PREFIXES.iter().any(|p| name.starts_with(p))
+        || upper.ends_with("_PROXY")
 }
 
 #[cfg(test)]
@@ -442,5 +476,40 @@ mod env_by_name_tests {
                 ("TOKEN".into(), "s3cr3t".into())
             ]
         );
+    }
+
+    /// A step env meant for the container must not reconfigure the host's
+    /// container CLI: those names travel on the argv, not on the CLI process.
+    #[test]
+    fn names_the_container_cli_reads_stay_off_its_environment() {
+        let env = [
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("HOME".to_string(), "/root".to_string()),
+            (
+                "DOCKER_HOST".to_string(),
+                "tcp://elsewhere:2375".to_string(),
+            ),
+            ("https_proxy".to_string(), "http://p:3128".to_string()),
+            ("TOKEN".to_string(), "s3cr3t".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let (argv, pairs) = env_by_name(&env);
+        assert_eq!(
+            argv,
+            [
+                "--env",
+                "DOCKER_HOST=tcp://elsewhere:2375",
+                "--env",
+                "HOME=/root",
+                "--env",
+                "PATH=/usr/bin:/bin",
+                "--env",
+                "TOKEN",
+                "--env",
+                "https_proxy=http://p:3128",
+            ]
+        );
+        assert_eq!(pairs, vec![("TOKEN".into(), "s3cr3t".into())]);
     }
 }
