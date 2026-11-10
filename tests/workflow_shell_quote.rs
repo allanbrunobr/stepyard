@@ -133,3 +133,129 @@ fn the_gate_flags_the_patterns_it_exists_for() {
     assert!(bad[0].contains("{{ target }}"));
     assert!(bad[1].contains("heredoc"));
 }
+
+/// Every `run:` of the shipped workflows, rendered with dummy values (each
+/// `{{ … }}` becomes one quoted word, as `shell_quote` would produce), must
+/// parse as a POSIX shell script. Only `simple-test.yaml` was executed after
+/// the P1-2 rewrite; this catches a broken quote or heredoc in the others.
+/// The script goes through `sh -n` on stdin (syntax check, nothing runs).
+#[test]
+fn shipped_run_commands_are_valid_shell_after_rendering() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut checked = 0;
+    for dir in ["workflows", "scripts/demo/project"] {
+        for entry in std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let yaml: serde_yaml::Value =
+                serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let mut runs = Vec::new();
+            collect_runs(&yaml, &mut runs);
+            for run in runs {
+                let mut rendered = String::new();
+                let mut rest = run.as_str();
+                while let Some(start) = rest.find("{{") {
+                    let end = rest[start..].find("}}").expect("closed expression") + start + 2;
+                    rendered.push_str(&rest[..start]);
+                    rendered.push_str("'value'");
+                    rest = &rest[end..];
+                }
+                rendered.push_str(rest);
+                let mut child = Command::new("sh")
+                    .arg("-n")
+                    .stdin(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .expect("spawn sh -n");
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(rendered.as_bytes())
+                    .unwrap();
+                let out = child.wait_with_output().unwrap();
+                assert!(
+                    out.status.success(),
+                    "{}: invalid shell after rendering:\n{rendered}\n{}",
+                    path.display(),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(
+        checked >= 30,
+        "expected the shipped run commands, checked {checked}"
+    );
+}
+
+/// The examples in README.md and docs/*.md are copied into real workflows:
+/// a `run:` line inside a ```yaml block must shell-quote its interpolations
+/// too (single-line `run: "…"` and `run: |` blocks).
+#[test]
+fn documentation_examples_shell_quote_run_commands() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = vec![root.join("README.md")];
+    for entry in std::fs::read_dir(root.join("docs")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) == Some("md")
+            && !path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("analise-")
+            && path.file_name().unwrap() != "p1-progresso.md"
+        {
+            files.push(path);
+        }
+    }
+    let mut bad = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap();
+        let mut in_yaml = false;
+        let mut block_indent: Option<usize> = None;
+        for (n, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") {
+                in_yaml = !in_yaml && trimmed.trim_start_matches('`').starts_with("yaml");
+                block_indent = None;
+                continue;
+            }
+            if !in_yaml {
+                continue;
+            }
+            let indent = line.len() - trimmed.len();
+            let mut check = |content: &str| {
+                for expr in expressions(content) {
+                    if !expr.trim_end().ends_with("| shell_quote") && !allowed_unquoted(&expr) {
+                        bad.push(format!("{}:{}: {}", file.display(), n + 1, line.trim()));
+                    }
+                }
+            };
+            if let Some(base) = block_indent {
+                if !trimmed.is_empty() && indent <= base {
+                    block_indent = None;
+                } else {
+                    check(line);
+                    continue;
+                }
+            }
+            if let Some(rest) = trimmed.strip_prefix("run:") {
+                if rest.trim_start().starts_with('|') || rest.trim_start().starts_with('>') {
+                    block_indent = Some(indent);
+                } else {
+                    check(rest);
+                }
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "unquoted interpolations in documented run commands:\n{}",
+        bad.join("\n")
+    );
+}

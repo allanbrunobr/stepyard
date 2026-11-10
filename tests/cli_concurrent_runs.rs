@@ -56,6 +56,36 @@ async fn wait_for_session(pool: &sqlx::PgPool, tenant: &str) -> Uuid {
     }
 }
 
+/// Wait until the owner holds its liveness lease, read from `pg_locks` so the
+/// test never takes the lock itself (the owner's `pg_try_advisory_lock` would
+/// then fail). Backdating `started_at` before this point would create a state
+/// that cannot happen for real: the grace window covers the gap between the
+/// session INSERT and the lease.
+async fn wait_for_lease(pool: &sqlx::PgPool, session: Uuid) {
+    let key = stepyard_harness::startup::session_lease_key(session);
+    let (high, low) = ((key >> 32) as u32 as i64, key as u32 as i64);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let held: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted \
+             AND classid = ($1::bigint)::oid AND objid = ($2::bigint)::oid AND objsubid = 1)",
+        )
+        .bind(high)
+        .bind(low)
+        .fetch_one(pool)
+        .await
+        .expect("query pg_locks");
+        if held {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the long run never took its lease"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 async fn second_run_spares_the_first(engine: &str) {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         eprintln!("[skip] DATABASE_URL not set");
@@ -89,6 +119,7 @@ async fn second_run_spares_the_first(engine: &str) {
         .expect("spawn long run"),
     );
     let long_id = wait_for_session(&pool, &long_tenant).await;
+    wait_for_lease(&pool, long_id).await;
     sqlx::query("UPDATE sessions SET started_at = NOW() - INTERVAL '1 hour' WHERE id = $1")
         .bind(long_id)
         .execute(&pool)

@@ -58,7 +58,7 @@ scopes:
     steps:
       - name: lint
         type: cmd
-        run: "eslint {{ scope.value }}"
+        run: "eslint {{ scope.value | shell_quote }}"
     outputs: "{{ steps.lint.stdout }}"   # optional — overrides last-step output
 ```
 
@@ -79,6 +79,15 @@ Available in any rendered string (`run`, `prompt`, `condition`, `message`, `item
 | `{{ from("<name>").output }}`         | Alternate accessor (useful for names with dashes)            |
 | `{{ session_id }}`                    | First captured Claude session for the workflow run           |
 | `{{ scope.value }} / scope.index`     | Inside repeat/map/call scopes                                |
+
+**Quoting in `run:` commands.** `cmd` steps run with `sh -c`, so a value that
+comes from outside the workflow (the target, file names from the repository,
+previous step output, LLM responses) must be quoted where it is interpolated:
+`{{ target | shell_quote }}` renders one single-quoted shell word whatever the
+value contains. Do not wrap it in more quotes: write `cat -- {{ scope.value |
+shell_quote }}`, not `cat "{{ scope.value | shell_quote }}"`. Tera's
+`get_env` is disabled in Stepyard templates; pass values with `--var KEY=VALUE`.
+
 | `{{ stack.* }}`                       | Detected stack info when `prompts/registry.yaml` exists      |
 
 ### Template operators
@@ -94,7 +103,7 @@ name: hello
 steps:
   - name: greet
     type: cmd
-    run: "echo Hello {{ target }}"
+    run: "echo Hello {{ target | shell_quote }}"
 ```
 
 ```bash
@@ -124,7 +133,7 @@ scopes:
     steps:
       - name: read
         type: cmd
-        run: "cat {{ scope.value }}"
+        run: "cat -- {{ scope.value | shell_quote }}"
       - name: review
         type: agent
         prompt: "Review this file for bugs:\n{{ steps.read.stdout }}"
@@ -133,7 +142,7 @@ scopes:
 steps:
   - name: list_files
     type: cmd
-    run: "gh pr diff {{ target }} --name-only"
+    run: "gh pr diff {{ target | shell_quote }} --name-only"
     output_type: lines
   - name: per_file
     type: map
@@ -142,7 +151,7 @@ steps:
     parallel: 4
   - name: post
     type: cmd
-    run: "gh pr comment {{ target }} --body-file -"
+    run: "gh pr comment {{ target | shell_quote }} --body-file -"
 ```
 
 ## Validation

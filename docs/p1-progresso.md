@@ -24,7 +24,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | ✅ feito | `916aaa3` |
 | 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | ✅ feito | `584bbee` |
 | 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01 (parcial), BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | ✅ feito | `2ec8175` |
-| 1b | Complemento do item 1: lease no v1 e fase 2 só para sessões mortas conhecidas | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | (este) |
+| 1b | Complemento do item 1: lease no v1 e fase 2 só para sessões mortas conhecidas | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | `557b852` |
+| 2b/6b/10b | Complementos: `shell_quote` nos templates do `init` e na documentação; ressalvas de v1/despacho; teste de concorrência | SEG-RUST-07, ARQ-02, SEG-RUST-01 | ✅ feito | (este) |
 
 ## Pendências que são do Allan (exigem conta, login, gasto ou segredo)
 
@@ -354,3 +355,24 @@ Uma revisão independente, feita depois dos 10 itens, encontrou três lacunas no
 - Portões do CI: todos com status 0. Suíte completa com banco: **1.178 passaram, 0 falharam, 16 ignorados**. Job SQLite: verde.
 
 **Não coberto.** O lease vive numa conexão ociosa dedicada. Se ela cair no meio da execução (restart do Postgres, como no teste do item 5), o lock some em silêncio, e uma reconciliação posterior pode tratar a sessão como órfã. Reabrir o lease com nova tentativa fica para P2.
+
+## 2b / 6b / 10b. Complementos da revisão final — ✅
+
+**2b — onde o `shell_quote` ainda faltava.** O portão do item 2 só cobria `workflows/` e `scripts/demo/project`. Faltavam:
+- **Templates do `stepyard init`** (`src/cli/init_templates.rs`): o que o usuário recebe ao criar um workflow novo. Tinham `gh issue view {{ target }}`, `git commit -m '…#{{ target }}'` (dentro de aspas simples), `--title "…#{{ target }}"` e `echo "{{ steps.review.response }}"`. Todos foram reescritos com `| shell_quote`, sem envolver o valor em aspas extras.
+- **Exemplos da documentação:** `README.md` (incluindo um heredoc alimentado por resposta de LLM), `docs/YAML-SPEC.md`, `docs/STEP-TYPES.md` e `docs/EXAMPLES.md`, que o portão novo achou e o meu `rg` inicial não.
+- **Documentação do filtro:** o `shell_quote` (e o `get_env` desativado) agora está descrito em `docs/YAML-SPEC.md`.
+- **Portões novos**, cada um verificado com mutante:
+  - templates do `init` (`init_templates_shell_quote_their_run_commands`): um template sem filtro reprova;
+  - blocos YAML do README e de `docs/*.md` (`documentation_examples_shell_quote_run_commands`);
+  - **sintaxe**: cada `run:` dos workflows embutidos, renderizado com valores fictícios, passa por `sh -n` (`shipped_run_commands_are_valid_shell_after_rendering`, 30+ comandos). Até então, só o `simple-test.yaml` tinha sido executado depois da reescrita. Uma aspa solta reprova o teste.
+
+**6b / 10b — a colisão entre despacho em v1 e o bloqueio do sandbox v1.**
+- **Despacho sem `repo`** (`STEPYARD_DISPATCH_ALLOW_LOCAL_WORKSPACE=true`) manda v1 sem `--repo`, que o item 10 recusa com sandbox ligado. A falha é ruidosa, porque o item 6 marca `dispatch_failed` com o log. Mesmo assim, ficou documentado em `docs/REMOTE.md`: esse caminho só roda se o host do engine estiver com o sandbox de contêiner desligado (`STEPYARD_SANDBOX=local`).
+- **README:** a linha do v1 na tabela de engines e a de `fix-ci`/`fix-test` ("v1 only") agora dizem que, com sandbox de contêiner, o v1 exige `--repo OWNER/REPO` (ou `--no-sandbox` num checkout local).
+
+**1b (teste) — falha intermitente encontrada e explicada.** Na suíte completa, os dois testes de dois processos rodam em paralelo, e o do v1 falhou uma vez. A causa estava no **teste**: ele envelhecia o `started_at` assim que a linha da sessão aparecia, antes de o v1 tomar o lease. No v1, o lease vem depois de abrir um pool e rodar as migrações. Isso criava um estado que não ocorre de verdade, porque a carência de 60 s cobre esse intervalo. O teste agora espera o lease aparecer em `pg_locks` (sem tomar o lock) antes de envelhecer a sessão. Isso também prova que o lease está realmente seguro. Três execuções seguidas em modo paralelo passaram.
+
+**Ponto 5 da revisão (timeout do agent ligado no item 7):** confirmado na leitura de `crates/stepyard-harness/src/engine.rs` (ramo `TimedOut` do agent). Não há `destroy` antes de `finalise_fail`, então a cópia de volta acontece. Não houve teste com um agente real, porque isso exige conta.
+
+**Medido:** portões do CI todos com status 0. Suíte completa com banco: **1.182 passaram, 0 falharam, 16 ignorados**. Job SQLite: verde.

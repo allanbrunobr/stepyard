@@ -66,7 +66,11 @@ Remote dispatch is repo-mode by default: every run must provide `--repo` or
 on a host workspace mounted/copied into a per-run sandbox, which is not a stable
 remote contract. Operators can temporarily restore the old behavior with
 `STEPYARD_DISPATCH_ALLOW_LOCAL_WORKSPACE=true`, but that is an explicit
-compatibility escape hatch, not the supported remote mode.
+compatibility escape hatch, not the supported remote mode. Since dispatches run
+`--engine v1`, and v1 refuses to put the host working directory in a container
+sandbox (it would bind-mount and re-own it), a repo-less dispatch only runs when
+the engine host has the container sandbox off (`STEPYARD_SANDBOX=local`);
+otherwise it ends as `dispatch_failed` with the reason in its dispatch log.
 
 ## VPS deployment (Dashboard API)
 

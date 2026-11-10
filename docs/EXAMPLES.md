@@ -28,7 +28,7 @@ steps:
     run: "curl -s https://api.example.com/data"
   - name: process
     type: cmd
-    run: "echo '{{ steps.fetch.stdout }}' | jq '.count'"
+    run: "printf '%s' {{ steps.fetch.stdout | shell_quote }} | jq '.count'"
     output_type: integer
 ```
 
@@ -82,7 +82,7 @@ scopes:
     steps:
       - name: view
         type: cmd
-        run: "git diff origin/main -- {{ scope.value }}"
+        run: "git diff origin/main -- {{ scope.value | shell_quote }}"
       - name: analyze
         type: agent
         prompt: "Review this diff:\n{{ steps.view.stdout }}"

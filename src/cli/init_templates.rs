@@ -52,7 +52,7 @@ config:
 steps:
   - name: hello
     type: cmd
-    run: "echo 'Hello, {{ target }}!'"
+    run: "echo Hello, {{ target | shell_quote }}"
 "#;
 
 const FIX_ISSUE: &str = r#"name: {name}
@@ -83,7 +83,7 @@ scopes:
 steps:
   - name: fetch_issue
     type: cmd
-    run: "gh issue view {{ target }} --json title,body,labels"
+    run: "gh issue view {{ target | shell_quote }} --json title,body,labels"
 
   - name: find_files
     type: cmd
@@ -111,19 +111,20 @@ steps:
 
   - name: create_branch
     type: cmd
-    run: "git checkout -b fix/issue-{{ target }}"
+    run: "git checkout -b fix/issue-{{ target | shell_quote }}"
 
   - name: commit
     type: cmd
-    run: "git add -A && git commit -m 'fix: resolve issue #{{ target }}'"
+    run: |
+      git add -A && git commit -m "fix: resolve issue #"{{ target | shell_quote }}
 
   - name: open_pr
     type: cmd
     run: |
       gh pr create \
-        --title "fix: resolve issue #{{ target }}" \
-        --body "Closes #{{ target }}" \
-        --head "fix/issue-{{ target }}"
+        --title "fix: resolve issue #"{{ target | shell_quote }} \
+        --body "Closes #"{{ target | shell_quote }} \
+        --head "fix/issue-"{{ target | shell_quote }}
 "#;
 
 const CODE_REVIEW: &str = r#"name: {name}
@@ -170,7 +171,7 @@ steps:
     type: cmd
     run: |
       echo "=== Code Review Complete ==="
-      echo "{{ steps.review.response }}"
+      printf '%s\n' {{ steps.review.response | shell_quote }}
 "#;
 
 const SECURITY_AUDIT: &str = r#"name: {name}
@@ -232,12 +233,62 @@ steps:
     type: cmd
     run: |
       echo "=== Security Audit Report ==="
-      echo "{{ steps.audit.response }}"
+      printf '%s\n' {{ steps.audit.response | shell_quote }}
 "#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P1-2 follow-up (analysis 2026-11-09, SEG-RUST-07): the workflows
+    /// `stepyard init` writes for the user must shell-quote every value they
+    /// interpolate into a `run:` command, and stay valid shell.
+    #[test]
+    fn init_templates_shell_quote_their_run_commands() {
+        fn collect(value: &serde_yaml::Value, out: &mut Vec<String>) {
+            match value {
+                serde_yaml::Value::Mapping(map) => {
+                    for (k, v) in map {
+                        if k.as_str() == Some("run") {
+                            if let Some(s) = v.as_str() {
+                                out.push(s.to_string());
+                            }
+                        }
+                        collect(v, out);
+                    }
+                }
+                serde_yaml::Value::Sequence(seq) => seq.iter().for_each(|v| collect(v, out)),
+                _ => {}
+            }
+        }
+        let mut checked = 0;
+        for template in TEMPLATES {
+            let yaml: serde_yaml::Value =
+                serde_yaml::from_str(&template.content.replace("{name}", "t")).unwrap();
+            let mut runs = Vec::new();
+            collect(&yaml, &mut runs);
+            for run in runs {
+                let mut rest = run.as_str();
+                while let Some(start) = rest.find("{{") {
+                    let end = rest[start..].find("}}").unwrap() + start;
+                    let expr = rest[start + 2..end].trim();
+                    assert!(
+                        expr.ends_with("| shell_quote")
+                            || expr.starts_with("stack.")
+                            || expr == "scope.index",
+                        "template `{}`: `{{{{ {expr} }}}}` is not shell-quoted in: {run}",
+                        template.name
+                    );
+                    rest = &rest[end + 2..];
+                }
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 8,
+            "expected the init templates' run commands, got {checked}"
+        );
+    }
 
     #[test]
     fn all_template_names_are_unique() {
