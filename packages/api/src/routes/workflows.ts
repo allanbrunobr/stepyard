@@ -624,7 +624,11 @@ const dispatchSchema = z.object({
     .regex(/^[\w.-]+\/[\w.-]+$/, 'repo must be OWNER/REPO')
     .optional(),
   branch: z.string().max(200).optional(),
-  vars: z.record(z.string(), z.string()).optional(),
+  // Same key rule as `stepyard execute --var` (clap rejects anything else, and
+  // that used to happen in the detached child after this API answered 202).
+  vars: z
+    .record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/, 'var keys must match [A-Z_][A-Z0-9_]*'), z.string())
+    .optional(),
 });
 
 workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, res: Response) => {
@@ -661,9 +665,12 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
     return;
   }
 
-  const stepyardArgs: string[] = ['execute'];
+  // --engine v1 explicitly: v2 (the CLI default) refuses --repo and does not
+  // report to the dashboard, so a dispatched run would never leave
+  // `dispatching`. Same choice as the Slack bot.
+  const stepyardArgs: string[] = ['execute', '--engine', 'v1'];
   if (repo) stepyardArgs.push('--repo', repo);
-  if (branch) stepyardArgs.push('--var', `branch=${branch}`);
+  if (branch) stepyardArgs.push('--var', `BRANCH=${branch}`);
   if (vars) {
     for (const [k, v] of Object.entries(vars)) {
       stepyardArgs.push('--var', `${k}=${v}`);
@@ -731,6 +738,15 @@ workflowsRouter.post('/workflows/dispatch', requireAuth, async (req: Request, re
     });
     child.on('error', (err) => {
       logger.error({ err, args }, 'Spawned stepyard emitted error event');
+    });
+    // A child that dies before reporting any event (bad flag, missing binary,
+    // ssh refused) used to leave the run in `dispatching` forever.
+    // markDispatchFailed only touches rows no event has updated yet.
+    child.on('exit', (code, signal) => {
+      if (code !== 0) {
+        const why = signal ? `signal ${signal}` : `exit code ${code}`;
+        void markDispatchFailed(runId, `stepyard exited before reporting (${why}); see ${logPath}`);
+      }
     });
     if (stdin !== null && child.stdin) {
       // EPIPE when ssh exits early must not crash the API process.

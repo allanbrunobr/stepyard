@@ -89,7 +89,7 @@ fn parse_cli_var(raw: &str) -> Result<CliVar, String> {
     })
 }
 
-fn is_valid_template_var_key(key: &str) -> bool {
+pub(crate) fn is_valid_template_var_key(key: &str) -> bool {
     let mut chars = key.chars();
     match chars.next() {
         Some('A'..='Z') | Some('_') => {}
@@ -847,6 +847,44 @@ pub async fn exec(args: ExecArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `execute` flags that only the v1 engine implements. v2 used to accept and
+/// silently ignore them: `--repo` ran the workflow on the current directory
+/// instead of the repository, `--resume` started over, `--json` printed the
+/// decorative output a script would then fail to parse. Refusing them makes
+/// the caller (a user, the dashboard dispatcher, `stepyard remote`) choose
+/// `--engine v1` explicitly.
+fn v2_unsupported_flags(args: &ExecuteArgs) -> Vec<&'static str> {
+    let mut flags = Vec::new();
+    if args.repo.is_some() {
+        flags.push("--repo");
+    }
+    if args.resume.is_some() {
+        flags.push("--resume");
+    }
+    if args.json {
+        flags.push("--json");
+    }
+    if args.dry_run {
+        flags.push("--dry-run");
+    }
+    flags
+}
+
+/// Flags accepted for compatibility that change nothing; say so instead of
+/// letting the caller believe they took effect.
+fn ignored_flag_warnings(args: &ExecuteArgs) -> Vec<&'static str> {
+    let mut warnings = Vec::new();
+    if args.timeout.is_some() {
+        warnings.push(
+            "--timeout is not implemented and is ignored; set `timeout` in the workflow config",
+        );
+    }
+    if args.quiet && args.engine == "v2" {
+        warnings.push("--quiet has no effect with --engine v2");
+    }
+    warnings
+}
+
 pub async fn execute(
     args: ExecuteArgs,
     shutdown_tx: Arc<broadcast::Sender<()>>,
@@ -861,6 +899,18 @@ pub async fn execute(
             "unknown --engine value `{}` (expected `v1` or `v2`)",
             display_text(other)
         ),
+    }
+    if args.engine == "v2" {
+        let unsupported = v2_unsupported_flags(&args);
+        if !unsupported.is_empty() {
+            bail!(
+                "--engine v2 (the default) does not support {}; rerun with --engine v1",
+                unsupported.join(", ")
+            );
+        }
+    }
+    for warning in ignored_flag_warnings(&args) {
+        eprintln!("warning: {warning}");
     }
 
     let workflow_path = resolve_workflow_path(&args.workflow)?;
@@ -958,9 +1008,7 @@ pub async fn execute(
     match args.engine.as_str() {
         "v1" => {} // fall through to legacy path
         "v2" => {
-            if args.dry_run {
-                bail!("--engine v2 does not support --dry-run yet (Story 2.4)");
-            }
+            // --dry-run, --repo, --resume and --json were refused above.
             return execute_v2(
                 args,
                 workflow,

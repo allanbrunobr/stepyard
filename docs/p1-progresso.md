@@ -17,8 +17,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | 2 | Slack `target` + filtro `shell_quote` nos workflows | SEG-RUST-02, SEG-RUST-07 | ✅ feito | `fb6c43f` |
 | 3 | Tera sem `get_env` | SEG-RUST-04 | ✅ feito | `2d5ff9f` |
 | 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | ✅ feito | `9adbd5d` |
-| 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | ✅ feito | (este) |
-| 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | pendente | |
+| 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | ✅ feito | `a64c4d1` |
+| 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | ✅ feito | (este) |
 | 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 | pendente | |
 | 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | pendente | |
 | 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | pendente | |
@@ -177,3 +177,40 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 **Não coberto.**
 - O segundo pool, morto, em `src/db/index.ts` (nada o importa; MANUT-16) não foi alterado.
 - O SSE de logs já tinha `.catch` no loop e não mudou.
+
+## 6. Contrato de despacho dashboard/remote — ✅
+
+**Defeito.** O despacho do dashboard e do `stepyard remote` montava uma linha de comando que o motor padrão (v2):
+- **rejeitava:** `--var branch=…`, chave minúscula, barrada pelo clap;
+- **ignorava:** com `--repo`, o workflow rodava num diretório vazio, e o v2 não reporta ao dashboard.
+
+A API respondia 202, o processo filho morria, e o run ficava em `dispatching` para sempre. O exemplo literal de `docs/REMOTE.md` (`--var foo=1`) não funcionava. Além disso, o v2 aceitava em silêncio `--repo`, `--resume` e `--json`, e `--timeout` não tinha efeito em nenhum motor sem que nada avisasse.
+
+**Correção.**
+- **CLI** (`src/cli/commands.rs`):
+  - Com `--engine v2` (o padrão), `--repo`, `--resume`, `--json` e `--dry-run` são **recusados** antes de qualquer trabalho de sandbox, imagem ou banco. A mensagem lista todas as flags de uma vez e aponta `--engine v1`, e mantém o formato "does not support …" que o teste antigo do `--dry-run` espera.
+  - `--timeout`, nos dois motores, e `--quiet`, no v2, geram aviso explícito de que não têm efeito.
+- **API** (`routes/workflows.ts`):
+  - O despacho passa `--engine v1` explícito, a mesma escolha do bot do Slack, e `--var BRANCH=…`.
+  - As chaves de `vars` são validadas no Zod com a regex do CLI, então uma chave inválida dá 400 antes de qualquer spawn.
+  - `child.on('exit')` marca `dispatch_failed`, com o código de saída e o caminho do log, quando o processo morre antes de reportar. O `UPDATE` só afeta runs sem nenhum evento.
+- **`stepyard remote`** (`src/cli/remote.rs`): `parse_kv_vars` aplica a mesma regex no cliente.
+- **Documentação:** a tabela de limitações do v2 no README ("Ignored" → "Rejected with an error" / aviso) e `docs/REMOTE.md` (exemplo com chaves maiúsculas e um parágrafo sobre `--engine v1`, `BRANCH` e `dispatch_failed`).
+
+**Coerência com o item 10:** o despacho usa v1. Por isso, o bloqueio do sandbox v1 previsto no item 10 vai mirar o modo que monta o diretório **do host**, e não o modo `--repo`, usado pelo despacho e pelo Slack.
+
+**Testes.**
+- `tests/cli_v2_flags.rs` (binário real com `assert_cmd`, sem Docker nem banco): as 4 flags recusadas, uma a uma; a lista combinada; o aviso do `--timeout`.
+- `packages/api/src/routes/dispatch.test.ts` (servidor HTTP real e um "stepyard" falso que grava o argv e sai com 2):
+  - O argv começa com `execute --engine v1`, contém `BRANCH=feature/x` e não `branch=`.
+  - O run é marcado `dispatch_failed` com "exit code 2".
+  - Uma chave `foo` dá 400 sem tocar no banco.
+- `src/cli/remote.rs`: recusa `foo`, `branch`, `1X` e `A-B`.
+
+**Medido:**
+- **Mutantes:** M1 (despacho antigo: sem engine, `branch=`), M2 (sem `on('exit')`) e M3 (sem regex nas chaves) reprovam cada um o seu teste na API. M4 (v2 volta a aceitar as flags) reprova os 2 testes do binário. Sem a recusa, o v2 tentou preparar o sandbox no Docker do M1 até o timeout do `assert_cmd`; conferi que não sobrou contêiner nem processo. Tudo restaurado.
+- Portões do CI: todos com status 0. Job TypeScript: status 0 (**21/21**). Suíte Rust completa com banco: **1.144 passaram, 0 falharam, 13 ignorados**.
+
+**Não coberto.**
+- O v2 continua sem suporte a `--repo` e sem eventos para o dashboard. Essas lacunas mantêm o v1 vivo e fazem parte do plano de desativação do v1 (P3).
+- `--sandbox`, que já é o padrão e não muda nada, não foi tocado.
