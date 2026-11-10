@@ -87,7 +87,7 @@ router.get("/developers", async (req: Request, res: Response) => {
     res.json(result.rows);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ error: err.errors });
+      res.status(400).json({ error: err.issues });
       return;
     }
     res.status(500).json({ error: "Internal server error" });
@@ -116,7 +116,7 @@ router.get("/costs/by-developer", async (req: Request, res: Response) => {
     res.json(result.rows);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ error: err.errors });
+      res.status(400).json({ error: err.issues });
       return;
     }
     res.status(500).json({ error: "Internal server error" });
@@ -145,7 +145,7 @@ router.get("/costs/by-workflow", async (req: Request, res: Response) => {
     res.json(result.rows);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ error: err.errors });
+      res.status(400).json({ error: err.issues });
       return;
     }
     res.status(500).json({ error: "Internal server error" });
@@ -174,7 +174,7 @@ router.get("/costs/by-repo", async (req: Request, res: Response) => {
     res.json(result.rows);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ error: err.errors });
+      res.status(400).json({ error: err.issues });
       return;
     }
     res.status(500).json({ error: "Internal server error" });
@@ -202,7 +202,7 @@ router.get("/costs/daily", async (req: Request, res: Response) => {
     res.json(result.rows);
   } catch (err) {
     if (err instanceof z.ZodError) {
-      res.status(400).json({ error: err.errors });
+      res.status(400).json({ error: err.issues });
       return;
     }
     res.status(500).json({ error: "Internal server error" });

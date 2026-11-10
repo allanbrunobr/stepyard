@@ -28,6 +28,9 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       API_PORT: 3001
+      # Inside Compose the web service connects to this container by name.
+      # A process started on the host keeps the loopback default.
+      API_HOST: 0.0.0.0
       API_SECRET: ${API_SECRET:?API_SECRET must be set in .env}
       # Epic 5 Story 5.1 — remote dispatch
       STEPYARD_DISPATCH_SSH_HOST: ${STEPYARD_DISPATCH_SSH_HOST:-}

@@ -31,11 +31,11 @@ authRouter.post('/auth/login', (req: Request, res: Response) => {
     return;
   }
 
-  res.setHeader('Set-Cookie', sessionCookieHeader(createSessionToken(secret)));
+  res.setHeader('Set-Cookie', sessionCookieHeader(createSessionToken(secret), req.hostname));
   res.json({ authenticated: true });
 });
 
-authRouter.post('/auth/logout', (_req: Request, res: Response) => {
-  res.setHeader('Set-Cookie', clearSessionCookieHeader());
+authRouter.post('/auth/logout', (req: Request, res: Response) => {
+  res.setHeader('Set-Cookie', clearSessionCookieHeader(req.hostname));
   res.json({ authenticated: false });
 });

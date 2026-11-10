@@ -65,15 +65,25 @@ export function createSessionToken(secret: string): string {
   return `v1.${issuedAt}.${sign(issuedAt, secret)}`;
 }
 
-export function sessionCookieHeader(token: string): string {
-  const secure = process.env.DASHBOARD_COOKIE_SECURE?.trim().toLowerCase();
-  const secureAttr = secure === '1' || secure === 'true' || secure === 'yes' ? '; Secure' : '';
+/**
+ * `Secure` is always set when the host is not loopback. The env flag can
+ * turn it on for localhost. It cannot turn it off for any other host.
+ */
+export function cookieSecureForHost(host: string | undefined): boolean {
+  const name = (host ?? '').replace(/^\[|\]$/g, '').split('%')[0];
+  const loopback = name === 'localhost' || name === '127.0.0.1' || name === '::1';
+  if (!loopback) return true;
+  const flag = process.env.DASHBOARD_COOKIE_SECURE?.trim().toLowerCase();
+  return flag === '1' || flag === 'true' || flag === 'yes';
+}
+
+export function sessionCookieHeader(token: string, host?: string): string {
+  const secureAttr = cookieSecureForHost(host) ? '; Secure' : '';
   return `${COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/api; Max-Age=${COOKIE_MAX_AGE_SECONDS}${secureAttr}`;
 }
 
-export function clearSessionCookieHeader(): string {
-  const secure = process.env.DASHBOARD_COOKIE_SECURE?.trim().toLowerCase();
-  const secureAttr = secure === '1' || secure === 'true' || secure === 'yes' ? '; Secure' : '';
+export function clearSessionCookieHeader(host?: string): string {
+  const secureAttr = cookieSecureForHost(host) ? '; Secure' : '';
   return `${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/api; Max-Age=0${secureAttr}`;
 }
 

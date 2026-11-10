@@ -11,5 +11,8 @@
     "dev": "docker compose up --build",
     "dev:api": "cd packages/api && npm run dev",
     "dev:web": "cd packages/web && npm run dev"
+  },
+  "overrides": {
+    "proxy-addr": "2.0.8"
   }
 }

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
+import { secretMatches } from '../auth';
 import { pool } from '../db';
 import { logger } from '../logger';
 
@@ -43,7 +44,7 @@ function authenticate(req: Request, res: Response): boolean {
 
   const token = authHeader.slice(7);
   const secret = process.env.API_SECRET;
-  if (!secret || token !== secret) {
+  if (!secret || !secretMatches(token, secret)) {
     res.status(401).json({ error: 'Invalid token' });
     return false;
   }

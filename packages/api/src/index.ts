@@ -16,12 +16,15 @@ dotenv.config({ path: '../../.env' });
 
 const app = express();
 const port = parseInt(process.env.API_PORT || process.env.PORT || '3001', 10);
+// Loopback unless the operator opts in. Compose sets API_HOST=0.0.0.0
+// because the web container reaches this process by the service name.
+const host = process.env.API_HOST?.trim() || '127.0.0.1';
 
 app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   credentials: true,
 }));
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 
 app.use('/api', healthRouter);
 app.use('/api', authRouter);
@@ -34,8 +37,8 @@ async function start(): Promise<void> {
   await runMigrations();
   startCleanupScheduler();
 
-  app.listen(port, '0.0.0.0', () => {
-    logger.info(`API server listening on port ${port}`);
+  app.listen(port, host, () => {
+    logger.info(`API server listening on ${host}:${port}`);
   });
 }
 

@@ -611,20 +611,23 @@ workflowsRouter.get('/workflows/:runId/artifacts/:artifactId', requireDashboardA
 // --- GET /workflows/:runId (detail with steps) ---
 
 workflowsRouter.get('/workflows/:runId', requireDashboardAuth, async (req: Request, res: Response) => {
-
-  const { runId } = req.params;
+  const runId = UUID_PARAM.safeParse(req.params.runId);
+  if (!runId.success) {
+    res.status(400).json({ error: { code: 'VALIDATION_FAILED', message: 'Invalid run id' } });
+    return;
+  }
 
   try {
-    const runResult = await pool.query('SELECT * FROM workflow_runs WHERE run_id = $1', [runId]);
+    const runResult = await pool.query('SELECT * FROM workflow_runs WHERE run_id = $1', [runId.data]);
 
     if (runResult.rows.length === 0) {
-      res.status(404).json({ error: { code: 'NOT_FOUND', message: `Workflow run ${runId} not found` } });
+      res.status(404).json({ error: { code: 'NOT_FOUND', message: `Workflow run ${runId.data} not found` } });
       return;
     }
 
     const stepsResult = await pool.query(
       'SELECT * FROM workflow_steps WHERE run_id = $1 ORDER BY id',
-      [runId],
+      [runId.data],
     );
 
     res.json({
@@ -835,8 +838,11 @@ function buildSshCommand(sshHost: string, stepyardArgs: string[], env: NodeJS.Pr
   // ssh concatenates remote argv with spaces before feeding it to the remote
   // shell, which then re-parses. Pass the bash invocation as ONE argument so
   // the `&&` / quoting in remoteCmd survives.
+  // Unknown and changed host keys are refused. BatchMode has no prompt,
+  // so a missing known_hosts entry fails the dispatch instead of accepting
+  // whichever key the server offers.
   const sshArgs = [
-    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'StrictHostKeyChecking=yes',
     '-o', 'BatchMode=yes',
     sshHost,
     `bash -lc ${shellQuote(remoteCmd)}`,
