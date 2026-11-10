@@ -22,7 +22,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 5 | Pânicos por fatiamento de UTF-8 no Slack e no `remote status` | BUG-CLI-06, BUG-MOTOR-14, BUG-CLI-10 (BUG-CLI-09 pendente) | ✅ feito | `29cb4d5` |
 | 6 | Upload de artefatos acima de 100 KB (parser por rota, autenticação antes do corpo grande) | SEG-TS-06 (SEG-TS-05/08 pendentes) | ✅ feito | `99fcdf2` |
 | 7 | `stepyard validate` valida para o motor padrão (v2) | BUG-CLI-13, MANUT-06 | ✅ feito | `1a08590` |
-| 8 | Integridade dos testes: testes de binário que nunca rodavam; mock que confundia `destroy` e `destroy_by_session` | TEST-04, TEST-01 (TEST-02/03/13, MANUT-05 dependem de `.github/`) | ✅ feito | (este) |
+| 8 | Integridade dos testes: testes de binário que nunca rodavam; mock que confundia `destroy` e `destroy_by_session` | TEST-04, TEST-01 (TEST-02/03/13, MANUT-05 dependem de `.github/`) | ✅ feito | `1d70483`, `8c28951` |
+| 8b | A suíte de testes registrava worktrees no repositório do desenvolvedor | achado novo | ✅ feito | (este) |
 
 ---
 
@@ -215,3 +216,18 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 - **TEST-02:** job com Docker para os testes `#[ignore]`.
 - **MANUT-05:** compilar e testar `--features slack` no CI.
 - **TEST-13:** atalho "docs-only" do `check.yml`.
+
+### 8b. A suíte de testes registrava worktrees no repositório do desenvolvedor — ✅
+
+**Achado novo, encontrado durante o item 8.** O v2 prepara uma **git worktree por sessão** em `<cwd>/.stepyard/workspaces`, e a limpeza só remove as que têm mais de 24 h. Os testes de CLI que rodam `stepyard execute` a partir da raiz do repositório registravam essas worktrees no `.git` do desenvolvedor, que é o mesmo `.git` compartilhado com o checkout principal. **Medido** por binário de teste, com Postgres: `cli_execute` +2 (já existia), `cli_v2_step_config` +4 e `cli_concurrent_runs` +3 (escritos nesta sessão) e, antes da sua correção, `signal_handler` +1 por execução. As rodadas desta sessão acumularam **230** worktrees `stepyard-session-*` registradas (havia mais 2 no checkout principal, anteriores e não criadas aqui).
+
+**Correção.**
+- `tests/support/mod.rs` (novo): `temp_git_repo()` e `repo_path()`.
+- `cli_execute`, `cli_v2_step_config` e `cli_concurrent_runs` rodam `execute` num repositório git temporário, com o workflow por caminho absoluto. Mesma correção no `signal_handler` (commit `8c28951`).
+
+**Medido:** depois da correção, cada um desses binários registra **+0** worktrees e continua passando. A suíte completa inteira registra **+0** (antes, de 9 a 10 por rodada). Portões do CI: todos com status 0. Suíte: **1.199 passaram, 0 falharam, 18 ignorados**. Job SQLite: verde.
+
+**Pendente, decisão do Allan:** limpar as 230 worktrees já registradas por esta sessão (`analise/.stepyard/workspaces/stepyard-session-*` e `analise/crates/stepyard-harness/.stepyard/workspaces/stepyard-session-*`). Não as removi porque o registro de cada uma vive no `.git` do checkout principal, fora desta pasta. Comando sugerido, revisando a lista antes:
+
+    git worktree list --porcelain | awk '/^worktree .*\/orca\/workspaces\/stepyard\/analise\/.*stepyard-session-/{print $2}'   # revisar
+    # depois, para cada caminho listado: git worktree remove --force <caminho>; e por fim: git worktree prune

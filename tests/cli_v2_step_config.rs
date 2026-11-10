@@ -13,16 +13,19 @@ use assert_cmd::Command;
 use predicates::str::contains;
 use uuid::Uuid;
 
+mod support;
+
 fn run(yaml: &str) -> Option<assert_cmd::assert::Assert> {
     let Ok(url) = std::env::var("DATABASE_URL") else {
         eprintln!("[skip] DATABASE_URL not set");
         return None;
     };
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::temp_git_repo();
     let path = dir.path().join("wf.yaml");
     std::fs::write(&path, yaml).unwrap();
     let assert = Command::cargo_bin("stepyard")
         .unwrap()
+        .current_dir(dir.path())
         .args([
             "execute",
             path.to_str().unwrap(),

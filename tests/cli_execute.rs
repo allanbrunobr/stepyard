@@ -8,6 +8,8 @@
 use assert_cmd::Command;
 use uuid::Uuid;
 
+mod support;
+
 fn db_url() -> Option<String> {
     std::env::var("DATABASE_URL").ok()
 }
@@ -23,11 +25,14 @@ fn v2_executes_cmd_only_workflow_to_completion() {
     // each other's rows (pitfall #3 from PROMPT_STORY_2_4.md).
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
+    let repo = support::temp_git_repo();
+    let wf = support::repo_path("workflows/hello-world-cmd.yaml");
     Command::cargo_bin("stepyard")
         .unwrap()
+        .current_dir(repo.path())
         .args([
             "execute",
-            "workflows/hello-world-cmd.yaml",
+            wf.to_str().unwrap(),
             "--no-sandbox",
             "--engine",
             "v2",
@@ -47,11 +52,14 @@ fn v2_rejects_dry_run() {
     };
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
+    let repo = support::temp_git_repo();
+    let wf = support::repo_path("workflows/hello-world-cmd.yaml");
     Command::cargo_bin("stepyard")
         .unwrap()
+        .current_dir(repo.path())
         .args([
             "execute",
-            "workflows/hello-world-cmd.yaml",
+            wf.to_str().unwrap(),
             "--no-sandbox",
             "--engine",
             "v2",
@@ -73,11 +81,14 @@ fn v1_engine_still_works_when_explicit() {
     };
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
+    let repo = support::temp_git_repo();
+    let wf = support::repo_path("workflows/hello-world-cmd.yaml");
     Command::cargo_bin("stepyard")
         .unwrap()
+        .current_dir(repo.path())
         .args([
             "execute",
-            "workflows/hello-world-cmd.yaml",
+            wf.to_str().unwrap(),
             "--no-sandbox",
             "--engine",
             "v1",
@@ -97,9 +108,12 @@ fn default_engine_is_v2_and_still_works() {
     };
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
+    let repo = support::temp_git_repo();
+    let wf = support::repo_path("workflows/hello-world-cmd.yaml");
     Command::cargo_bin("stepyard")
         .unwrap()
-        .args(["execute", "workflows/hello-world-cmd.yaml", "--no-sandbox"])
+        .current_dir(repo.path())
+        .args(["execute", wf.to_str().unwrap(), "--no-sandbox"])
         .env("DATABASE_URL", &url)
         .env("STEPYARD_TENANT", &tenant)
         .assert()
