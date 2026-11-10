@@ -9,11 +9,10 @@
 //!
 //! # Running
 //!
-//! Integration-tier: requires a live Docker daemon. Gated behind
-//! `STEPYARD_TEST_DOCKER=1` (matches the convention established in
-//! `crates/stepyard-sandbox-orchestrator/tests/exec_with_env_docker.rs`).
-//! Tests early-return without failure when the flag is not set, so CI
-//! without Docker skips them gracefully.
+//! Integration-tier: requires a live Docker daemon. Those tests are
+//! `#[ignore]`d. Run them with `STEPYARD_TEST_DOCKER=1 cargo test -- --ignored`.
+//! CI does not pass `--ignored`. The CLI-var test at the bottom of this
+//! file does not need Docker and still runs.
 //!
 //! # Layer choice
 //!
@@ -105,11 +104,12 @@ async fn teardown(name: &str) {
 /// ever saw the value — the host marker would then exist, failing the
 /// second assertion.
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn positive_control_host_filesystem_untouched() {
-    if !docker_enabled() {
-        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
 
     // Per-test unique marker — a single `cargo test` invocation reuses
     // the same PID across all its tests, so `process::id()` would
@@ -159,12 +159,13 @@ async fn positive_control_host_filesystem_untouched() {
 /// does not paternalistically escape values — the expansion boundary is
 /// clear and user-owned.
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn negative_control_user_owned_sh_c_expansion() {
     // Escape hatch behavior — user chose sh -c, user owns expansion safety
-    if !docker_enabled() {
-        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
 
     let session_id = Uuid::new_v4();
     let container = create_alpine_container(session_id).await;

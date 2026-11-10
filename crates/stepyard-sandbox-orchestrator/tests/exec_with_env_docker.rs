@@ -1,7 +1,8 @@
 //! Integration tests for `DockerLifecycle::exec_with_env`.
 //!
-//! Gated on `STEPYARD_TEST_DOCKER=1` — CI environments without a daemon skip
-//! these without failing. Every `Command` and every future carries a
+//! Ignored unless `STEPYARD_TEST_DOCKER=1` and Cargo is passed `--ignored`.
+//! CI does not pass `--ignored`, so these are reported as ignored rather
+//! than as passed. Every `Command` and every future carries a
 //! `.timeout(Duration::from_secs(N))` (Rule 7b).
 
 use std::collections::HashMap;
@@ -75,13 +76,14 @@ async fn teardown(name: &str) {
 }
 
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn exec_with_env_injects_env_var_verbatim() {
     // AC5 (positive control, benign value): `printenv FOO` with FOO=bar
     // yields `bar\n` exactly.
-    if !docker_enabled() {
-        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
     let session_id = Uuid::new_v4();
     let name = create_alpine_container(session_id).await;
     let lifecycle = DockerLifecycle::default();
@@ -104,14 +106,15 @@ async fn exec_with_env_injects_env_var_verbatim() {
 }
 
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn exec_with_env_passes_shell_metacharacters_as_literal_string() {
     // AC5 (positive-control security assertion): env value containing
     // `$(rm -rf /)` must be surfaced to the child process as a literal
     // string; no shell expansion, no filesystem damage.
-    if !docker_enabled() {
-        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
     let session_id = Uuid::new_v4();
     let name = create_alpine_container(session_id).await;
     let lifecycle = DockerLifecycle::default();
@@ -168,15 +171,16 @@ async fn exec_with_env_passes_shell_metacharacters_as_literal_string() {
 }
 
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn exec_with_env_deterministic_ordering_on_repeated_calls() {
     // AC5 (determinism): two invocations with the same env map produce
     // identical behavior — env keys are sorted by implementation so argv
     // construction is repeatable. We can't introspect argv directly, but
     // we can assert the child's view of env vars sort identically.
-    if !docker_enabled() {
-        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
     let session_id = Uuid::new_v4();
     let name = create_alpine_container(session_id).await;
     let lifecycle = DockerLifecycle::default();
@@ -210,11 +214,12 @@ async fn exec_with_env_deterministic_ordering_on_repeated_calls() {
 }
 
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn exec_with_options_idle_timeout_returns_typed_error() {
-    if !docker_enabled() {
-        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
 
     let session_id = Uuid::new_v4();
     let name = create_alpine_container(session_id).await;

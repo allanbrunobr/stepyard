@@ -1,7 +1,9 @@
 //! Lifecycle tests.
 //!
-//! Mock-based tests always run. Docker-backed tests are gated by the
-//! `STEPYARD_TEST_DOCKER=1` env var so CI without a daemon does not fail.
+//! Mock-based tests always run. Docker-backed tests are `#[ignore]`d.
+//! Run them with `STEPYARD_TEST_DOCKER=1 cargo test -- --ignored`.
+//! CI does not pass `--ignored`, so a missing daemon does not fail the job
+//! and a skip is not counted as a pass.
 
 use std::sync::Arc;
 
@@ -106,7 +108,7 @@ async fn mock_destroy_by_session_default_records_destroy_with_session_derived_id
     );
 }
 
-// ── Docker tests (require daemon, gated by env var) ───────────────────
+// ── Docker tests (ignored unless STEPYARD_TEST_DOCKER=1 and --ignored) ─
 
 fn docker_enabled() -> bool {
     std::env::var("STEPYARD_TEST_DOCKER")
@@ -115,11 +117,12 @@ fn docker_enabled() -> bool {
 }
 
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn docker_create_exec_destroy_roundtrip() {
-    if !docker_enabled() {
-        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
     let lifecycle = DockerLifecycle::default();
     let session_id = Uuid::new_v4();
 
@@ -151,11 +154,12 @@ async fn docker_create_exec_destroy_roundtrip() {
 }
 
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn docker_destroy_is_idempotent() {
-    if !docker_enabled() {
-        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
     let lifecycle = DockerLifecycle::default();
     let session_id = Uuid::new_v4();
     lifecycle
@@ -165,16 +169,17 @@ async fn docker_destroy_is_idempotent() {
 }
 
 #[tokio::test]
+#[ignore = "needs a local Docker daemon; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
 async fn docker_destroy_by_session_reaches_override_through_trait_object() {
     // The harness calls destroy_by_session through Arc<dyn SandboxLifecycle>,
     // not on a concrete DockerLifecycle. Guards against a future refactor
     // that drops `destroy_by_session` from the trait impl and silently
     // falls back to the default (which delegates to the no-op `destroy`) —
     // that would leave real containers running.
-    if !docker_enabled() {
-        eprintln!("[skip] STEPYARD_TEST_DOCKER not set to 1");
-        return;
-    }
+    assert!(
+        docker_enabled(),
+        "set STEPYARD_TEST_DOCKER=1 to run this ignored test"
+    );
     let lifecycle: Arc<dyn SandboxLifecycle> = Arc::new(DockerLifecycle::default());
     let session_id = Uuid::new_v4();
     let sandbox = lifecycle.create(session_id).await.expect("create");
