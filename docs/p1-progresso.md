@@ -15,8 +15,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 |---|---|---|---|---|
 | 1 | Reconciliação de partida só para sessões órfãs | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | `529b532` |
 | 2 | Slack `target` + filtro `shell_quote` nos workflows | SEG-RUST-02, SEG-RUST-07 | ✅ feito | `fb6c43f` |
-| 3 | Tera sem `get_env` | SEG-RUST-04 | ✅ feito | (este) |
-| 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | pendente | |
+| 3 | Tera sem `get_env` | SEG-RUST-04 | ✅ feito | `2d5ff9f` |
+| 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | ✅ feito | (este) |
 | 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | pendente | |
 | 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | pendente | |
 | 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 | pendente | |
@@ -113,3 +113,32 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 - **Mutante** (sem o `register_function`): os dois testes reprovam. Restaurado.
 - Os 348 testes da lib do engine passam, inclusive os que verificam texto de erro.
 - Portões do CI: todos com status 0. Suíte completa com banco: **1.139 passaram, 0 falharam, 13 ignorados**. Os testes da lib do engine contam duas vezes (lib e binário, achado TEST-05), por isso +5 para 3 testes novos.
+
+## 4. API: `dispatch_log_path` e segredos no despacho SSH — ✅
+
+**Defeitos.**
+- **SEG-TS-01:** `POST /api/events` aceitava `dispatch_log_path` livre. Depois, `GET /api/workflows/:id/logs/stream` abria esse caminho e devolvia o conteúdo. Qualquer portador do segredo de ingestão lia arquivos do contêiner da API, inclusive a chave SSH do root montada pelo compose.
+- **SEG-TS-02:** no modo SSH, `GH_TOKEN`, `ANTHROPIC_API_KEY` e `DATABASE_URL` iam embutidos no comando remoto. Ficavam visíveis no argv do `ssh` (no `ps` do host da API), no argv do `bash -lc` remoto e no `logger.info` de cada despacho.
+
+**Correção.**
+- `packages/api/src/dispatch.ts` (novo): concentra as funções puras do despacho, que antes estavam soltas em `routes/workflows.ts`.
+- **Caminho do log:** `allowedDispatchLogPath` só aceita um arquivo `stepyard-dispatch-*.log` **diretamente** dentro de `STEPYARD_DISPATCH_LOG_DIR` (padrão `/tmp`). A checagem roda em toda leitura, porque linhas antigas do banco podem conter caminhos plantados. `readDispatchLogChunk` abre com `O_NOFOLLOW` e usa `fstat` no mesmo descritor, recusando symlink com nome permitido.
+- `routes/events.ts`: o schema não aceita mais `dispatch_log_path`. O Zod descarta a chave, então CLIs antigos que a enviam continuam funcionando. O upsert passa `null`, e o `COALESCE` preserva o valor gravado pelo handler de despacho.
+- **Segredos no SSH:** `buildSshCommand` devolve `{ binary, args, stdin }`. As variáveis encaminhadas viram linhas `export NOME='valor'` escritas no **stdin** do `ssh`. O lado remoto faz `eval "$(cat)"` antes do `exec stepyard`. Nomes inválidos em `STEPYARD_SSH_ENV_FORWARD` são ignorados com aviso. O handler usa `stdio: ['pipe', …]` só no modo SSH, fecha o stdin logo após escrever e trata `EPIPE` sem derrubar o processo. Como o argv não carrega mais segredo, o `logger.info` também não.
+- Nada muda no host remoto: não precisa de `AcceptEnv` nem de configuração nova.
+
+**Testes** (`packages/api/src/dispatch.test.ts`, 7 testes novos; a API tinha 5):
+- O caminho aceita só o formato certo e recusa `/root/.ssh/id_ed25519`, `..`, subdiretório, outro nome, sufixo extra, byte nulo, vazio e não-string. Um log real é lido. Um arquivo existente fora do diretório é recusado. Um **symlink** com nome permitido é recusado. O `EventSchema` descarta `dispatch_log_path`.
+- O argv não contém o segredo nem a senha do banco; o stdin contém os `export`.
+- **Protocolo de verdade:** o último argumento do `ssh` (o que o sshd entrega ao shell remoto) roda em `sh -c` com o stdin que a API envia, usando `/bin/sh` como "engine". O processo final recebe **exatamente** o segredo, que contém `'`, `$(touch PWNED)`, `"` e crases, e nada é executado.
+
+**Medido:**
+- **Mutante M1** (sem checagem de diretório e nome): 2 testes de caminho reprovam. O do symlink continua passando, porque o `O_NOFOLLOW` é uma barreira independente.
+- **Mutante M2** (exports de volta na linha de comando remota): o teste do argv reprova.
+- Job TypeScript do CI: build da API, build do web e testes, todos com status 0 (**12/12**).
+
+**Não coberto.**
+- Não houve um `ssh` real até um host remoto. O teste executa o comando remoto localmente, com o mesmo stdin.
+- O CLI Rust ainda envia `dispatch_log_path` (`src/events/subscribers.rs:206`). Agora é ignorado; a remoção do envio fica para P2.
+
+**Pendência do Allan:** a correção impede novos vazamentos, mas os logs já gravados pelo contêiner da API (`docker logs`) continuam com os valores. **Rotacionar `GH_TOKEN`, `ANTHROPIC_API_KEY` e a senha do banco** de qualquer ambiente onde o despacho SSH rodou.
