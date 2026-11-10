@@ -60,3 +60,57 @@ async fn a_huge_step_output_is_capped_in_the_session_log() {
         "largest log row must be about the 1 MiB cap, got {largest} bytes"
     );
 }
+
+/// A failing `cmd` puts its stderr in `StepFailed.error`; that row is capped
+/// too (pre-PR review of the P3 branch: only `StepCompleted` was).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_huge_stderr_of_a_failing_step_is_capped_in_the_session_log() {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
+        eprintln!("[skip] DATABASE_URL not set");
+        return;
+    };
+    let repo = support::temp_git_repo();
+    let wf = repo.path().join("big-fail.yaml");
+    std::fs::write(
+        &wf,
+        "name: big-stderr\nsteps:\n  - name: big\n    type: cmd\n    run: \"head -c 3000000 /dev/zero | tr '\\\\0' a 1>&2; exit 1\"\n",
+    )
+    .unwrap();
+    let tenant = format!("output-cap-fail-{}", Uuid::new_v4());
+    Command::cargo_bin("stepyard")
+        .unwrap()
+        .current_dir(repo.path())
+        .args([
+            "execute",
+            wf.to_str().unwrap(),
+            "--no-sandbox",
+            "--engine",
+            "v2",
+        ])
+        .env("DATABASE_URL", &url)
+        .env("STEPYARD_TENANT", &tenant)
+        .env("STEPYARD_NO_FILE_LOGS", "1")
+        .env_remove("STEPYARD_MAX_STEP_OUTPUT_BYTES")
+        .timeout(Duration::from_secs(120))
+        .assert()
+        .failure();
+
+    let pool = sqlx::PgPool::connect(&url).await.expect("connect");
+    let (largest, kind): (i32, String) = sqlx::query_as(
+        "SELECT octet_length(e.payload::text), coalesce(e.payload->>'event', '?') FROM session_events e \
+         JOIN sessions s ON s.id = e.session_id WHERE s.tenant_id = $1 \
+         ORDER BY octet_length(e.payload::text) DESC LIMIT 1",
+    )
+    .bind(&tenant)
+    .fetch_one(&pool)
+    .await
+    .expect("query");
+    assert!(
+        (1_048_576..1_200_000).contains(&largest),
+        "largest log row ({kind}) must be about the 1 MiB cap, got {largest} bytes"
+    );
+}

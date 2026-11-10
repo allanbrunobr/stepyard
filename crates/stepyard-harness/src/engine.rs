@@ -2820,14 +2820,24 @@ pub fn max_step_output_bytes() -> usize {
 /// step. Each stream keeps its first `max` bytes (cut on a char boundary)
 /// plus a marker saying how much was dropped; later steps see the same
 /// capped value, because they read outputs back from the log.
+///
+/// The same cap applies to the other events that carry a step's output: the
+/// error of a `StepFailed` (a failing `cmd` puts its whole stderr there) and
+/// the content of a `ChatMessageAppended` (a chat reply).
 pub fn cap_step_output(mut event: Event, max: usize) -> Event {
-    if let Event::StepCompleted {
-        output: Some(ref mut snap),
-        ..
-    } = event
-    {
-        cap_text(&mut snap.stdout, max);
-        cap_text(&mut snap.stderr, max);
+    match event {
+        Event::StepCompleted {
+            output: Some(ref mut snap),
+            ..
+        } => {
+            cap_text(&mut snap.stdout, max);
+            cap_text(&mut snap.stderr, max);
+        }
+        Event::StepFailed { ref mut error, .. } => cap_text(error, max),
+        Event::ChatMessageAppended {
+            ref mut content, ..
+        } => cap_text(content, max),
+        _ => {}
     }
     event
 }
@@ -3723,6 +3733,37 @@ mod send_check {
             unreachable!()
         };
         assert_eq!(snap.stdout, big, "under the default cap nothing changes");
+        // A failing cmd carries its stderr in `StepFailed.error`; a chat
+        // reply is the content of `ChatMessageAppended`. Both are capped.
+        let Event::StepFailed { error, .. } = cap_step_output(
+            Event::StepFailed {
+                step_name: "s".into(),
+                step_type: "cmd".into(),
+                error: big.clone(),
+                duration_ms: 1,
+                timestamp: chrono::Utc::now(),
+                sandboxed: false,
+            },
+            1000,
+        ) else {
+            unreachable!()
+        };
+        assert!(error.starts_with(&big[..1000]));
+        assert!(error.contains("2002 more bytes"), "{error}");
+        let Event::ChatMessageAppended { content, .. } = cap_step_output(
+            Event::ChatMessageAppended {
+                step_name: "s".into(),
+                session: "c".into(),
+                role: stepyard_core::ChatRole::Assistant,
+                content: big.clone(),
+                timestamp: chrono::Utc::now(),
+            },
+            1000,
+        ) else {
+            unreachable!()
+        };
+        assert!(content.starts_with(&big[..1000]));
+        assert!(content.contains("2002 more bytes"), "{content}");
         let other = Event::WorkflowStarted {
             timestamp: chrono::Utc::now(),
         };
