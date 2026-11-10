@@ -272,11 +272,24 @@ impl Context {
         // Build Tera instance and render
         let mut tera = stepyard_harness::template_engine();
         tera.add_raw_template("__tmpl__", &pre.template)
-            .map_err(|e| crate::error::StepError::Template(format!("{e}")))?;
+            .map_err(|e| crate::error::StepError::Template(tera_error_chain(&e)))?;
 
         tera.render("__tmpl__", &tera_ctx)
-            .map_err(|e| crate::error::StepError::Template(format!("{e}")))
+            .map_err(|e| crate::error::StepError::Template(tera_error_chain(&e)))
     }
+}
+
+/// Tera's top-level error is only "Failed to render '__tmpl__'"; the cause
+/// (a missing variable, a refused function) lives in the `source()` chain.
+pub(crate) fn tera_error_chain(err: &dyn std::error::Error) -> String {
+    let mut out = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        out.push_str(": ");
+        out.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    out
 }
 
 fn collect_steps_with_parsed(ctx: &Context, map: &mut HashMap<String, serde_json::Value>) {
@@ -368,6 +381,26 @@ mod tests {
         let child = Context::child(Arc::new(parent), None, 0);
         let out = child.get_step("parent_step").unwrap();
         assert_eq!(out.text(), "from parent");
+    }
+
+    #[test]
+    fn v1_templates_cannot_read_the_host_environment() {
+        // P1-3: the v1 renderer uses the same `template_engine()` as v2.
+        let ctx = Context::new("".to_string(), HashMap::new());
+        let err = ctx
+            .render_template(r#"{{ get_env(name="PATH") }}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("get_env is disabled"), "{err}");
+    }
+
+    #[test]
+    fn v1_templates_have_the_shell_quote_filter() {
+        let ctx = Context::new("1;id".to_string(), HashMap::new());
+        let out = ctx
+            .render_template("gh issue view {{ target | shell_quote }}")
+            .unwrap();
+        assert_eq!(out, "gh issue view '1;id'");
     }
 
     #[test]

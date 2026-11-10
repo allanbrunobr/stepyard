@@ -14,8 +14,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | # | Item P1 | Achados | Status | Commit |
 |---|---|---|---|---|
 | 1 | Reconciliação de partida só para sessões órfãs | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | `529b532` |
-| 2 | Slack `target` + filtro `shell_quote` nos workflows | SEG-RUST-02, SEG-RUST-07 | ✅ feito | (este) |
-| 3 | Tera sem `get_env` | SEG-RUST-04 | pendente | |
+| 2 | Slack `target` + filtro `shell_quote` nos workflows | SEG-RUST-02, SEG-RUST-07 | ✅ feito | `fb6c43f` |
+| 3 | Tera sem `get_env` | SEG-RUST-04 | ✅ feito | (este) |
 | 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | pendente | |
 | 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | pendente | |
 | 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | pendente | |
@@ -96,3 +96,20 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 **Não coberto.**
 - Workflows de terceiros continuam podendo interpolar sem filtro. O portão cobre só os workflows embutidos.
 - O `target` de `git diff {{ target | shell_quote }}...HEAD` ainda pode começar com `-` e ser lido como opção do git. Não há execução de comando arbitrário, e isso fica como higiene para P2.
+
+## 3. Tera sem `get_env` — ✅
+
+**Defeito.** O Tera 1.20.1 registra `get_env` incondicionalmente em `Tera::default()`, e os templates são renderizados no host, mesmo com sandbox. Assim, YAML de workflow, prompts do repositório analisado e `.stepyard/defaults.yaml` podiam ler qualquer variável do host (`{{ get_env(name="GH_TOKEN") }}`) e levá-la ao contêiner ou a um prompt enviado ao LLM.
+
+**Correção.**
+- `template_engine()` (a mesma fábrica do item 2, usada pelo v1 e pelo v2) sobrescreve `get_env` com uma função que sempre falha. A mensagem orienta a usar `--var KEY=VALUE`. Nenhum workflow nem documento do projeto usava `get_env` (conferido com `rg`).
+- Efeito colateral útil: no v1, os erros de template passaram a incluir a cadeia de causas do Tera (`tera_error_chain` em `src/engine/context.rs`). Antes, o usuário via só "Failed to render '__tmpl__'", sem saber o motivo. Isso valia para qualquer erro de template no v1, por exemplo variável inexistente.
+
+**Testes.**
+- v2 (`render.rs`): `get_env` com e sem `default` e via `{% set %}` falha com "get_env is disabled", e a mensagem não ecoa o valor de `PATH`.
+- v1 (`src/engine/context.rs`): `get_env` recusado; `shell_quote` disponível no v1 (`gh issue view '1;id'`).
+
+**Medido:**
+- **Mutante** (sem o `register_function`): os dois testes reprovam. Restaurado.
+- Os 348 testes da lib do engine passam, inclusive os que verificam texto de erro.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.139 passaram, 0 falharam, 13 ignorados**. Os testes da lib do engine contam duas vezes (lib e binário, achado TEST-05), por isso +5 para 3 testes novos.

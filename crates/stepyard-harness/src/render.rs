@@ -138,11 +138,26 @@ pub fn render(template: &str, ctx: &RenderContext<'_>) -> Result<String, RenderE
 /// single-quoted POSIX shell word, whatever the value contains.
 ///
 /// Autoescape is off: the output is shell or prompt text, never HTML.
+///
+/// Tera's built-in `get_env` is replaced by a function that always fails.
+/// Templates are rendered on the host even when steps run in a sandbox, and
+/// they come from workflow YAML, prompt files in the target repository and
+/// `.stepyard/defaults.yaml` — none of which may read the host environment
+/// (`{{ get_env(name="GH_TOKEN") }}` would hand the token to the container
+/// or to a prompt sent to an LLM). Workflows receive values through `vars`.
 pub fn template_engine() -> tera::Tera {
     let mut tera = tera::Tera::default();
     tera.autoescape_on(vec![]);
     tera.register_filter("shell_quote", shell_quote_filter);
+    tera.register_function("get_env", disabled_get_env);
     tera
+}
+
+fn disabled_get_env(_args: &HashMap<String, tera::Value>) -> tera::Result<tera::Value> {
+    Err(tera::Error::msg(
+        "get_env is disabled in Stepyard templates: templates must not read the host \
+         environment; pass values with --var KEY=VALUE instead",
+    ))
 }
 
 /// Tera filter behind `{{ value | shell_quote }}`. Strings, numbers and
@@ -237,6 +252,30 @@ mod tests {
             "'1;id'"
         );
         assert_eq!(render_scoped("{{ target | shell_quote }}", "", ""), "''");
+    }
+
+    #[test]
+    fn get_env_cannot_read_the_host_environment() {
+        // PATH is set in every test environment; before the fix this
+        // rendered its value.
+        let path = std::env::var("PATH").expect("PATH is set");
+        for template in [
+            r#"{{ get_env(name="PATH") }}"#,
+            r#"{{ get_env(name="PATH", default="x") }}"#,
+            r#"{% set p = get_env(name="PATH") %}{{ p }}"#,
+        ] {
+            let steps = HashMap::new();
+            let vars = HashMap::new();
+            let ctx = RenderContext {
+                steps: &steps,
+                target: "",
+                vars: &vars,
+                scope: None,
+            };
+            let err = render(template, &ctx).expect_err(template).to_string();
+            assert!(err.contains("get_env is disabled"), "{template}: {err}");
+            assert!(!err.contains(&path), "the error must not echo the value");
+        }
     }
 
     #[test]
