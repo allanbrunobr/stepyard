@@ -976,7 +976,9 @@ pub async fn execute(
         SandboxRuntime::Docker | SandboxRuntime::Podman => sandbox_mode,
     };
 
-    if effective_sandbox_mode != SandboxMode::Disabled {
+    // `--dry-run` only prints the plan: no container is created, so neither
+    // policy applies (it is v1-only, and refusing it left no dry-run at all).
+    if effective_sandbox_mode != SandboxMode::Disabled && !args.dry_run {
         // SEG-RUST-01 / BUG-MOTOR-04: the v1 Docker sandbox bind-mounts the
         // host working directory read-write at /workspace and runs
         // `chown -R` on it, so the container writes (and re-owns) the user's

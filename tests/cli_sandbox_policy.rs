@@ -135,3 +135,21 @@ fn project_volumes_pass_and_the_user_opt_in_lifts_the_refusal() {
         .failure() // the fake DOCKER_HOST stops it right after the policy
         .stderr(contains(VOLUME_REFUSAL).not());
 }
+
+/// `--dry-run` only prints the plan (it is v1-only); the v1 host-sandbox
+/// refusal used to block it, leaving no dry-run without `--no-sandbox`.
+#[test]
+fn v1_dry_run_is_not_refused_by_the_host_sandbox_policy() {
+    stepyard()
+        .args([
+            "execute",
+            "workflows/hello-world-cmd.yaml",
+            "--engine",
+            "v1",
+            "--dry-run",
+            "--sandbox-runtime",
+            "docker",
+        ])
+        .assert()
+        .stderr(contains(V1_REFUSAL).not());
+}

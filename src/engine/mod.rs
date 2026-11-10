@@ -164,8 +164,12 @@ impl Engine {
         options: EngineOptions,
     ) -> Self {
         let mut context = Context::new(target.clone(), vars.clone());
-        // Wrap --var parameters into an "args" object so templates can use {{ args.mode }}
+        // Wrap --var parameters into an "args" object so templates can use
+        // {{ args.mode }}, and expose the same object as `vars`, the name the
+        // v2 engine (and the docs) also accept: `{{ vars.BRANCH }}` used to fail
+        // on v1, which every dashboard dispatch runs.
         let args_obj: serde_json::Map<String, serde_json::Value> = vars.into_iter().collect();
+        context.insert_var("vars", serde_json::Value::Object(args_obj.clone()));
         context.insert_var("args", serde_json::Value::Object(args_obj));
         let config_manager = Arc::new(ConfigManager::new(workflow.config.clone()));
         // JSON mode implies quiet (no decorative output)

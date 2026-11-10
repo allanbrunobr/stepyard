@@ -238,7 +238,10 @@ workflowsRouter.get('/workflows/distinct', requireDashboardAuth, async (_req: Re
 
 // --- GET /workflows/:runId/logs/stream (SSE snapshots for remote CLI) ---
 
-const TERMINAL_STATUSES = new Set(['completed', 'success', 'failed', 'cancelled', 'canceled']);
+// `dispatch_failed`: the engine exited before reporting (see the dispatch
+// handler). Without it the log stream never sent `done` for such a run and
+// `stepyard remote logs` hung.
+export const TERMINAL_STATUSES = new Set(['completed', 'success', 'failed', 'cancelled', 'canceled', 'dispatch_failed']);
 const MAX_LOG_CHUNK_BYTES = 8192;
 
 interface WorkflowSnapshot {

@@ -194,13 +194,13 @@ stepyard execute code-review.yaml -- 42
 stepyard execute --no-sandbox basic-pipeline.yaml
 
 # Dry-run (prints tree, resolves config, no execution)
-stepyard execute --dry-run fix-issue.yaml -- 123
+stepyard execute --engine v1 --dry-run fix-issue.yaml -- 123
 
-# Resume after interruption
-stepyard execute --resume implement fix-issue.yaml -- 123
+# Resume after interruption (v1 only; with a container sandbox v1 also needs --repo)
+stepyard execute --engine v1 --no-sandbox --resume implement fix-issue.yaml -- 123
 
-# JSON output (for pipelines)
-stepyard execute --json code-review.yaml -- 42 | jq '.total_cost_usd'
+# JSON output for pipelines (v1 only)
+stepyard execute --engine v1 --no-sandbox --json code-review.yaml -- 42 | jq '.total_cost_usd'
 ```
 
 ## See also

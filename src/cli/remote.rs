@@ -37,7 +37,8 @@ pub enum RemoteCommand {
         #[arg(long)]
         repo: Option<String>,
 
-        /// Branch to check out inside the container. Forwarded as `--var BRANCH=<value>`.
+        /// Branch name for the workflow. Forwarded as `--var BRANCH=<value>`
+        /// (read it with `{{ args.BRANCH }}`); the engine does not check it out.
         #[arg(long)]
         branch: Option<String>,
 

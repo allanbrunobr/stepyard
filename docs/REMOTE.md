@@ -56,7 +56,9 @@ stepyard remote logs <run_id>
 ```
 
 The API runs every dispatch with `--engine v1`: only v1 clones `--repo` and
-reports to the dashboard. `--branch` reaches the workflow as `{{ vars.BRANCH }}`,
+reports to the dashboard. `--branch` reaches the workflow as `{{ args.BRANCH }}`
+(both engines; `{{ vars.BRANCH }}` also works) — the engine does not check the
+branch out, the workflow decides what to do with it —
 and `--var` keys must match `[A-Z_][A-Z0-9_]*` (checked by the client and by
 the API before anything is spawned). A run whose engine exits before reporting
 is marked `dispatch_failed`, with the path of its dispatch log.

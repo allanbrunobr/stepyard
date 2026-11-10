@@ -18,9 +18,9 @@ no partial state. Use `--no-sandbox` to run locally on the host instead.
 ```bash
 stepyard execute workflow.yaml -- <target>               # sandboxed by default (v2 engine)
 stepyard execute --no-sandbox workflow.yaml -- <target>  # run on host
-stepyard execute --repo OWNER/REPO workflow.yaml -- <target>  # clone repo inside the container
+stepyard execute --engine v1 --repo OWNER/REPO workflow.yaml -- <target>  # clone repo inside the container (v1 only)
 stepyard execute --sandbox-runtime podman workflow.yaml -- <target>  # use Podman instead of Docker
-stepyard execute --engine v1 workflow.yaml -- <target>   # legacy engine (deprecated)
+stepyard execute --engine v1 --no-sandbox workflow.yaml -- <target>  # legacy engine (deprecated) on the host
 ```
 
 The default engine is **v2** (`stepyard-harness` + `stepyard-sandbox-orchestrator`).
