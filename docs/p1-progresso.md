@@ -25,7 +25,7 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | ✅ feito | `584bbee` |
 | 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01 (parcial), BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | ✅ feito | `2ec8175` |
 | 1b | Complemento do item 1: lease no v1 e fase 2 só para sessões mortas conhecidas | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | `557b852` |
-| 2b/6b/10b | Complementos: `shell_quote` nos templates do `init` e na documentação; ressalvas de v1/despacho; teste de concorrência | SEG-RUST-07, ARQ-02, SEG-RUST-01 | ✅ feito | (este) |
+| 2b/6b/10b | Complementos: `shell_quote` nos templates do `init` e na documentação; ressalvas de v1/despacho; teste de concorrência | SEG-RUST-07, ARQ-02, SEG-RUST-01 | ✅ feito | `e188ee6` |
 
 ## Pendências que são do Allan (exigem conta, login, gasto ou segredo)
 
@@ -376,3 +376,52 @@ Uma revisão independente, feita depois dos 10 itens, encontrou três lacunas no
 **Ponto 5 da revisão (timeout do agent ligado no item 7):** confirmado na leitura de `crates/stepyard-harness/src/engine.rs` (ramo `TimedOut` do agent). Não há `destroy` antes de `finalise_fail`, então a cópia de volta acontece. Não houve teste com um agente real, porque isso exige conta.
 
 **Medido:** portões do CI todos com status 0. Suíte completa com banco: **1.182 passaram, 0 falharam, 16 ignorados**. Job SQLite: verde.
+
+---
+
+## Verificação final — `e188ee6` (último commit de código)
+
+Os mesmos comandos dos três jobs de `.github/workflows/check.yml`, com Postgres efêmero no M1, mais extras que o CI não roda. Status de saída real de cada passo, sem cano (`scratchpad/final.sh`).
+
+| Passo | Status |
+|---|---|
+| `cargo build --workspace --all-targets` | ✅ 0 |
+| `cargo fmt --all -- --check` | ✅ 0 |
+| `cargo test --workspace --no-fail-fast` com Postgres real | ✅ 0 — **1.182 passaram, 0 falharam, 16 ignorados** (linha de base: 1.125 / 0 / 13) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 |
+| `scripts/audit-patterns.sh` e `cargo xtask audit-emit-before-io` | ✅ 0 / ✅ 0 |
+| Job SQLite (check, `cli_lite_smoke`, testes e clippy do session) | ✅ 0 nos quatro |
+| Job TypeScript (`npm ci`, build da API, build do web, testes da API) | ✅ 0 nos quatro — **21 testes** (linha de base: 5) |
+| Extra: `clippy` e testes com `--features slack` (nunca compilada no CI) | ✅ 0 / ✅ 0 (5 testes) |
+| Extra: **todos os testes ignorados** (`STEPYARD_TEST_DOCKER=1 … -- --ignored`, Docker do M1 + Postgres) | ✅ 0 — **16/16**, incluindo os 3 novos do workspace v2. Ressalva: os 2 testes de "host filesystem untouched" passam trivialmente com daemon **remoto** e não contam como evidência |
+
+Nenhum arquivo ficou fora de commit, e nenhum contêiner `stepyard-session-*` sobrou no M1. O commit seguinte a este (`docs(p1)`) só altera este documento.
+
+## Resumo para o Allan
+
+### Mudanças de comportamento (o que pode surpreender quem já usa)
+
+1. **v2 agora aplica timeouts** em `cmd` (60 s por padrão) e `agent` (300 s com os defaults embutidos, via `config.global.timeout`), como o v1 sempre fez e como a `CONFIG.md` prometia. Workflow longo no v2 precisa declarar `timeout`.
+2. **`timeout: 30`** (número sem unidade) e `fail_on_error: "no"` passaram a ser erro de carga no v2, em vez de default silencioso.
+3. **O v2 recusa `--repo`, `--resume`, `--json` e `--dry-run`**, apontando `--engine v1`. `--timeout` (nos dois motores) e `--quiet` (no v2) geram aviso de que não têm efeito.
+4. **v1 com sandbox de contêiner só roda em modo `--repo`.** Num checkout local, use o v2 ou `--no-sandbox`. Isso afeta `fix-ci`/`fix-test` (só v1) e qualquer workflow com `stack`/`prompts`.
+5. **Mensagem do Slack sem URL de repositório** não roda mais com sandbox. Antes, rodava no diretório do próprio bot com bind mount e `chown`. **Despacho sem `repo`** só roda com o sandbox desligado no host do engine.
+6. **`sandbox.volumes` fora do diretório do projeto** é recusado nos dois motores, salvo `STEPYARD_ALLOW_WORKFLOW_MOUNTS=1`. Isso vale também para volumes vindos dos seus próprios defaults.
+7. **Templates não leem mais o ambiente** (`get_env` desativado). Passe valores com `--var`.
+8. **Despacho pelo dashboard e por `stepyard remote` roda `--engine v1`**, manda `--var BRANCH=` e recusa chave de `--var` fora de `[A-Z_][A-Z0-9_]*`.
+9. **A reconciliação de partida não destrói mais** contêiner de sessão viva nem contêiner de UUID que o banco não conhece.
+
+### Pendências que são suas
+
+- **Rotacionar `GH_TOKEN`, `ANTHROPIC_API_KEY` e a senha do banco** de qualquer ambiente onde o despacho SSH rodou. Os valores estão nos logs do contêiner da API (item 4).
+- **`AUTO_VOLUMES` do v1 em modo `--repo`** (`~/.claude` rw, `~/.ssh` ro): decidir e testar com a sua conta (item 10).
+- **Atualizar cópias implantadas dos workflows** (`STEPYARD_WORKFLOWS_DIR` da API, diretório de workflows do bot do Slack, `~/.stepyard/workflows`). Elas continuam com o YAML antigo, sem `shell_quote`, até serem trocadas.
+- **Imagem `stepyard-sandbox:latest` no M1**, construída por mim durante um mutante do item 6. Manter ou remover fica a seu critério.
+
+### O que não foi medido
+
+- `ssh` real até um host remoto: o protocolo do despacho foi testado executando localmente o comando remoto, com o mesmo stdin.
+- Um agente Claude real (exige conta). O ramo de timeout do agent foi verificado só por leitura.
+- Os testes Docker continuam fora do CI (TEST-02, P2). Rodei todos aqui, contra o Docker do M1.
+- Queda da conexão que segura o lease no meio de uma execução (P2).
+- CVEs de dependências Rust (`cargo audit` não instalado). As vulnerabilidades do npm não foram tratadas, porque estão no P2.
