@@ -25,7 +25,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 8 | Integridade dos testes: testes de binário que nunca rodavam; mock que confundia `destroy` e `destroy_by_session` | TEST-04, TEST-01 (TEST-02/03/13, MANUT-05 dependem de `.github/`) | ✅ feito | `1d70483`, `8c28951` |
 | 8b | A suíte de testes registrava worktrees no repositório do desenvolvedor | achado novo | ✅ feito | `54b9af9` |
 | 9 | Dependências npm vulneráveis, sem troca de major (18 → 7) | SEG-TS-12 (majors pendentes) | ✅ feito | `8f0d7b4` |
-| 10 | Bot do Slack: reenvios deduplicados, limite de execuções, resposta dentro do prazo | BUG-CLI-09 | ✅ feito | (este) |
+| 10 | Bot do Slack: reenvios deduplicados, limite de execuções, resposta dentro do prazo | BUG-CLI-09 | ✅ feito | `faa30da` |
+| 11 | Documentação que prometia o que o código não faz (+ tabela do YAML-SPEC que eu tinha quebrado) | ARQ-05, MANUT-03 | ✅ feito | (este) |
 
 ---
 
@@ -266,3 +267,16 @@ Os lockfiles obsoletos de `packages/api` e `packages/web` (SEG-TS-13) e a falta 
 - Testes do Slack: 6/6. `clippy --features slack -D warnings`: status 0. Portões do CI: todos com status 0. O código só compila com `--features slack`, que o CI não compila (MANUT-05), então o build padrão não mudou.
 
 **Não coberto.** Não houve teste do handler HTTP com uma requisição assinada de verdade: o semáforo e o post em tarefa foram verificados por leitura e compilação.
+
+## 11. Documentação que prometia o que o código não faz — ✅
+
+**Defeitos (ARQ-05, MANUT-03).**
+- `ARCHITECTURE.md` dizia que o v2 se recupera de crash ("a new process replays the log and continues"). A CLI não tem comando de retomada; só a biblioteca expõe `Engine::resume_existing`. Um `execute` posterior marca a sessão órfã como `failed`.
+- O mesmo documento descrevia a reconciliação sem o lease e sem a regra de contêineres da P1.
+- `YAML-SPEC.md` e `STEP-TYPES.md` apresentavam `output_type`, `async_exec`, `{{ steps.X.output }}`, `{{ X.output }}`, `from()` e `{{ stack.* }}` como gerais, mas só o v1 os implementa. O adaptador do v2 os descarta em silêncio (ARQ-06).
+
+**Erro meu corrigido no mesmo commit.** O parágrafo sobre `shell_quote` que escrevi no complemento da P1 (`e188ee6`, que já está no PR #1) entrou **no meio** da tabela de variáveis do `YAML-SPEC.md`, deixando a linha `{{ stack.* }}` solta depois do parágrafo. A tabela voltou a ser contínua; conferido por script: 13 linhas e nenhuma linha de tabela fora dela.
+
+**Correção:** `ARCHITECTURE.md` (tabela de motores, descrição do `Engine::step` e do `startup.rs`), `YAML-SPEC.md` (campos e variáveis marcados como **v1 only**) e `STEP-TYPES.md` (introdução e seção de `async_exec`).
+
+**Medido:** o portão da documentação (`documentation_examples_shell_quote_run_commands`) segue verde, e a tabela foi conferida por script. Só documentação mudou.

@@ -25,8 +25,8 @@ steps:
     # ... type-specific fields below
     config:                  # optional — step-inline overrides (Layer 4, see CONFIG.md)
       key: value
-    output_type: text | json | integer | lines | boolean  # optional — parses output for template access
-    async_exec: true | false # optional — run concurrently, await later (see STEP-TYPES.md#async)
+    output_type: text | json | integer | lines | boolean  # optional, v1 only — parses output for template access
+    async_exec: true | false # optional, v1 only — run concurrently, await later (see STEP-TYPES.md#async)
 ```
 
 ### Type-specific fields
@@ -74,11 +74,12 @@ Available in any rendered string (`run`, `prompt`, `condition`, `message`, `item
 | `{{ steps.<name>.stdout / stderr / exit_code }}` | Step outputs (cmd)                                |
 | `{{ steps.<name>.response }}`         | Agent/chat response text                                     |
 | `{{ steps.<name>.session_id }}`       | Captured Claude CLI session id (agent steps)                 |
-| `{{ steps.<name>.output }}`           | Parsed output (see `output_type:`)                           |
-| `{{ <name>.output }}`                 | Shorthand — top-level access to any step                     |
-| `{{ from("<name>").output }}`         | Alternate accessor (useful for names with dashes)            |
+| `{{ steps.<name>.output }}`           | Parsed output (see `output_type:`) — **v1 only**             |
+| `{{ <name>.output }}`                 | Shorthand — top-level access to any step — **v1 only**       |
+| `{{ from("<name>").output }}`         | Alternate accessor (useful for names with dashes) — **v1 only** |
 | `{{ session_id }}`                    | First captured Claude session for the workflow run           |
 | `{{ scope.value }} / scope.index`     | Inside repeat/map/call scopes                                |
+| `{{ stack.* }}`                       | Detected stack info when `prompts/registry.yaml` exists — **v1 only** |
 
 **Quoting in `run:` commands.** `cmd` steps run with `sh -c`, so a value that
 comes from outside the workflow (the target, file names from the repository,
@@ -87,8 +88,6 @@ previous step output, LLM responses) must be quoted where it is interpolated:
 value contains. Do not wrap it in more quotes: write `cat -- {{ scope.value |
 shell_quote }}`, not `cat "{{ scope.value | shell_quote }}"`. Tera's
 `get_env` is disabled in Stepyard templates; pass values with `--var KEY=VALUE`.
-
-| `{{ stack.* }}`                       | Detected stack info when `prompts/registry.yaml` exists      |
 
 ### Template operators
 

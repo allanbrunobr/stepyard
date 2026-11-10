@@ -1,7 +1,8 @@
 # Step Types
 
 Each step has `type:` — one of the ten values below. Shared fields (`name`,
-`config`, `output_type`, `async_exec`) are documented in `YAML-SPEC.md`.
+`config`, `output_type`, `async_exec`) are documented in `YAML-SPEC.md`;
+`output_type` and `async_exec` only take effect with `--engine v1`.
 
 ## `cmd` — shell command
 
@@ -186,6 +187,9 @@ value. Useful for light data shaping between steps without spawning a shell.
 **Outputs:** the evaluated Rhai value (coerced to JSON).
 
 ## Async execution (`async_exec`)
+
+**v1 only.** The v2 engine (the default) ignores `async_exec` and runs the step
+in order; use `--engine v1` for this.
 
 Any step can declare `async_exec: true` — it launches in the background and its
 output is awaited when first referenced (lazily) or at workflow completion.

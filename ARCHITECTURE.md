@@ -24,7 +24,7 @@ There are two engines in the same binary:
 |---|---|---|
 | Code | `src/engine/`, `src/steps/` | `crates/stepyard-harness/` |
 | State | In memory | Append-only session log, replayed on every step |
-| Crash recovery | No | Yes: a new process replays the log and continues |
+| Crash recovery | No | The log survives a crash and can be replayed (`Engine::resume_existing` in the library), but the CLI has no resume command: a later `stepyard execute` marks a session whose owner is gone as `failed` and starts a new one |
 | Sandbox | Copies the project into the container and copies results back | Copies the project into the session container. `cmd` and `agent` run there; changes are copied back. `chat` stays on the host |
 | Features | All | Same YAML; a few features are still v1-only (README, "Known limitations of v2") |
 
@@ -70,7 +70,9 @@ each session to `.stepyard/logs/<session_id>.jsonl` unless disabled.
 
 The v2 engine. `Engine::step()` runs exactly one top-level step: it replays
 the log, works out the next step, runs it, and appends the result. A crash
-between steps loses nothing, because the next process starts from the log.
+between steps loses nothing that was recorded: the log holds every completed
+step, and a library caller can continue from it (`Engine::resume_existing`).
+The CLI does not do that today; it always starts a new session.
 
 - `executor.rs`, `agent_exec.rs`, `chat_exec.rs`, `script_exec.rs`,
   `template_exec.rs`: one executor per step type.
@@ -78,8 +80,10 @@ between steps loses nothing, because the next process starts from the log.
   event so progress is tracked per iteration.
 - `render.rs`: Tera templates (`{{ steps.x.stdout }}`, `{{ target }}`,
   `{{ vars.* }}`).
-- `startup.rs`: on start, marks sessions left `running` by a dead process and
-  removes orphaned `stepyard-session-<uuid>` containers.
+- `startup.rs`: on start, marks sessions left `running` by a dead process as
+  `failed` (the owner holds a PostgreSQL advisory lock while it runs, so live
+  sessions are skipped) and removes the `stepyard-session-<uuid>` containers
+  of sessions this database knows are over.
 - `process_group.rs`: child processes run in their own process group so a
   timeout or Ctrl-C kills the whole tree.
 
