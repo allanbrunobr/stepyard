@@ -26,7 +26,7 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 8b | A suíte de testes registrava worktrees no repositório do desenvolvedor | achado novo | ✅ feito | `54b9af9` |
 | 9 | Dependências npm vulneráveis, sem troca de major (18 → 7) | SEG-TS-12 (majors pendentes) | ✅ feito | `8f0d7b4` |
 | 10 | Bot do Slack: reenvios deduplicados, limite de execuções, resposta dentro do prazo | BUG-CLI-09 | ✅ feito | `faa30da` |
-| 11 | Documentação que prometia o que o código não faz (+ tabela do YAML-SPEC que eu tinha quebrado) | ARQ-05, MANUT-03 | ✅ feito | (este) |
+| 11 | Documentação que prometia o que o código não faz (+ tabela do YAML-SPEC que eu tinha quebrado) | ARQ-05, MANUT-03 | ✅ feito | `437dcf3` |
 
 ---
 
@@ -280,3 +280,34 @@ Os lockfiles obsoletos de `packages/api` e `packages/web` (SEG-TS-13) e a falta 
 **Correção:** `ARCHITECTURE.md` (tabela de motores, descrição do `Engine::step` e do `startup.rs`), `YAML-SPEC.md` (campos e variáveis marcados como **v1 only**) e `STEP-TYPES.md` (introdução e seção de `async_exec`).
 
 **Medido:** o portão da documentação (`documentation_examples_shell_quote_run_commands`) segue verde, e a tabela foi conferida por script. Só documentação mudou.
+
+---
+
+## Verificação final da branch — `437dcf3`
+
+Os mesmos comandos dos três jobs de `.github/workflows/check.yml`, com Postgres efêmero no M1, mais extras. Status de saída real de cada passo, sem cano.
+
+| Passo | Status |
+|---|---|
+| build, fmt, clippy `-D warnings`, `audit-patterns.sh`, xtask G4 | ✅ 0 em todos |
+| `cargo test --workspace` com Postgres real | ✅ 0 — **1.199 passaram, 0 falharam, 18 ignorados** (P1 terminou com 1.182) |
+| Job SQLite (check, smoke, session, clippy) | ✅ 0 nos quatro |
+| Job TypeScript (`npm ci`, builds, testes da API) | ✅ 0 — **28 testes** (P1 terminou com 21) |
+| Extra: clippy e testes com `--features slack` | ✅ 0 / ✅ 0 |
+| Extra: **todos os testes ignorados** com Docker real (M1) | ✅ 0 — **18/18** |
+| Worktrees registradas pela rodada inteira | **+0** (antes do item 8b, de 9 a 10 por rodada) |
+
+## O que ficou pendente na P2
+
+- **Decisão do Allan:**
+  - limpar as **230 worktrees** registradas pelas rodadas de teste desta sessão (comando no item 8b);
+  - a imagem `stepyard-sandbox:latest` voltou a existir no M1 (item 2);
+  - SEG-TS-05 (um segredo único para telemetria, despacho e login);
+  - subscriber do dashboard mandando `DASHBOARD_API_SECRET` para a URL definida no YAML (resto do SEG-RUST-05).
+- **Depende de `.github/` (fora do escopo desta sessão):** fixar actions por SHA e `permissions:` (SEG-TS-10), release com gate de testes e assinatura (SEG-TS-11), `npm audit`/`cargo audit` no CI, job com Docker (TEST-02), `--features slack` no CI (MANUT-05), atalho docs-only (TEST-13) e `STEPYARD_REQUIRE_DB=1` para os testes de banco (TEST-03).
+- **Exige ambiente que não tenho aqui:** proxy da API inalcançável no Docker Engine do Linux (BUG-MOTOR-02/15). O M1 é Docker Desktop, onde o `host-gateway` alcança o loopback do host, então a falha não é reproduzível. Também o cookie `Secure` atrás do proxy real (SEG-TS-08).
+- **Trabalho maior, ainda não feito:**
+  - BUG-CLI-08: evento `WorkflowFailed` no núcleo, para o dashboard não mostrar `success` em run reprovado;
+  - compose de produção separado (SEG-TS-04);
+  - testes de rota da API (TEST-10) e contrato do store SQLite (TEST-11);
+  - majors do `vite`, do `vitest` e do `node-cron`.
