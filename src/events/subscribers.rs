@@ -95,10 +95,17 @@ struct TrackedStep {
     step_name: String,
     step_type: String,
     status: String,
+    // ARQ-03: absent, not `null`. The API schema (zod `.optional()`) used to
+    // reject `null`, so every run with a cmd step (no tokens) or a passing
+    // step (no error) was refused with 400 and never reached the dashboard.
+    #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tokens_in: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tokens_out: Option<u64>,
     sandboxed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
@@ -191,7 +198,9 @@ impl DashboardSubscriber {
             "status": status,
             "duration_ms": duration_ms,
             "total_tokens": total_tokens,
-            "started_at": state.started_at.map(|t| t.to_rfc3339()),
+            // `started_at` is required by the API: fall back to the finish
+            // time if WorkflowStarted was never observed.
+            "started_at": state.started_at.unwrap_or(finished_at).to_rfc3339(),
             "finished_at": finished_at.to_rfc3339(),
             "event_version": 1,
             "steps": state.steps,
@@ -474,7 +483,9 @@ impl DashboardSubscriber {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_encode, dashboard_artifacts_url};
+    use super::{
+        base64_encode, dashboard_artifacts_url, DashboardSubscriber, Event, EventSubscriber,
+    };
 
     #[test]
     fn derives_artifact_url_from_events_endpoint() {
@@ -495,5 +506,73 @@ mod tests {
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"hello world"), "aGVsbG8gd29ybGQ=");
+    }
+
+    /// ARQ-03 (analysis 2026-11-09) — contract golden test. The JSON this
+    /// subscriber sends for a run with a cmd step (no tokens) and a failed
+    /// agent step must equal `tests/fixtures/dashboard-event.json`, which the
+    /// API test `packages/api/src/routes/events-contract.test.ts` validates
+    /// against its zod schema. Regenerate with `UPDATE_FIXTURES=1`.
+    #[test]
+    fn dashboard_payload_matches_the_shared_contract_fixture() {
+        use chrono::TimeZone;
+        let t0 = chrono::Utc
+            .with_ymd_and_hms(2026, 11, 10, 12, 0, 0)
+            .unwrap();
+        let t1 = chrono::Utc
+            .with_ymd_and_hms(2026, 11, 10, 12, 0, 7)
+            .unwrap();
+        let mut sub = DashboardSubscriber::new(
+            "http://127.0.0.1:1/api/events",
+            None,
+            "contract",
+            "42",
+            Some("acme/app".into()),
+            "dev",
+            "Disabled",
+            Vec::new(),
+        );
+        sub.run_id = "6f1c2f43-2f43-4c2f-8f43-2f432f432f43".into();
+        sub.dispatch_log_path = None;
+        sub.on_event(&Event::WorkflowStarted { timestamp: t0 });
+        sub.on_event(&Event::StepCompleted {
+            step_name: "lint".into(),
+            step_type: "cmd".into(),
+            duration_ms: 1200,
+            timestamp: t0,
+            input_tokens: None,
+            output_tokens: None,
+            cost_usd: None,
+            sandboxed: false,
+            output: None,
+            scope_context: None,
+            gate_outcome: None,
+            agent_session_id: None,
+        });
+        sub.on_event(&Event::StepFailed {
+            step_name: "fix".into(),
+            step_type: "agent".into(),
+            error: "exit 1".into(),
+            duration_ms: 3400,
+            timestamp: t1,
+            sandboxed: true,
+        });
+        let payload = sub.build_payload(7000, t1);
+        let rendered = serde_json::to_string_pretty(&payload).unwrap() + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/dashboard-event.json");
+        if std::env::var("UPDATE_FIXTURES").as_deref() == Ok("1") {
+            std::fs::write(&path, &rendered).unwrap();
+        }
+        let expected =
+            std::fs::read_to_string(&path).expect("fixture (UPDATE_FIXTURES=1 creates it)");
+        assert_eq!(
+            rendered, expected,
+            "payload drifted from the shared contract fixture"
+        );
+        assert!(
+            !rendered.contains("null"),
+            "no null may reach the API: {rendered}"
+        );
     }
 }

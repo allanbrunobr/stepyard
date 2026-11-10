@@ -1,0 +1,30 @@
+{
+  "duration_ms": 7000,
+  "event_version": 1,
+  "finished_at": "2026-11-10T12:00:07+00:00",
+  "repo": "acme/app",
+  "run_id": "6f1c2f43-2f43-4c2f-8f43-2f432f432f43",
+  "started_at": "2026-11-10T12:00:00+00:00",
+  "status": "failed",
+  "steps": [
+    {
+      "duration_ms": 1200,
+      "sandboxed": false,
+      "status": "success",
+      "step_name": "lint",
+      "step_type": "cmd"
+    },
+    {
+      "duration_ms": 3400,
+      "error": "exit 1",
+      "sandboxed": true,
+      "status": "failed",
+      "step_name": "fix",
+      "step_type": "agent"
+    }
+  ],
+  "target": "42",
+  "total_tokens": 0,
+  "user_name": "dev",
+  "workflow": "contract"
+}

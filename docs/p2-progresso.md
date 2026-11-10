@@ -17,7 +17,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 0 | Contradições do pré-PR do #1 e o dry-run do v1 | checagem pré-PR; regressão do P1-10 | ✅ feito | `d5dfeda` |
 | 1 | Segredos do host fora do alcance do YAML (`${VAR}`, `base_url` do chat, env no argv) | SEG-RUST-05 (parcial), SEG-RUST-12 | ✅ feito | `882c323` |
 | 2 | Aviso quando o build roda no host por padrão; contêiner de sessão endurecido | SEG-RUST-06, SEG-RUST-15 | ✅ feito | `be5f483` |
-| 3 | Perdas de trabalho: diretório por execução no `--repo` do v1, commits feitos no contêiner, sessão presa após conflito de merge | BUG-MOTOR-03, BUG-MOTOR-01, BUG-HARNESS-06 | ✅ feito | (este) |
+| 3 | Perdas de trabalho: diretório por execução no `--repo` do v1, commits feitos no contêiner, sessão presa após conflito de merge | BUG-MOTOR-03, BUG-MOTOR-01, BUG-HARNESS-06 | ✅ feito | `029fef2` |
+| 4 | Contrato de eventos do dashboard (`null` recusado pela API; fixture compartilhado) | ARQ-03 (BUG-CLI-08 pendente) | ✅ feito | (este) |
 
 ---
 
@@ -113,3 +114,22 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 - Portões do CI: todos com status 0. Suíte completa com banco: **1.192 passaram, 0 falharam, 18 ignorados** (+1 teste Docker). Job SQLite: verde.
 
 **Não coberto.** O modo `--repo` do v1 não foi exercitado de ponta a ponta, porque exigiria clonar um repositório real do GitHub dentro do Docker, com rede e conta. Só a criação do diretório foi testada.
+
+## 4. Contrato de eventos do dashboard — ✅ (parcial)
+
+**Defeito (ARQ-03), medido.** O subscriber do dashboard do v1 serializava `tokens_in`, `tokens_out` e `error` como `null`. O schema da API (`StepSchema`, Zod 4 `.optional()`) **recusa** `null`. Medido com um teste de contrato contra o schema real, ele devolveu `expected number, received null` para `steps.0.tokens_in`/`tokens_out` e `expected string, received null` para `steps.0.error`. Isso vale para todo passo `cmd`, que não tem tokens, e para todo passo bem-sucedido, que não tem erro. Ou seja, a ingestão do run inteiro era rejeitada com 400, e o dashboard ficava sem os runs do v1 (o motor de todo despacho e do Slack). Os dois lados tinham o contrato digitado à mão.
+
+**Correção.**
+- **Rust** (`src/events/subscribers.rs`): os campos `Option` de `TrackedStep` são omitidos quando ausentes (`skip_serializing_if`), e `started_at`, exigido pela API, nunca sai nulo: usa o horário de término como fallback.
+- **API** (`routes/events.ts`): os campos opcionais do evento e dos passos aceitam `null` (`.nullish()`), para os CLIs antigos já instalados.
+- **Contrato compartilhado:** `tests/fixtures/dashboard-event.json` é o payload que o Rust **de fato** serializa para um run com um passo `cmd` sem tokens e um passo `agent` que falhou.
+  - O teste golden do Rust (`dashboard_payload_matches_the_shared_contract_fixture`) exige igualdade com o fixture (regenera com `UPDATE_FIXTURES=1`) e ausência de `null`.
+  - O teste da API (`events-contract.test.ts`) valida o mesmo arquivo contra o `EventSchema`.
+  - Se um dos lados derivar, um dos testes reprova.
+
+**Medido:**
+- O teste de contrato da API **reprovou no código antigo**, e o teste com `null` reprovou com os três erros acima. No novo, os dois passam.
+- **Mutante** no Rust (`tokens_in` volta a sair como `null`): o teste golden reprova. Restaurado.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.194 passaram, 0 falharam, 18 ignorados**. Job SQLite: verde. Job TypeScript: verde (**24 testes**).
+
+**Não coberto: BUG-CLI-08.** O v1 emite `WorkflowCompleted` **sempre**, até quando o run falha (por exemplo num gate), e o núcleo não tem evento `WorkflowFailed`. O status enviado ao dashboard sai dos passos ("failed" só se algum passo falhou), então um run reprovado por gate aparece como `success`. Corrigir exige uma variante nova no contrato de eventos do núcleo (`stepyard-core`), que atravessa os dois motores, e fica registrado. O POST "dispara e esquece", com espera fixa de 500 ms, também continua (BUG-CLI-14).

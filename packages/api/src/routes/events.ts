@@ -9,33 +9,33 @@ export const eventsRouter = forwardAsyncErrors(Router());
 
 const StepSchema = z.object({
   step_name: z.string(),
-  step_type: z.string().optional(),
+  step_type: z.string().nullish(),
   status: z.string(),
-  duration_ms: z.number().int().optional(),
-  tokens_in: z.number().int().optional(),
-  tokens_out: z.number().int().optional(),
-  sandboxed: z.boolean().optional(),
-  error: z.string().optional(),
+  duration_ms: z.number().int().nullish(),
+  tokens_in: z.number().int().nullish(),
+  tokens_out: z.number().int().nullish(),
+  sandboxed: z.boolean().nullish(),
+  error: z.string().nullish(),
 });
 
 export const EventSchema = z.object({
   run_id: z.string().uuid(),
   user_name: z.string().min(1),
   workflow: z.string().min(1),
-  target: z.string().optional(),
-  repo: z.string().optional(),
+  target: z.string().nullish(),
+  repo: z.string().nullish(),
   status: z.string().min(1),
-  duration_ms: z.number().int().optional(),
-  total_tokens: z.number().int().optional(),
-  cost_usd: z.number().optional(),
+  duration_ms: z.number().int().nullish(),
+  total_tokens: z.number().int().nullish(),
+  cost_usd: z.number().nullish(),
   started_at: z.string(),
-  finished_at: z.string().optional(),
-  error: z.string().optional(),
+  finished_at: z.string().nullish(),
+  error: z.string().nullish(),
   // dispatch_log_path is NOT accepted here: only the dispatch handler may
   // set it (it is later opened and streamed back). Unknown keys are
   // stripped by zod, so older CLIs that still send it keep working.
   event_version: z.number().int().min(1).default(1),
-  steps: z.array(StepSchema).optional(),
+  steps: z.array(StepSchema).nullish(),
 });
 
 function authenticate(req: Request, res: Response): boolean {
