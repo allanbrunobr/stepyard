@@ -37,6 +37,11 @@ npm run test  --workspace @stepyard/api
 CI (`.github/workflows/check.yml`) runs these commands. Run them before you
 open a pull request.
 
+The minimum supported Rust version is **1.88** (`rust-version` in
+`Cargo.toml`). The locked dependencies set it (`home` 0.5.12 needs 1.88),
+not our own code. CI builds only with stable, so after a `cargo update`
+re-check it with `cargo +1.88 check --locked --workspace --all-targets`.
+
 ### Tests with external services
 
 Some tests need a service. They skip when the service is not configured:

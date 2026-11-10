@@ -25,14 +25,12 @@ default-members = [
     "crates/stepyard-harness",
 ]
 
-# Story 1.3 — force consumers of `#[non_exhaustive]` enums across the
-# workspace (most importantly `Event`, `EngineError`, `TerminationReason`
-# in stepyard-core) to handle every variant explicitly. The lint only
-# fires when a match lists all current variants without a wildcard and
-# misses one that was added later; that's exactly the silent-breakage
-# case we want to catch.
+# Workspace lint table; every crate opts in with `[lints] workspace = true`.
+# `non_exhaustive_omitted_patterns` was configured here, but it is unstable
+# (rust-lang/rust#89554): stable rustc ignores it with an "unknown lint"
+# warning, and nightly needs a crate-level feature gate that no crate sets,
+# so it never checked anything. Add lints here only if stable rustc enforces them.
 [workspace.lints.rust]
-non_exhaustive_omitted_patterns = "deny"
 
 [lints]
 workspace = true
@@ -41,12 +39,11 @@ workspace = true
 name = "stepyard-engine"
 version = "0.7.6"
 edition = "2021"
-# Story 1.3 AC: workspace pins ≥1.74. `non_exhaustive_omitted_patterns`
-# itself remains unstable on stable Rust (rust-lang/rust#89554) and only
-# actively fires on nightly; on stable it's a no-op the compiler logs as
-# an unknown-lint warning. MSRV is 1.82 because the existing codebase
-# uses `Option::is_none_or` (stable since 1.82).
-rust-version = "1.82"
+# MSRV is set by the locked dependency graph, not by our own code:
+# `home` 0.5.12 (pulled in by sqlx-postgres) requires rustc 1.88.
+# `cargo check --locked --workspace --all-targets` passes on 1.88 and is
+# refused on 1.87. Re-check after `cargo update`; nothing in CI enforces it.
+rust-version = "1.88"
 description = "AI workflow engine that orchestrates Claude Code CLI — automate code review, refactoring, and PR creation with YAML workflows"
 license = "MIT"
 repository = "https://github.com/allanbrunobr/stepyard"

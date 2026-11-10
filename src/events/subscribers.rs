@@ -332,23 +332,17 @@ impl EventSubscriber for DashboardSubscriber {
                 state.send_handle = Some(handle);
             }
             Event::StepTimeoutFired { .. } => {
-                // Story 1.3: handled explicitly so the workspace
-                // `non_exhaustive_omitted_patterns` lint has a real
-                // opportunity to fire if a future variant is missed.
                 // Dashboard payload is emitted by the subsequent
                 // StepFailed event, so nothing to accumulate here.
             }
             Event::IdleTimeoutFired { .. } => {
-                // Story 5.1: handled explicitly for the same reason as
-                // StepTimeoutFired. Dashboard payload remains driven by the
-                // subsequent StepFailed event.
+                // Dashboard payload remains driven by the subsequent
+                // StepFailed event.
             }
             Event::SignalReceived { .. } => {
-                // Story 2.3: signals surface as a subsequent StepFailed event
-                // carrying TerminationReason::SignalReceived — so the
-                // dashboard payload is built from that, not here. Matched
-                // explicitly so `non_exhaustive_omitted_patterns` fires if a
-                // future variant is forgotten.
+                // Signals surface as a subsequent StepFailed event carrying
+                // TerminationReason::SignalReceived — so the dashboard
+                // payload is built from that, not here.
             }
             Event::CompletionSignaled { .. } => {
                 // Story 5.5: the completion signal is an audit/control-flow

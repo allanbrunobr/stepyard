@@ -21,7 +21,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | 2 | Portões de auditoria que falhavam abertos (G4 do xtask; G1/G2 sem prefixo; autoteste dos portões) | BUG-CLI-15, TEST-08, TEST-06 (TEST-07/SEG-RUST-13 parcial) | ✅ feito | `eb95d08` |
 | 3 | Saída de passo limitada no log de sessão (1 MiB por stream, configurável) | BUG-HARNESS-08 (BUG-HARNESS-03 pendente) | ✅ feito | `a913232` |
 | 4 | `SessionId` no crate de contrato; o orquestrador deixa de depender do crate de sessão | ARQ-10 (ARQ-09 pendente) | ✅ feito | `78dc9e5` |
-| 5 | Higiene: pool de banco morto da API; `allow(dead_code)` que não suprimiam nada | MANUT-16, MANUT-09 (parcial) | ✅ feito | (este) |
+| 5 | Higiene: pool de banco morto da API; `allow(dead_code)` que não suprimiam nada | MANUT-16, MANUT-09 (parcial) | ✅ feito | `1e23944` |
+| 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI pendente) | ✅ feito | (este) |
 
 ---
 
@@ -137,6 +138,33 @@ Resultado: **24 linhas removidas em 15 arquivos Rust**.
 - Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
 
 Não há mutante: a mudança não altera comportamento. A prova é a compilação sem aviso nos três perfis e a suíte verde.
+
+## 6. MSRV declarada e lint que não verificava nada — ✅ (parcial)
+
+**Defeito (MANUT-08).**
+- O `Cargo.toml` declarava `rust-version = "1.82"`, mas o grafo travado no `Cargo.lock` exige mais.
+- O `deny` de `non_exhaustive_omitted_patterns` era um lint instável. No stable, o compilador o ignora com um aviso "unknown lint" repetido em cada crate e alvo. No nightly, ele também precisaria de `#![feature(non_exhaustive_omitted_patterns_lint)]` no crate, e nenhum crate declara isso. Então não verificava nada em toolchain nenhuma.
+
+**Medido antes de mudar.**
+- Varredura estática do `rust-version` de todo pacote do registry no lock: o maior é o do **`home` 0.5.12, que pede 1.88** e entra no grafo normal pelo `sqlx-postgres`. O relatório falava em 1.85; não tinha visto esse crate.
+- A prova veio de compilação real em Linux, no M1, em contêineres descartáveis (`docker run --rm rust:<versão>`, com o fonte copiado para dentro), rodando `cargo check --locked --workspace --all-targets`:
+  - **`rust:1.87`: recusado**, com `home@0.5.12 requires rustc 1.88` como único motivo;
+  - **`rust:1.88`: compila**.
+- Um `cargo check` completo local (rustc 1.98) imprimia **65 linhas de aviso**, todas desse lint e nenhuma de outra origem.
+
+**Correção.**
+- `rust-version = "1.88"`, com um comentário que diz de onde vem o número e como reverificar.
+- O lint saiu da tabela `[workspace.lints.rust]`. **Não** usei `unknown_lints = "allow"`, que esconderia erros de digitação em nomes de lint.
+- Três comentários em `src/events/subscribers.rs` diziam que o lint "dispararia" se um variante novo faltasse. Agora descrevem só o comportamento do braço.
+- A CONTRIBUTING passou a citar a MSRV e o comando para reverificá-la depois de um `cargo update`.
+
+**Medido depois:**
+- `cargo check` completo local: **0** avisos.
+- Árvore de trabalho no contêiner `rust:1.88`: compila, com 0 avisos. A primeira tentativa falhou por um artefato **meu**: o `tar` do macOS levou arquivos AppleDouble `._*.sql` e o `sqlx::migrate!` tentou lê-los. Com `COPYFILE_DISABLE=1`, passou.
+- Portões do CI e clippy `--features slack`: todos com status 0.
+- Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
+
+**Não coberto.** Não existe job de MSRV no CI, porque criá-lo exige mexer em `.github/`. A MSRV volta a ficar falsa no primeiro `cargo update` que puxar um crate mais novo. O passo do CI seria `dtolnay/rust-toolchain@1.88` mais `cargo check --locked --workspace --all-targets`. Também fica para depois a medição de cobertura com piso (TEST-15), pelo mesmo motivo.
 
 ## Fora do escopo dos itens: limpeza de worktrees (pedida à parte)
 
