@@ -63,6 +63,35 @@ fn validate_v2_refuses_v1_only_template_namespaces() {
         .success();
 }
 
+/// The YAML-SPEC "Full example" uses v1-only `{{ steps.X.output }}`; the
+/// spec says so, and `validate` must agree on both engines.
+#[test]
+fn the_yaml_spec_full_example_is_v1_only() {
+    let spec = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/YAML-SPEC.md"),
+    )
+    .unwrap();
+    let section = spec
+        .split("## Full example with all top-level fields")
+        .nth(1)
+        .expect("full example section");
+    let yaml = section
+        .split("```yaml\n")
+        .nth(1)
+        .and_then(|rest| rest.split("```").next())
+        .expect("yaml block");
+    let wf = workflow(yaml);
+    stepyard()
+        .args(["validate", wf.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(contains("{{ steps.<name>.output }}"));
+    stepyard()
+        .args(["validate", "--engine", "v1", wf.path().to_str().unwrap()])
+        .assert()
+        .success();
+}
+
 /// Each shipped workflow validates for the engine it declares: the default
 /// (v2), or v1 when its header says `Requires --engine v1`, and then the
 /// default engine must refuse it.

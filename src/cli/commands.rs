@@ -1481,10 +1481,11 @@ async fn collect_missing_prompts(
     missing
 }
 
-/// The v2 renderer knows only `steps`, `target`, `vars`, `args` and `scope`;
-/// a step using `{{ stack.* }}` or `{{ prompts.* }}` fails when it renders,
-/// after the steps before it already ran. `validate` reports it up front.
-/// Reads the YAML values (not the raw text) so comments do not count.
+/// The v2 renderer knows only `steps` (with `stdout`, `stderr`, `exit_code`
+/// and `response`), `target`, `vars`, `args` and `scope`. A step using a
+/// v1-only name or operator from docs/YAML-SPEC.md fails when it renders,
+/// after the steps before it already ran; `validate` reports it up front.
+/// Only text inside `{{ … }}` of YAML values counts (comments do not).
 fn v1_only_template_namespaces(path: &std::path::Path) -> Result<(), String> {
     fn strings<'a>(v: &'a serde_yaml::Value, out: &mut Vec<&'a str>) {
         match v {
@@ -1499,23 +1500,56 @@ fn v1_only_template_namespaces(path: &std::path::Path) -> Result<(), String> {
     let value: serde_yaml::Value = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
     let mut all = Vec::new();
     strings(&value, &mut all);
-    let pattern = regex::Regex::new(r"\{\{-?\s*(stack|prompts)\.").expect("valid regex");
-    let mut found: Vec<&str> = all
-        .iter()
-        .flat_map(|s| pattern.captures_iter(s))
-        .map(|c| c.get(1).map_or("", |m| m.as_str()))
-        .collect();
-    found.sort_unstable();
-    found.dedup();
+    let found = v1_only_template_uses(&all);
     if found.is_empty() {
         Ok(())
     } else {
-        let names: Vec<String> = found.iter().map(|n| format!("{{{{ {n}.* }}}}")).collect();
         Err(format!(
-            "uses {}, which --engine v2 does not render yet",
-            names.join(" and ")
+            "uses {}, which --engine v2 does not render yet (run it with --engine v1)",
+            found.join(", ")
         ))
     }
+}
+
+/// The v1-only template names and operators used in `texts`, as the
+/// YAML-SPEC writes them, sorted and without duplicates.
+fn v1_only_template_uses(texts: &[&str]) -> Vec<&'static str> {
+    let expr = regex::Regex::new(r"(?s)\{\{(.*?)\}\}").expect("valid regex");
+    let rules: [(&str, &'static str); 7] = [
+        (r"^-?\s*stack\b", "{{ stack.* }}"),
+        (r"^-?\s*prompts\b", "{{ prompts.* }}"),
+        (r"^-?\s*session_id\b", "{{ session_id }}"),
+        (r"\bsteps\.[\w-]+\.output\b", "{{ steps.<name>.output }}"),
+        (
+            r"\bsteps\.[\w-]+\.session_id\b",
+            "{{ steps.<name>.session_id }}",
+        ),
+        (r"\bfrom\s*\(", "{{ from(\"<name>\") }}"),
+        (r"[\w\]][?!]\s*(\||$)", "the `?`/`!` accessors"),
+    ];
+    let shorthand = regex::Regex::new(r"^-?\s*([A-Za-z_]\w*)\.output\b").expect("valid regex");
+    let mut found = Vec::new();
+    for text in texts {
+        for cap in expr.captures_iter(text) {
+            let inner = cap.get(1).map_or("", |m| m.as_str()).trim_end_matches('-');
+            for (pattern, label) in rules {
+                if regex::Regex::new(pattern)
+                    .expect("valid regex")
+                    .is_match(inner)
+                {
+                    found.push(label);
+                }
+            }
+            if let Some(name) = shorthand.captures(inner).and_then(|c| c.get(1)) {
+                if !["steps", "scope", "vars", "args", "target"].contains(&name.as_str()) {
+                    found.push("{{ <name>.output }}");
+                }
+            }
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
 }
 
 pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
@@ -2197,6 +2231,38 @@ sandbox:
         assert_eq!(got.dns, ["1.1.1.1"]);
         assert_eq!(got.network.allow, ["api.anthropic.com"]);
         assert_eq!(got.network.deny, ["0.0.0.0/0"]);
+    }
+
+    #[test]
+    fn v1_only_template_uses_finds_what_v2_cannot_render() {
+        let uses = super::v1_only_template_uses;
+        // v2-renderable templates: nothing reported.
+        for ok in [
+            "{{ steps.a.stdout }} {{ steps.b.response }} {{ steps.c.exit_code }}",
+            "{{ target | shell_quote }} {{ vars.X }} {{ args.Y }} {{ scope.value }}",
+            "{% if a != b %}x{% endif %} {{ a != b }} plain session_id text",
+            "{{ scope.index }} {{- steps.x.stderr -}}",
+        ] {
+            assert!(uses(&[ok]).is_empty(), "{ok}: {:?}", uses(&[ok]));
+        }
+        assert_eq!(uses(&["{{ stack.tools.lint }}"]), ["{{ stack.* }}"]);
+        assert_eq!(uses(&["{{- prompts.fix -}}"]), ["{{ prompts.* }}"]);
+        assert_eq!(uses(&["{{ session_id }}"]), ["{{ session_id }}"]);
+        assert_eq!(
+            uses(&["{{ steps.list.output | join(sep=',') }}"]),
+            ["{{ steps.<name>.output }}"]
+        );
+        assert_eq!(
+            uses(&["{{ steps.a.session_id }}"]),
+            ["{{ steps.<name>.session_id }}"]
+        );
+        assert_eq!(uses(&["{{ list.output }}"]), ["{{ <name>.output }}"]);
+        assert_eq!(
+            uses(&["{{ from(\"a-b\").stdout }}"]),
+            ["{{ from(\"<name>\") }}"]
+        );
+        assert_eq!(uses(&["{{ foo.bar? }}"]), ["the `?`/`!` accessors"]);
+        assert_eq!(uses(&["{{ foo.bar! | upper }}"]), ["the `?`/`!` accessors"]);
     }
 
     #[test]
