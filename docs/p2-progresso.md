@@ -24,7 +24,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 7 | `stepyard validate` valida para o motor padrão (v2) | BUG-CLI-13, MANUT-06 | ✅ feito | `1a08590` |
 | 8 | Integridade dos testes: testes de binário que nunca rodavam; mock que confundia `destroy` e `destroy_by_session` | TEST-04, TEST-01 (TEST-02/03/13, MANUT-05 dependem de `.github/`) | ✅ feito | `1d70483`, `8c28951` |
 | 8b | A suíte de testes registrava worktrees no repositório do desenvolvedor | achado novo | ✅ feito | `54b9af9` |
-| 9 | Dependências npm vulneráveis, sem troca de major (18 → 7) | SEG-TS-12 (majors pendentes) | ✅ feito | (este) |
+| 9 | Dependências npm vulneráveis, sem troca de major (18 → 7) | SEG-TS-12 (majors pendentes) | ✅ feito | `8f0d7b4` |
+| 10 | Bot do Slack: reenvios deduplicados, limite de execuções, resposta dentro do prazo | BUG-CLI-09 | ✅ feito | (este) |
 
 ---
 
@@ -249,3 +250,19 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 - `node-cron` 3 → 4 (com `uuid`): o agendador de limpeza da API.
 
 Os lockfiles obsoletos de `packages/api` e `packages/web` (SEG-TS-13) e a falta de auditoria automática no CI (fora de escopo: `.github/`) continuam.
+
+## 10. Bot do Slack: reenvios, limite de execuções e resposta dentro do prazo — ✅
+
+**Defeito (BUG-CLI-09).** O Slack reenvia um evento quando não recebe resposta em 3 s, e o bot não deduplicava: cada reenvio da mesma menção disparava **outro** workflow. Também não havia limite de execuções simultâneas (uma tarefa por menção). A resposta a comando desconhecido era postada **dentro** do handler, antes de responder ao Slack, e podia passar dos 3 s, provocando justamente o reenvio. O texto de ajuda ainda dizia "use só números se o bot rodar dentro do repo", o que o item 10 da P1 deixou de permitir com sandbox.
+
+**Correção** (`src/slack/mod.rs`, `--features slack`):
+- `MentionDedup`: cada menção (`canal:ts`) é tratada uma única vez em 10 minutos. Entradas expiradas saem a cada chamada, então a memória fica limitada.
+- Semáforo com `STEPYARD_SLACK_MAX_RUNS` (padrão 2): acima disso, o bot responde "tente de novo" em vez de enfileirar sem limite.
+- Toda resposta é postada a partir de uma tarefa, de modo que o handler responde ao Slack dentro do prazo.
+- O texto de ajuda pede a URL do repositório. `docs/SLACK.md` documenta o comportamento e a variável.
+
+**Medido:**
+- Teste `a_retried_mention_is_claimed_only_once`: a primeira chamada aceita, o reenvio é ignorado, outra menção é nova, e depois do TTL a chave é esquecida. **Mutante** sem a deduplicação: reprova. Restaurado.
+- Testes do Slack: 6/6. `clippy --features slack -D warnings`: status 0. Portões do CI: todos com status 0. O código só compila com `--features slack`, que o CI não compila (MANUT-05), então o build padrão não mudou.
+
+**Não coberto.** Não houve teste do handler HTTP com uma requisição assinada de verdade: o semáforo e o post em tarefa foram verificados por leitura e compilação.
