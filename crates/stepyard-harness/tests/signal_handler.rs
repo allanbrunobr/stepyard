@@ -73,6 +73,31 @@ fn sigterm_yields_exit_143_within_grace() {
 
     let tmp = TempDir::new().expect("tempdir");
     let fixture = write_fixture(&tmp);
+    // v2 needs a git repository as its working directory (it prepares a
+    // worktree per session). Use a throwaway one: running in the crate dir
+    // registered session worktrees in the developer's own repository.
+    for args in [
+        &["init", "-q"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ][..],
+    ] {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(tmp.path())
+            .status()
+            .expect("git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
 
     // `--no-sandbox` avoids needing Docker for `cmd` steps. Stepyard's v2
     // engine requires a PG session pool — we hand it the harness test DB via
@@ -90,6 +115,10 @@ fn sigterm_yields_exit_143_within_grace() {
         .arg("v2")
         .env("STEPYARD_SHUTDOWN_GRACE_S", "2")
         .env("DATABASE_URL", &db_url)
+        // Run in the test's temp dir and without the file-log mirror: in the
+        // crate dir the run wrote `.stepyard/{logs,workspaces}` into the repo.
+        .current_dir(tmp.path())
+        .env("STEPYARD_NO_FILE_LOGS", "1")
         // Detach from the test's pid group so our kill only hits stepyard.
         .stdin(Stdio::null())
         .stdout(Stdio::null())
