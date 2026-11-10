@@ -3358,7 +3358,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "stepyard-session",
+ "stepyard-core",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

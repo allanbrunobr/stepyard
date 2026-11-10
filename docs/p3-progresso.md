@@ -19,7 +19,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 |---|---|---|---|---|
 | 1 | O binário deixa de redeclarar a árvore de módulos da lib | ARQ-11, MANUT-10, TEST-05 | ✅ feito | `7b26a58` |
 | 2 | Portões de auditoria que falhavam abertos (G4 do xtask; G1/G2 sem prefixo; autoteste dos portões) | BUG-CLI-15, TEST-08, TEST-06 (TEST-07/SEG-RUST-13 parcial) | ✅ feito | `eb95d08` |
-| 3 | Saída de passo limitada no log de sessão (1 MiB por stream, configurável) | BUG-HARNESS-08 (BUG-HARNESS-03 pendente) | ✅ feito | (este) |
+| 3 | Saída de passo limitada no log de sessão (1 MiB por stream, configurável) | BUG-HARNESS-08 (BUG-HARNESS-03 pendente) | ✅ feito | `a913232` |
+| 4 | `SessionId` no crate de contrato; o orquestrador deixa de depender do crate de sessão | ARQ-10 (ARQ-09 pendente) | ✅ feito | (este) |
 
 ---
 
@@ -92,3 +93,19 @@ Fazer isso direito exige um mecanismo de exceção por linha, como o comentário
 **Não coberto.**
 - O log continua sendo relido por completo várias vezes por passo. Agora o custo é limitado por passo, mas segue linear no número de passos por releitura. Cache ou leitura incremental é uma mudança maior no harness.
 - O `parallel` ainda só grava `StepStarted`/`StepCompleted` dos sub-passos no fim (BUG-HARNESS-03).
+
+## 4. O orquestrador de sandbox deixa de depender do crate de sessão — ✅ (parcial)
+
+**Defeito (ARQ-10).** O `stepyard-sandbox-orchestrator` dependia do `stepyard-session` inteiro, com sqlx, drivers, migrações e as features `postgres`/`sqlite`, só para usar o tipo `SessionId` num único arquivo (`workspace.rs`). A camada de sandbox carregava a camada de persistência.
+
+**Correção.**
+- `SessionId` (o newtype de `Uuid`, com `Display`, `FromStr` e as conversões) mudou para `stepyard-core` (`session_id.rs`), o crate de contrato sem IO. O `stepyard-session` o **reexporta** (`pub use stepyard_core::SessionId`), então nenhum usuário de `stepyard_session::SessionId` precisou mudar.
+- O orquestrador depende de `stepyard-core` em vez de `stepyard-session`. As features `postgres`/`sqlite` dele, que só repassavam ao crate de sessão, saíram, junto com as duas referências no `Cargo.toml` da raiz.
+
+**Medido:**
+- `cargo tree -p stepyard-sandbox-orchestrator -e normal`: as dependências diretas do workspace se resumem a `stepyard-core`, e há **0** ocorrências de `sqlx` no grafo.
+- Os três perfis compilam (portões, perfil SQLite incluso). Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
+
+Não há mutante: é uma mudança de estrutura. A prova é o grafo de dependências junto com a suíte verde.
+
+**Não coberto: ARQ-09.** A reconciliação ainda usa SQL direto e `docker ps`, em vez dos traits `EventStore`/`SandboxLifecycle`. A correção da P1 (lease por *advisory lock* do PostgreSQL) depende de recursos específicos do Postgres que esses traits não modelam. Levar isso para os traits exige primeiro desenhar um "lease" abstrato no `EventStore`, com uma implementação para o SQLite, e fica para depois.
