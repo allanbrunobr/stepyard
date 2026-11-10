@@ -440,6 +440,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-v2-
 
+      # The v2 container workspace tests need `stepyard-sandbox:latest`.
+      # Without it the v2 preflight builds the image inside the first test,
+      # under that test's 300 s timeout. Build it here from the same
+      # Dockerfile the binary embeds (an empty context, like the preflight).
+      - name: Build the sandbox image
+        run: docker build -t stepyard-sandbox:latest - < Dockerfile.sandbox
+
       # One test at a time: the tests share the daemon and the sandbox image.
       - name: Run the Docker tests
         run: cargo test --workspace -- --ignored --test-threads=1

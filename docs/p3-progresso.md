@@ -96,6 +96,16 @@ Fazer isso direito exige um mecanismo de exceção por linha, como o comentário
 - Os dois testes caíram em erros **meus** antes de passar: comparar `Event` com `==` (o tipo não implementa `PartialEq`) e uma expectativa errada sobre um stream acima do limite. Ambos corrigidos no teste; a função não mudou.
 - Portões do CI: todos com status 0. Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
 
+**Corrigido depois, na revisão pré-PR.** O corte valia só para o `StepCompleted`, mas o `docs/CONFIG.md` prometia o limite para toda saída de passo. Ficavam de fora:
+- um `cmd` que falha, que põe o stderr inteiro em `StepFailed.error`;
+- a resposta de um chat, que vai inteira para `ChatMessageAppended.content`.
+
+Agora os dois passam pelo mesmo `cap_text`. Testes:
+- dois casos no teste unitário;
+- um teste ponta a ponta em `tests/cli_v2_output_cap.rs`: um `cmd` que joga 3.000.000 bytes no stderr e sai com 1.
+
+Mutante (sem o corte do `StepFailed`): o teste reprova com a maior linha, `step_failed`, em **3.000.185 bytes**. Restaurado.
+
 **Não coberto.**
 - O log continua sendo relido por completo várias vezes por passo. Agora o custo é limitado por passo, mas segue linear no número de passos por releitura. Cache ou leitura incremental é uma mudança maior no harness.
 - O `parallel` ainda só grava `StepStarted`/`StepCompleted` dos sub-passos no fim (BUG-HARNESS-03).
@@ -276,7 +286,7 @@ Autorizado à parte em 10/11, 19:16. Três commits: `756f91e` (testes), `7d5df90
 |---|---|
 | SEG-TS-10 | Todas as actions fixadas por SHA de commit, com a tag em comentário (antes: `free-disk-space@main`, `rust-toolchain@stable`, o resto em tags móveis). `permissions: contents: read` no topo dos dois workflows; só o job `release` escreve. `.github/dependabot.yml` para `github-actions`. |
 | SEG-TS-11 | O release chama o `check.yml` (`workflow_call`) e confere se a tag é `v` + a versão do `Cargo.toml` antes de compilar. `merge-multiple` deixa nomes simples no `checksums.sha256`. Cada binário ganha uma atestação de proveniência. O `cross` ficou fixado na v0.2.5. |
-| TEST-02 | O job `docker-tests` roda os testes `#[ignore]` com Docker e Postgres, inclusive os de segurança argv-not-shell. |
+| TEST-02 | O job `docker-tests` constrói a `stepyard-sandbox:latest` a partir do `Dockerfile.sandbox` e roda os testes `#[ignore]` com Docker e Postgres, inclusive os de segurança argv-not-shell. Sem esse build, o pré-voo do v2 construiria a imagem dentro do timeout de 300 s do primeiro teste; na P2 isso já reprovou uma vez (ponto apontado na revisão pré-PR). |
 | TEST-03 | 41 pontos de pulo em 35 arquivos falham quando `STEPYARD_REQUIRE_DB` está definido; o job com Postgres o define. |
 | TEST-13 | A detecção de docs-only usa `git diff --no-renames`. |
 | TEST-15 | O job `coverage` roda `cargo llvm-cov` com piso de 75% de linhas. |
@@ -339,5 +349,5 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **TEST-10/11**.
 
 ### Efeitos colaterais fora do repositório (nada apagado)
-- `/tmp/stepyard-target` chegou a **48,29 GiB** (`du`, 10/11). O Allan autorizou apagá-lo, mas a permissão da ferramenta negou o `rm`; continua lá.
-- No daemon Docker do M1 ficaram as imagens `rust:1.87` e `rust:1.88`, baixadas para medir a MSRV; para o item 10, também `rhysd/actionlint:1.7.7`. Os contêineres foram todos `--rm`. Antes, na P2, eu já tinha reconstruído a imagem `stepyard-sandbox:latest` lá.
+- `/tmp/stepyard-target` chegou a **48,29 GiB** (`du`, 10/11). O Allan autorizou apagá-lo. A permissão da ferramenta negou o meu `rm`, e o coordenador o apagou fora do Claude.
+- No daemon Docker do M1 ficaram as imagens `rust:1.87` e `rust:1.88`, baixadas para medir a MSRV; para o item 10, também `rhysd/actionlint:1.7.7` e a tag `stepyard-sandbox:ci-check`, usada para validar o passo de build da imagem. Os contêineres foram todos `--rm`. Antes, na P2, eu já tinha reconstruído a imagem `stepyard-sandbox:latest` lá.
