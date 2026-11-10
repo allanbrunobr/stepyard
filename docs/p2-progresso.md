@@ -19,7 +19,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 2 | Aviso quando o build roda no host por padrão; contêiner de sessão endurecido | SEG-RUST-06, SEG-RUST-15 | ✅ feito | `be5f483` |
 | 3 | Perdas de trabalho: diretório por execução no `--repo` do v1, commits feitos no contêiner, sessão presa após conflito de merge | BUG-MOTOR-03, BUG-MOTOR-01, BUG-HARNESS-06 | ✅ feito | `029fef2` |
 | 4 | Contrato de eventos do dashboard (`null` recusado pela API; fixture compartilhado) | ARQ-03 (BUG-CLI-08 pendente) | ✅ feito | `9addfd9` |
-| 5 | Pânicos por fatiamento de UTF-8 no Slack e no `remote status` | BUG-CLI-06, BUG-MOTOR-14, BUG-CLI-10 (BUG-CLI-09 pendente) | ✅ feito | (este) |
+| 5 | Pânicos por fatiamento de UTF-8 no Slack e no `remote status` | BUG-CLI-06, BUG-MOTOR-14, BUG-CLI-10 (BUG-CLI-09 pendente) | ✅ feito | `29cb4d5` |
+| 6 | Upload de artefatos acima de 100 KB (parser por rota, autenticação antes do corpo grande) | SEG-TS-06 (SEG-TS-05/08 pendentes) | ✅ feito | (este) |
 
 ---
 
@@ -151,3 +152,23 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 - Portões do CI: todos com status 0. Suíte completa com banco: **1.196 passaram, 0 falharam, 18 ignorados**. Job SQLite: verde.
 
 **Não coberto: BUG-CLI-09.** O Slack continua sem deduplicação de retries (o Slack reenvia o mesmo evento se não receber resposta em 3 s) e sem limite de tarefas simultâneas. Fica para um próximo item.
+
+## 6. Upload de artefatos acima de 100 KB — ✅ (parcial)
+
+**Defeito (SEG-TS-06).** O parser JSON global da API tinha limite de 100 KB, e o upload de artefato manda o arquivo em base64 no corpo JSON. Todo artefato acima de cerca de 75 KB falhava com 413, embora o limite documentado (`STEPYARD_ARTIFACT_MAX_BYTES`) seja 10 MiB.
+
+**Correção** (`packages/api/src/body.ts`, novo, usado em `index.ts`): `jsonBodyParser()` mantém 100 KB em todas as rotas, menos em `POST /api/workflows/:id/artifacts`. Essa rota ganha um limite dimensionado para a forma base64 do artefato máximo (4/3 do tamanho mais 64 KB), e a **autenticação roda antes** de o corpo grande ser lido, para que um cliente sem credencial não faça a API armazenar megabytes. `artifactMaxBytes` saiu de `routes/workflows.ts` para esse módulo, e os dois usam a mesma função.
+
+**Testes** (`body.test.ts`, servidor HTTP real):
+- artefato autenticado de 300 KB aceito; no código antigo dava 413;
+- o mesmo upload sem credencial → 401, sem ler o corpo;
+- outra rota com 200 KB → 413, ou seja, o limite de 100 KB continua valendo;
+- artefato acima do limite configurado → 413.
+
+**Medido:**
+- **Mutantes:** limite único de 100 KB (o código antigo) reprova o teste de 300 KB e o do 401. Corpo grande lido sem autenticar antes reprova o teste do 401. Restaurado.
+- Job TypeScript do CI: build da API, build do web e testes, todos com status 0 (**28 testes**). Nada no Rust mudou.
+
+**Não coberto.**
+- **SEG-TS-08** (cookie `Secure` decidido por `req.hostname`): atrás do proxy do Vite, o host visto pela API é `api`, então o cookie sai `Secure` mesmo no deploy HTTP documentado, e o navegador o descarta. A correção depende de como o proxy de produção repassa host e protocolo (`trust proxy`, `X-Forwarded-*`), e trocar a regra sem esse deploy à mão poderia afrouxar o `Secure` em produção. Fica para verificação com o deploy real.
+- **SEG-TS-05** (um único segredo para telemetria, despacho e login; sem rate limit): é desenho de credenciais e precisa de decisão sua.

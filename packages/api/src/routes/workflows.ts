@@ -8,6 +8,7 @@ import { requireAuth, requireDashboardAuth } from '../auth';
 import { pool } from '../db';
 import { logger } from '../logger';
 import { forwardAsyncErrors } from '../errors';
+import { artifactMaxBytes } from '../body';
 import {
   allowedDispatchLogPath,
   buildSshCommand,
@@ -277,7 +278,6 @@ function dispatchLogPath(snapshot: WorkflowSnapshot): string | null {
 }
 
 const UUID_PARAM = z.string().uuid();
-const DEFAULT_ARTIFACT_MAX_BYTES = 10 * 1024 * 1024;
 
 const artifactUploadSchema = z.object({
   name: z
@@ -300,13 +300,6 @@ function artifactRoot(): string {
   return process.env.STEPYARD_ARTIFACT_DIR || '/tmp/stepyard-artifacts';
 }
 
-function artifactMaxBytes(): number {
-  const raw = process.env.STEPYARD_ARTIFACT_MAX_BYTES;
-  if (!raw) return DEFAULT_ARTIFACT_MAX_BYTES;
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ARTIFACT_MAX_BYTES;
-}
 
 function artifactPath(runId: string, artifactId: string): string {
   return join(artifactRoot(), runId, `${artifactId}.bin`);

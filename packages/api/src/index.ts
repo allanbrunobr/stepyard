@@ -10,6 +10,7 @@ import { eventsRouter } from './routes/events';
 import { workflowsRouter } from './routes/workflows';
 import { startCleanupScheduler } from './scheduler';
 import { errorHandler } from './errors';
+import { jsonBodyParser } from './body';
 import analyticsRouter from './routes/analytics';
 import overviewRouter from './routes/overview';
 
@@ -25,7 +26,8 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   credentials: true,
 }));
-app.use(express.json({ limit: '100kb' }));
+// 100 kB everywhere except authenticated artifact uploads (SEG-TS-06).
+app.use(jsonBodyParser());
 
 app.use('/api', healthRouter);
 app.use('/api', authRouter);
