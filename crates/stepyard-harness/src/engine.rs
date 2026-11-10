@@ -2303,7 +2303,14 @@ impl Engine {
     async fn finalise_success(&mut self) -> Result<(), EngineError> {
         if self.session.status() == SessionStatus::Running {
             self.sync_container_workspace_back().await;
-            self.finalize_workspace_success_if_configured().await?;
+            if let Err(err) = self.finalize_workspace_success_if_configured().await {
+                // A merge conflict or git failure at finalization used to
+                // return before any terminal status, leaving the session
+                // `running` forever (BUG-HARNESS-06). The MergeConflict event
+                // is already in the log; record the failure before reporting.
+                self.session.fail().await?;
+                return Err(err);
+            }
             let duration_ms = self
                 .started_at
                 .map(|t| t.elapsed().as_millis() as u64)

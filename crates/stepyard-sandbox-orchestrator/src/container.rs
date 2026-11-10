@@ -164,9 +164,17 @@ impl ContainerHandle {
         &self,
         container_dir: &str,
     ) -> Result<Vec<ChangedPath>, SandboxError> {
+        // When the setup script recorded the copy-in commit
+        // (`.git/stepyard-base`), compare against it: commits made inside the
+        // container then still count as changes (BUG-MOTOR-01). Output is the
+        // `git diff --name-status -z` pairs, a \001 separator, then the
+        // untracked files. Without a base, fall back to `git status`.
+        let dir = shell_quote(container_dir);
         let script = format!(
-            "git -C {} status --porcelain=v1 -z --untracked-files=all --no-renames",
-            shell_quote(container_dir)
+            "cd {dir} && base=$(cat .git/stepyard-base 2>/dev/null) && [ -n \"$base\" ] \
+             && {{ git diff --name-status -z --no-renames \"$base\" && printf '\\001' \
+             && git ls-files --others --exclude-standard -z; }} \
+             || git status --porcelain=v1 -z --untracked-files=all --no-renames"
         );
         let out = self.sh(&script).await?;
         if !out.status.success() {
@@ -175,7 +183,11 @@ impl ContainerHandle {
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
-        Ok(parse_porcelain_z(&String::from_utf8_lossy(&out.stdout)))
+        let text = String::from_utf8_lossy(&out.stdout);
+        Ok(match text.split_once('\u{1}') {
+            Some((diff, untracked)) => parse_since_base(diff, untracked),
+            None => parse_porcelain_z(&text),
+        })
     }
 
     /// Copy `changes` from `container_dir` to `host_dir`: modified files are
@@ -322,6 +334,27 @@ exit 0
         }
         Ok(())
     }
+}
+
+/// Parse `git diff --name-status -z --no-renames <base>` (status/path pairs)
+/// plus `git ls-files --others --exclude-standard -z` (untracked paths).
+pub fn parse_since_base(diff: &str, untracked: &str) -> Vec<ChangedPath> {
+    let mut out = Vec::new();
+    let mut tokens = diff.split('\0').filter(|t| !t.is_empty());
+    while let (Some(status), Some(path)) = (tokens.next(), tokens.next()) {
+        out.push(if status.starts_with('D') {
+            ChangedPath::Deleted(path.to_string())
+        } else {
+            ChangedPath::Modified(path.to_string())
+        });
+    }
+    out.extend(
+        untracked
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(|p| ChangedPath::Modified(p.to_string())),
+    );
+    out
 }
 
 /// Parse `git status --porcelain=v1 -z --no-renames` output.
@@ -535,5 +568,23 @@ mod tests {
                 "-p",
             ]
         );
+    }
+
+    /// BUG-MOTOR-01: diff against the copy-in commit, plus untracked files.
+    #[test]
+    fn parse_since_base_reads_name_status_pairs_and_untracked_files() {
+        let diff = "M\0README.md\0A\0committed.txt\0D\0gone.rs\0";
+        let untracked = "loose.txt\0dir/new.md\0";
+        assert_eq!(
+            parse_since_base(diff, untracked),
+            vec![
+                ChangedPath::Modified("README.md".into()),
+                ChangedPath::Modified("committed.txt".into()),
+                ChangedPath::Deleted("gone.rs".into()),
+                ChangedPath::Modified("loose.txt".into()),
+                ChangedPath::Modified("dir/new.md".into()),
+            ]
+        );
+        assert!(parse_since_base("", "").is_empty());
     }
 }

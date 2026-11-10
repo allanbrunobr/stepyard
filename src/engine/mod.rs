@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context as _, Result};
 use colored::Colorize;
 use regex::Regex;
 use serde::Serialize;
@@ -134,6 +134,9 @@ pub struct Engine {
     pub stack_info: Option<StackInfo>,
     /// GitHub repo (OWNER/REPO) — when set, sandbox clones this repo instead of copying CWD
     repo: Option<String>,
+    /// Per-run scratch directory mounted at /workspace in `--repo` mode,
+    /// removed on teardown (BUG-MOTOR-03).
+    repo_workspace: Option<PathBuf>,
     /// Secure API proxy — holds secrets on the host, container only gets the proxy URL
     api_proxy: Option<ApiProxy>,
     /// Append-only session log (Epic 1 Story 1.4). `None` only for dry-run.
@@ -297,6 +300,7 @@ impl Engine {
             event_bus,
             stack_info,
             repo: options.repo,
+            repo_workspace: None,
             api_proxy: None,
             session: options.session,
         }
@@ -362,8 +366,11 @@ impl Engine {
         // In repo mode, use a minimal temp dir as workspace (the real repo
         // will be cloned inside the container). Otherwise, use the host CWD.
         let effective_workspace = if is_repo_mode {
-            let tmp = std::env::temp_dir().join("stepyard-repo-workspace");
-            std::fs::create_dir_all(&tmp).ok();
+            // One directory per run (BUG-MOTOR-03): a fixed path was shared by
+            // concurrent runs (one per Slack mention), and each run empties
+            // /workspace before cloning, wiping the other run's clone mid-step.
+            let tmp = create_repo_workspace(&std::env::temp_dir())?;
+            self.repo_workspace = Some(tmp.clone());
             // Initialize a bare git repo so the sandbox doesn't complain
             let _ = std::process::Command::new("git")
                 .args(["init", "--bare"])
@@ -587,6 +594,15 @@ impl Engine {
                 repo_mode = is_repo_mode,
                 "Sandbox teardown complete"
             );
+        }
+
+        // The per-run `--repo` scratch directory belongs to this run only.
+        // Best effort: files the container created may belong to another
+        // uid on Linux; a leftover directory is harmless and unique.
+        if let Some(dir) = self.repo_workspace.take() {
+            if let Err(e) = std::fs::remove_dir_all(&dir) {
+                tracing::warn!(path = %dir.display(), error = %e, "could not remove repo workspace");
+            }
         }
 
         // Stop the API proxy (if running)
@@ -1551,10 +1567,42 @@ async fn detect_stack_if_registry_exists() -> Option<StackInfo> {
     }
 }
 
+/// Create the scratch directory a `--repo` run mounts at /workspace: unique
+/// per run and private (0700). A fixed path was shared by concurrent runs,
+/// and each run empties /workspace before cloning (BUG-MOTOR-03).
+fn create_repo_workspace(parent: &std::path::Path) -> Result<PathBuf> {
+    let dir = parent.join(format!("stepyard-repo-workspace-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir)
+        .with_context(|| format!("failed to create repo workspace {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("failed to restrict {}", dir.display()))?;
+    }
+    Ok(dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::workflow::parser;
+
+    /// BUG-MOTOR-03: two concurrent `--repo` runs must not share /workspace.
+    #[test]
+    fn each_repo_run_gets_its_own_private_workspace() {
+        let parent = tempfile::tempdir().unwrap();
+        let a = create_repo_workspace(parent.path()).unwrap();
+        let b = create_repo_workspace(parent.path()).unwrap();
+        assert_ne!(a, b);
+        assert!(a.is_dir() && b.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        }
+    }
 
     /// Global mutex to serialize tests that change the process working directory.
     static CWD_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =

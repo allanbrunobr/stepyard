@@ -16,7 +16,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 |---|---|---|---|---|
 | 0 | Contradições do pré-PR do #1 e o dry-run do v1 | checagem pré-PR; regressão do P1-10 | ✅ feito | `d5dfeda` |
 | 1 | Segredos do host fora do alcance do YAML (`${VAR}`, `base_url` do chat, env no argv) | SEG-RUST-05 (parcial), SEG-RUST-12 | ✅ feito | `882c323` |
-| 2 | Aviso quando o build roda no host por padrão; contêiner de sessão endurecido | SEG-RUST-06, SEG-RUST-15 | ✅ feito | (este) |
+| 2 | Aviso quando o build roda no host por padrão; contêiner de sessão endurecido | SEG-RUST-06, SEG-RUST-15 | ✅ feito | `be5f483` |
+| 3 | Perdas de trabalho: diretório por execução no `--repo` do v1, commits feitos no contêiner, sessão presa após conflito de merge | BUG-MOTOR-03, BUG-MOTOR-01, BUG-HARNESS-06 | ✅ feito | (este) |
 
 ---
 
@@ -91,3 +92,24 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 - Portões do CI: todos com status 0. Suíte completa com banco: **1.189 passaram, 0 falharam, 17 ignorados** (+1 teste Docker). Job SQLite: verde (smoke 6/6).
 
 **Não coberto.** O descarte de **todas** as capabilities (`--cap-drop ALL` com reposição seletiva) exige revisar o script de preparo e a imagem, e fica para depois. O `docker create` do v1 não recebeu o endurecimento: o v1 só roda em modo `--repo` com sandbox, e sua remoção é o P3.
+
+## 3. Perdas de trabalho restantes — ✅
+
+**Defeitos e correções.**
+1. **BUG-MOTOR-03 — diretório fixo no modo `--repo` do v1.**
+   - **Defeito:** todo run `--repo` (uma menção no Slack, um despacho) montava o **mesmo** diretório de `/tmp` em `/workspace` e o esvaziava antes de clonar. Dois runs simultâneos destruíam o clone um do outro no meio de um passo. O erro de `create_dir_all` era engolido.
+   - **Correção:** `create_repo_workspace` cria um diretório **único e privado (0700)** por execução e propaga erros. O `sandbox_down` o remove no fim, com melhor esforço, porque no Linux o contêiner pode deixar arquivos com outro uid.
+2. **BUG-MOTOR-01 — trabalho commitado dentro do contêiner se perdia.**
+   - **Defeito:** a cópia de volta comparava a árvore de trabalho com o `HEAD` **do contêiner**. Um arquivo que um passo commitava lá dentro (o `fix-test.yaml` commita antes do push) parecia inalterado e nunca chegava ao host.
+   - **Correção:** o script de preparo grava o commit da cópia de ida em `.git/stepyard-base`, e `changed_paths` compara contra ele (`git diff --name-status <base>` mais os não rastreados). Sem o arquivo, cai no `git status` de antes.
+3. **BUG-HARNESS-06 — conflito de merge deixava a sessão `running`.**
+   - **Defeito:** `finalise_success` saía pelo `?` antes de qualquer status terminal.
+   - **Correção:** a sessão é marcada `failed` antes de devolver o erro. O evento `MergeConflict` já estava no log.
+
+**Testes e medição.**
+- **Docker real (M1) e Postgres real**, em `tests/v2_container_workspace_docker.rs`: um passo commita `committed.txt` dentro do contêiner, e outro deixa `loose.txt` sem commit. **No código antigo, o teste reprovou** ("a file committed inside the container must reach the host"). No novo, passa, junto com os 3 testes Docker do workspace que já existiam e os 2 do orquestrador, que cobrem o caminho de fallback sem commit-base.
+- `crates/stepyard-harness/tests/workspace_finalize.rs` (Postgres): depois do conflito, a sessão está `Failed` na memória **e no banco**. **No código antigo reprovou** com `left: Running`.
+- Unitários: `parse_since_base` (pares status/caminho, não rastreados, entrada vazia) e `create_repo_workspace` (dois diretórios distintos, 0700). **Mutante** com caminho fixo: reprova. Restaurado.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.192 passaram, 0 falharam, 18 ignorados** (+1 teste Docker). Job SQLite: verde.
+
+**Não coberto.** O modo `--repo` do v1 não foi exercitado de ponta a ponta, porque exigiria clonar um repositório real do GitHub dentro do Docker, com rede e conta. Só a criação do diretório foi testada.
