@@ -21,7 +21,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 4 | Contrato de eventos do dashboard (`null` recusado pela API; fixture compartilhado) | ARQ-03 (BUG-CLI-08 pendente) | ✅ feito | `9addfd9` |
 | 5 | Pânicos por fatiamento de UTF-8 no Slack e no `remote status` | BUG-CLI-06, BUG-MOTOR-14, BUG-CLI-10 (BUG-CLI-09 pendente) | ✅ feito | `29cb4d5` |
 | 6 | Upload de artefatos acima de 100 KB (parser por rota, autenticação antes do corpo grande) | SEG-TS-06 (SEG-TS-05/08 pendentes) | ✅ feito | `99fcdf2` |
-| 7 | `stepyard validate` valida para o motor padrão (v2) | BUG-CLI-13, MANUT-06 | ✅ feito | (este) |
+| 7 | `stepyard validate` valida para o motor padrão (v2) | BUG-CLI-13, MANUT-06 | ✅ feito | `1a08590` |
+| 8 | Integridade dos testes: testes de binário que nunca rodavam; mock que confundia `destroy` e `destroy_by_session` | TEST-04, TEST-01 (TEST-02/03/13, MANUT-05 dependem de `.github/`) | ✅ feito | (este) |
 
 ---
 
@@ -190,3 +191,27 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 - Portões do CI: todos com status 0. Suíte completa com banco: **1.199 passaram, 0 falharam, 18 ignorados**. Job SQLite: verde.
 
 **Não coberto.** A correção de `ARCHITECTURE.md`, `YAML-SPEC.md` e `STEP-TYPES.md` onde prometem o que o v2 não faz (ARQ-05, MANUT-03) não entrou neste item.
+
+## 8. Integridade dos testes — ✅ (parcial)
+
+**TEST-04 — dois testes que nunca rodavam localmente.** `signal_handler` (SIGTERM → saída 143) e `session_list_cli` procuravam o binário em `../../target`, mas o `.cargo/config.toml` manda o build para `/tmp/stepyard-target`. **Medido** com `--nocapture` e Postgres real: os dois imprimiam `[skip] workspace stepyard binary not built` e **contavam como aprovados**, em 0,00 s. No CI eles rodavam, porque lá `CARGO_TARGET_DIR=target`.
+- **Correção:** o binário é procurado a partir do próprio executável do teste (`<target>/<perfil>/deps/<teste>` → `<target>/<perfil>/stepyard`), o que vale para qualquer diretório de build, com os caminhos antigos como alternativa. Depois disso os dois **executam de verdade** (6 s e 2,4 s), e o de SIGTERM mede saída 143 em 0,42 s.
+
+**TEST-01 — o mock não distinguia `destroy` de `destroy_by_session`.** No Docker real, `destroy(id)` não faz nada; só `destroy_by_session` remove o contêiner. O `MockLifecycle` usava a implementação padrão, que transforma uma chamada na outra, e registrava `Destroy` nos dois casos. Um engine que regredisse para `destroy()` passaria em todos os testes.
+- **Correção:** o mock registra `MockCall::DestroyBySession { session_id }` e depois delega a `destroy`, preservando o contrato padrão que o teste do `lifecycle.rs` verifica. Os quatro testes do harness que conferem o teardown (`signal_cancel`, `step_timeout`, `cancel_cleanup` e `timeout_zero`) passaram a exigir `DestroyBySession` com o UUID da sessão.
+- **Mutante:** o engine chamando `destroy()` no cancelamento faz o `cancel_cleanup` **reprovar**. Com o mock antigo, essa regressão passava.
+
+**Efeito colateral encontrado e corrigido.** Com os dois testes do TEST-04 rodando, a suíte completa reprovou uma vez em `startup_reconcile`: a segunda reconciliação, que devia ser idempotente, reconciliou 2 sessões.
+- **Causa:** o `session_list_cli` deixava sessões `running` no banco compartilhado. Desde o lease da P1-1 elas viram candidatas ao completar 60 s, e na ordem da suíte duas cruzaram esse limite entre as duas chamadas do teste.
+- **Correção:**
+  - a idempotência passou a ser verificada **por objeto** (a sessão do teste continua `failed` com um único `crash_recovery`; o contêiner do teste foi removido), em vez de contadores do banco inteiro;
+  - o `session_list_cli` encerra as sessões que cria.
+- **Medido:** duas rodadas completas seguidas, verdes.
+
+**Medido (item):** portões do CI todos com status 0. Suíte completa com banco: **1.199 passaram, 0 falharam, 18 ignorados**, em duas rodadas. Job SQLite: verde.
+
+**Não coberto (dependem de `.github/`, fora do escopo):**
+- **TEST-03:** os ~94 testes de banco ainda "passam" sem `DATABASE_URL`. Proposta: uma variável `STEPYARD_REQUIRE_DB=1` que transforme o `[skip]` em falha, ligada no CI.
+- **TEST-02:** job com Docker para os testes `#[ignore]`.
+- **MANUT-05:** compilar e testar `--features slack` no CI.
+- **TEST-13:** atalho "docs-only" do `check.yml`.

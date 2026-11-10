@@ -29,12 +29,20 @@ fn stepyard_bin() -> Option<PathBuf> {
     // `assert_cmd::cargo_bin` reads `CARGO_BIN_EXE_<name>`, which is only set
     // inside the crate that declares `[[bin]]` — `stepyard-harness` doesn't.
     // Fall back to the canonical workspace-root `target/debug/stepyard` path.
+    // TEST-04: also look next to this test's own build directory
+    // (`<target>/<profile>/deps/<test>`), wherever cargo put it — e.g.
+    // /tmp/stepyard-target locally — or the test silently skips.
+    let from_exe = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("stepyard")));
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidates = [
-        manifest.join("../../target/debug/stepyard"),
-        manifest.join("../../target/release/stepyard"),
-    ];
-    candidates.into_iter().find(|p| p.exists())
+    from_exe
+        .into_iter()
+        .chain([
+            manifest.join("../../target/debug/stepyard"),
+            manifest.join("../../target/release/stepyard"),
+        ])
+        .find(|p| p.exists())
 }
 
 fn write_fixture(dir: &TempDir) -> PathBuf {

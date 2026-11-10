@@ -28,13 +28,21 @@ use uuid::Uuid;
 const CMD_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn stepyard_bin() -> Option<PathBuf> {
+    // TEST-04: the build directory is wherever cargo put this test
+    // (`<target>/<profile>/deps/<test>`), e.g. /tmp/stepyard-target from
+    // .cargo/config.toml locally. Looking only under `../../target` made the
+    // test skip — and count as passed — on every local run.
+    let from_exe = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("stepyard")));
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    [
-        manifest.join("../../target/debug/stepyard"),
-        manifest.join("../../target/release/stepyard"),
-    ]
-    .into_iter()
-    .find(|p| p.exists())
+    from_exe
+        .into_iter()
+        .chain([
+            manifest.join("../../target/debug/stepyard"),
+            manifest.join("../../target/release/stepyard"),
+        ])
+        .find(|p| p.exists())
 }
 
 async fn pool_and_url() -> Option<(sqlx::PgPool, String)> {
@@ -78,7 +86,7 @@ async fn session_list_filters_by_status_and_since() {
     // presence/absence by UUID without cross-test noise ───────────────────
     let tenant = format!("list-cli-{}", Uuid::new_v4());
 
-    let running = Session::new(&pool, Uuid::new_v4(), tenant.clone())
+    let mut running = Session::new(&pool, Uuid::new_v4(), tenant.clone())
         .await
         .expect("running session");
     let running_id = running.id().as_uuid().to_string();
@@ -206,7 +214,7 @@ async fn session_list_filters_by_status_and_since() {
     // ── ordering: started_at DESC ─────────────────────────────────────────
     // Seed a newer running session after the original. Under DESC order,
     // the newer UUID must appear before the original in stdout.
-    let newer = Session::new(&pool, Uuid::new_v4(), tenant.clone())
+    let mut newer = Session::new(&pool, Uuid::new_v4(), tenant.clone())
         .await
         .expect("newer running session");
     let newer_id = newer.id().as_uuid().to_string();
@@ -221,4 +229,9 @@ async fn session_list_filters_by_status_and_since() {
         "started_at DESC: newer session should precede older in stdout; \
          newer_pos={newer_pos}, older_pos={older_pos}, stdout={stdout}",
     );
+
+    // Do not leak `running` rows into the shared database: the startup
+    // reconcile tests count on other binaries finishing their sessions.
+    running.fail().await.expect("cleanup running");
+    newer.fail().await.expect("cleanup newer");
 }
