@@ -9,10 +9,12 @@
 //!    with a `SignalReceived` event (`signal = "crash_recovery"`) appended to
 //!    its log. "Owner is gone" means two things: the session started more
 //!    than [`LEASE_GRACE`] ago, and nobody holds its [`SessionLease`].
-//! 2. **Container reconciliation.** Every live Docker container named
-//!    `stepyard-session-<uuid>` whose UUID does NOT correspond to a currently
-//!    `running` session is destroyed (NFR12 — idempotent). Sessions spared in
-//!    phase 1 are still `running`, so their containers are kept.
+//! 2. **Container reconciliation.** A live Docker container named
+//!    `stepyard-session-<uuid>` is destroyed only when THIS database knows
+//!    the session and it is no longer `running` (NFR12 — idempotent).
+//!    Sessions spared in phase 1 are still `running`, so their containers are
+//!    kept; a UUID this database does not know belongs to another database
+//!    or project sharing the Docker daemon and is left alone (logged).
 //! 3. **Worktree pruning.** Startup-only stale worktree cleanup.
 //!
 //! # Liveness: why the lease exists
@@ -227,18 +229,9 @@ pub async fn reconcile_with_workspace_manager(
     // Requery the `running` set — Phase 1 drained it, but a future refactor
     // may leave some rows alive (for example if we ever add per-tenant
     // selective reconcile). The logic stays correct either way.
-    let still_running: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM sessions WHERE status = 'running'")
-            .fetch_all(pg)
-            .await?;
-    let running_set: HashSet<Uuid> = still_running.into_iter().collect();
-
-    // Docker's `--filter name=` is a SUBSTRING match, not a glob — the
-    // Story AC writes `name=stepyard-session-*` descriptively, but passing a
-    // literal `*` here makes Docker look for containers whose names contain
-    // the asterisk character, which is never true. We pass the trailing-dash
-    // prefix instead; `extract_session_uuid` below is the strict filter that
-    // ensures we only ever destroy `stepyard-session-<uuid>` names.
+    // Docker's `--filter name=` is a SUBSTRING match, not a glob — passing a
+    // literal `*` would look for an asterisk. `extract_session_uuid` below is
+    // the strict filter that keeps only `stepyard-session-<uuid>` names.
     let ps = Command::new("docker")
         .args([
             "ps",
@@ -253,15 +246,38 @@ pub async fn reconcile_with_workspace_manager(
     match ps {
         Ok(output) if output.status.success() => {
             let names = String::from_utf8_lossy(&output.stdout);
+            let mut found: Vec<(String, Uuid)> = Vec::new();
             for name in names.lines().map(str::trim).filter(|s| !s.is_empty()) {
-                let Some(uuid) = extract_session_uuid(name) else {
-                    tracing::warn!(
+                match extract_session_uuid(name) {
+                    Some(uuid) => found.push((name.to_string(), uuid)),
+                    None => tracing::warn!(
                         container = %name,
                         "ignoring container with unparseable session UUID",
+                    ),
+                }
+            }
+            let uuids: Vec<Uuid> = found.iter().map(|(_, u)| *u).collect();
+            // Only sessions this database knows to be over. A running session
+            // (live owner, or spared by the grace window) keeps its container,
+            // and an unknown UUID belongs to someone else's database.
+            let known_dead: HashSet<Uuid> = if uuids.is_empty() {
+                HashSet::new()
+            } else {
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT id FROM sessions WHERE id = ANY($1) AND status <> 'running'",
+                )
+                .bind(&uuids)
+                .fetch_all(pg)
+                .await?
+                .into_iter()
+                .collect()
+            };
+            for (name, uuid) in found {
+                if !known_dead.contains(&uuid) {
+                    tracing::debug!(
+                        container = %name,
+                        "keeping container: session running or unknown to this database",
                     );
-                    continue;
-                };
-                if running_set.contains(&uuid) {
                     continue;
                 }
                 // `destroy_by_session` wraps `docker rm -f <name>` and

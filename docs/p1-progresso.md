@@ -23,7 +23,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 (parcial) | ✅ feito | `2e0a0d7` |
 | 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | ✅ feito | `916aaa3` |
 | 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | ✅ feito | `584bbee` |
-| 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01 (parcial), BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | ✅ feito | (este) |
+| 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01 (parcial), BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | ✅ feito | `2ec8175` |
+| 1b | Complemento do item 1: lease no v1 e fase 2 só para sessões mortas conhecidas | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | (este) |
 
 ## Pendências que são do Allan (exigem conta, login, gasto ou segredo)
 
@@ -328,3 +329,28 @@ A API respondia 202, o processo filho morria, e o run ficava em `dispatching` pa
 - `image:` do YAML continua livre. A imagem roda sem montagens do host além das permitidas, então o risco é menor, e fica para P2.
 - O diretório fixo de `/tmp` no modo `--repo` do v1 (BUG-MOTOR-03) é P2.
 - O hook de portão de push da sessão barrou uma vez o comando de commit deste item, por falso positivo: o texto do documento continha a palavra do comando de envio. Nada rodou naquela tentativa. O texto foi reescrito, e nenhum envio foi feito.
+
+## 1b. Complemento do item 1 (revisão final) — ✅
+
+Uma revisão independente, feita depois dos 10 itens, encontrou três lacunas no item 1:
+- **As sessões do v1 não seguravam o lease.** Desde o item 6, todo despacho do dashboard roda em v1, e o Slack já rodava. Uma execução v2 no mesmo banco, mais de 60 s depois do início de uma execução v1, ainda marcava a sessão v1 como `failed`.
+- **A fase 2 ainda destruía contêineres de UUID desconhecido.** Dois projetos com bancos diferentes no mesmo daemon Docker continuavam derrubando um ao outro. A recomendação do próprio relatório era "destruir só contêineres dessas sessões".
+- **O cenário com dois processos reais**, que no item 1 tinha ficado como "não coberto", não tinha teste.
+
+**Correção.**
+- `src/cli/commands.rs`: o caminho v1 toma o `SessionLease` logo depois de criar a sessão e o mantém até `execute` retornar, como o v2.
+- `crates/stepyard-harness/src/startup.rs`: a fase 2 só destrói `stepyard-session-<uuid>` quando **este** banco conhece a sessão e ela não está `running`. Contêiner de UUID desconhecido é preservado e registrado no log. O teste Docker antigo (`startup_reconcile.rs`) codificava justamente o comportamento perigoso, destruindo UUID desconhecido. Foi atualizado: o contêiner "órfão" agora pertence a uma sessão concluída (é destruído), e um contêiner de UUID desconhecido precisa **sobreviver**.
+
+**Testes.**
+- `tests/cli_concurrent_runs.rs`: **dois processos `stepyard execute` reais** contra o mesmo Postgres. Uma execução longa (`sleep 20`), em v1 num caso e em v2 no outro, tem o `started_at` envelhecido além da carência. Um segundo `execute` v2 roda a reconciliação e um workflow curto. A sessão longa continua `running` e termina `completed`.
+- `crates/stepyard-harness/tests/startup_reconcile.rs` (Docker do M1 + Postgres): contêiner de sessão concluída destruído, contêiner de UUID desconhecido preservado.
+
+**Medido:**
+- **Mutantes:**
+  - v1 soltando o lease na hora (`let _ = …`) reprova **só** o teste do v1. Um primeiro mutante não compilava e foi descartado, porque não provava nada.
+  - A reconciliação ignorando o lease (o bug original) reprova os dois testes.
+  - A fase 2 destruindo UUID desconhecido reprova o teste Docker com "a container of a session unknown to this database must be kept".
+  - Tudo restaurado.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.178 passaram, 0 falharam, 16 ignorados**. Job SQLite: verde.
+
+**Não coberto.** O lease vive numa conexão ociosa dedicada. Se ela cair no meio da execução (restart do Postgres, como no teste do item 5), o lock some em silêncio, e uma reconciliação posterior pode tratar a sessão como órfã. Reabrir o lease com nova tentativa fica para P2.

@@ -1065,6 +1065,22 @@ pub async fn execute(
         let store = build_store(args.no_file_logs).await?;
         Some(open_session_with_store(store, &workflow.name).await?)
     };
+    // Liveness lease, as on v2: a concurrent `stepyard execute` runs the
+    // startup reconcile, which fails every `running` session whose lease it
+    // can take. Dashboard dispatch and the Slack bot run on v1, so v1 must
+    // hold it too. Kept bound until `execute` returns.
+    #[cfg(feature = "postgres")]
+    let _session_lease = match &session {
+        Some(s) => {
+            let pool = connect_pg(args.json).await?;
+            Some(
+                crate::startup::SessionLease::acquire(&pool, *s.id().as_uuid())
+                    .await
+                    .context("failed to take the session liveness lease")?,
+            )
+        }
+        None => None,
+    };
 
     let opts = EngineOptions {
         verbose: args.verbose,
