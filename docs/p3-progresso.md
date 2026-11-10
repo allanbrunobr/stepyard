@@ -25,7 +25,7 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI pendente) | ✅ feito | `2f67af8` |
 | 7 | Guard do diretório de build calibrado e documentado | MANUT-14 (parcial) | ✅ feito | `c731327` |
 | 8 | Referências a invariantes inexistentes, comentário errado sobre `parallel`, `exclude` órfãos | MANUT-12 (parcial) | ✅ feito | `1b91937`, `8c1cb61` |
-| 9 | Logs de diagnóstico com `session_id` e formato JSON opcional | MANUT-15 (parcial) | ✅ feito | `515eccc` |
+| 9 | Logs de diagnóstico com `session_id` e formato JSON opcional | MANUT-15 (parcial) | ✅ feito | `515eccc` + correção de texto |
 
 ---
 
@@ -237,7 +237,7 @@ Trocar cada uma por uma descrição de comportamento é trabalho manual: cerca d
 - O `RUST_LOG` não aparecia em nenhum documento.
 
 **Correção.**
-- `src/main.rs`: com `STEPYARD_LOG_FORMAT=json` (opt-in), cada linha vira um objeto JSON com `timestamp` e os campos dos spans ativos. O padrão segue o texto compacto sem horário, porque a CLI, o despacho remoto e os testes leem essa saída. Feature `json` do `tracing-subscriber`; o lock ganhou só o `tracing-serde` 0.2.0.
+- `src/main.rs`: com `STEPYARD_LOG_FORMAT=json` (opt-in), cada linha vira um objeto JSON com `timestamp` e os campos dos spans ativos. O padrão continua sendo o texto compacto sem horário, porque a CLI, o despacho remoto e os testes leem essa saída. Ele muda em um ponto: com o span novo, uma linha registrada dentro de um passo v2 passa a começar com `session{session_id=…}:`. Medi rodando o `repeat` com `RUST_LOG=warn` sem `STEPYARD_LOG_FORMAT`. O commit `515eccc` dizia "default text format is unchanged", o que não é exato. A suíte, que lê essa saída, passou com o prefixo. Feature `json` do `tracing-subscriber`; o lock ganhou só o `tracing-serde` 0.2.0.
 - `stepyard_harness::Engine::step` roda dentro de um span `session{session_id}`, o que vale também para quem usa a biblioteca. O span é de nível **ERROR**. Na primeira versão ele era INFO, e **o teste reprovou**: com `RUST_LOG=warn`, o `EnvFilter` descartava o span, e justamente os avisos perdiam o `session_id`.
 - `docs/CONFIG.md` ganhou a seção "Diagnostic logs": a diferença entre o log de sessão e os logs de diagnóstico, mais `RUST_LOG` e `STEPYARD_LOG_FORMAT`.
 

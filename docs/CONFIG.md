@@ -187,4 +187,4 @@ Two kinds of logs exist:
 | Variable | Default | Effect |
 |---|---|---|
 | `RUST_LOG` | `info` | Filter for diagnostic logs, e.g. `warn`, `debug`, `stepyard_harness=debug`. |
-| `STEPYARD_LOG_FORMAT` | text | `json` writes one JSON object per line with a `timestamp` and, for lines logged while a v2 step runs, `span.session_id`. Use it for runs nobody watches (remote dispatch, CI) to match a line to `.stepyard/logs/<session_id>.jsonl`. The default text format has no timestamps. |
+| `STEPYARD_LOG_FORMAT` | text | `json` writes one JSON object per line with a `timestamp` and, for lines logged while a v2 step runs, `span.session_id`. Use it for runs nobody watches (remote dispatch, CI) to match a line to `.stepyard/logs/<session_id>.jsonl`. The default text format has no timestamps; a line logged while a v2 step runs starts with `session{session_id=…}:`. |
