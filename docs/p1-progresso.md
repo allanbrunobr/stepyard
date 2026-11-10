@@ -1,0 +1,56 @@
+# Progresso das correções P1 — análise de 09/11/2026
+
+Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). Um commit local por item, na ordem da tabela P1 (gravidade). Nada foi empurrado.
+
+## Como cada item é verificado
+
+- **Testes com Postgres real.** Os testes de banco rodam contra um Postgres 16 efêmero no daemon Docker remoto (`m1-docker`), alcançado pelo IP Tailscale do M1. O contêiner tem `--rm`, uma senha descartável e é removido ao fim de cada execução. Isso corrige a seção 1 do relatório, que dava esses testes como "não medidos": a porta não responde em `127.0.0.1`, mas responde pelo IP Tailscale.
+- **Linha de base com banco, antes de qualquer correção** (commit `ea26129`): `cargo test --workspace --no-fail-fast` → **1.125 passaram, 0 falharam, 13 ignorados** (52 binários). Os 94 testes dependentes de banco passam contra Postgres real.
+- **Portões por item, iguais aos do CI:** `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `scripts/audit-patterns.sh`, `cargo xtask audit-emit-before-io`, perfil SQLite (`cargo check` do engine e `clippy` do session). Por fim, a suíte inteira com banco.
+- **O teste novo precisa distinguir.** Para cada correção, injeto o defeito antigo (mutante) e confirmo que o teste novo reprova na asserção certa. Só então restauro o código.
+
+## Itens
+
+| # | Item P1 | Achados | Status | Commit |
+|---|---|---|---|---|
+| 1 | Reconciliação de partida só para sessões órfãs | ARQ-01, BUG-CLI-01, BUG-HARNESS-01 | ✅ feito | (este) |
+| 2 | Slack `target` + filtro `shell_quote` nos workflows | SEG-RUST-02, SEG-RUST-07 | pendente | |
+| 3 | Tera sem `get_env` | SEG-RUST-04 | pendente | |
+| 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | pendente | |
+| 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | pendente | |
+| 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | pendente | |
+| 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 | pendente | |
+| 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | pendente | |
+| 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | pendente | |
+| 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01, BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | pendente | |
+
+## Pendências que são do Allan (exigem conta, login, gasto ou segredo)
+
+- **Rotacionar `GH_TOKEN`, `ANTHROPIC_API_KEY` e a senha do banco** em qualquer ambiente onde a stack compose rodou com despacho por SSH. Os valores estão em claro nos logs do contêiner da API (SEG-TS-02). A correção de código do item 4 impede novos vazamentos, mas não apaga os que já aconteceram.
+
+---
+
+## 1. Reconciliação de partida só para sessões órfãs — ✅
+
+**Defeito.** Cada `stepyard execute` (v2 + Postgres, o padrão) marcava como `failed` **toda** sessão `running` do banco e fazia `docker rm -f` no contêiner dela (`crates/stepyard-harness/src/startup.rs:88-101`, chamada incondicional em `src/cli/commands.rs:466-478`). Um segundo processo contra o mesmo banco destruía o trabalho do primeiro.
+
+**Correção.**
+- `SessionLease` (`crates/stepyard-harness/src/startup.rs`): o dono da sessão segura um *advisory lock* de sessão do PostgreSQL (`pg_try_advisory_lock`, chave = 8 primeiros bytes do UUID) numa conexão dedicada, desanexada do pool. O PostgreSQL libera o lock quando a conexão fecha, inclusive se o processo morrer, então "consegui o lock" é prova direta de que o dono se foi.
+- `execute_v2` (`src/cli/commands.rs`) toma o lease logo depois de criar a sessão e o mantém até retornar.
+- A reconciliação só considera sessões com `started_at` mais antigo que `LEASE_GRACE` (60 s), o que cobre a janela entre o INSERT e o lease. Para cada uma, tenta o lock: se outro processo o segura, a sessão é poupada (`ReconcileReport::sessions_spared`) e, por continuar `running`, o contêiner dela também. Uma colisão de chave só pode poupar uma sessão morta; nunca afeta uma viva.
+- Não há migração de esquema. Sessões criadas por binários antigos (sem lease) continuam sendo tratadas como órfãs depois da carência, como antes.
+
+**Testes** (`crates/stepyard-harness/tests/startup_reconcile_liveness.rs`, novo, e `startup.rs` unitário):
+- `reconcile_spares_a_session_whose_owner_holds_the_lease_and_fails_it_once_released`: sessão com lease fica `running`, sem `crash_recovery`; um segundo lease é recusado; depois do `release`, a reconciliação a marca `failed` com exatamente um `crash_recovery`.
+- `reconcile_spares_a_fresh_session_inside_the_grace_window`.
+- `dropping_the_lease_releases_it_so_a_crashed_owner_is_detected`: simula o crash com `drop` sem `release` e espera o lock ficar livre no servidor (`pg_advisory_lock` com timeout, sem `sleep`; o portão Rule7a barrou a primeira versão, que usava `sleep`).
+- `session_lease_key_is_the_big_endian_head_of_the_uuid` (unitário).
+- O teste antigo `startup_reconcile.rs` passou a envelhecer a sessão semeada além da carência. Rodou contra o Docker do M1 e o Postgres real.
+
+**Medido:**
+- Testes de reconciliação com Postgres: 4/4 verdes. Unitários do `startup`: 7/7.
+- **Mutante** (ignorar o lock, `if !owner_gone && false`): o teste do lease **reprova** com "a session whose owner holds the lease must stay running". Restaurado em seguida.
+- Portões do CI: todos com status 0.
+- Suíte completa com banco: **1.129 passaram, 0 falharam, 13 ignorados** (53 binários; +3 testes de integração, +1 unitário).
+
+**Não coberto:** não há teste de ponta a ponta com dois processos `stepyard execute` reais e Docker concorrendo. O lease e a reconciliação foram testados na API da biblioteca.

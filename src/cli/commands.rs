@@ -457,7 +457,7 @@ async fn execute_v2(
     ));
 
     #[cfg(feature = "postgres")]
-    {
+    let lease_pool = {
         let pool = connect_pg(args.json).await?;
 
         // D8 startup reconcile (Story 2.4). Runs unconditionally before any
@@ -476,13 +476,22 @@ async fn execute_v2(
             .await
             .context("startup reconcile failed")?;
         tracing::debug!(?reconcile_report, "startup reconcile report");
-    }
+        pool
+    };
 
     let store = build_store(args.no_file_logs).await?;
     // A second handle for the live progress view (read-only replays).
     let progress_store = store.clone();
     let session = open_session_with_store(store, &workflow.name).await?;
     let session_id = session.id();
+    // Liveness lease: while this value lives, a concurrent `stepyard execute`
+    // against the same database sees this session as owned and its startup
+    // reconcile leaves the session and its container alone. It must outlive
+    // the engine run, so it stays bound until `execute_v2` returns.
+    #[cfg(feature = "postgres")]
+    let _session_lease = crate::startup::SessionLease::acquire(&lease_pool, *session_id.as_uuid())
+        .await
+        .context("failed to take the session liveness lease")?;
 
     let lifecycle: Arc<dyn SandboxLifecycle> = match sandbox_runtime {
         SandboxRuntime::Local => Arc::new(LocalShellLifecycle::new()),

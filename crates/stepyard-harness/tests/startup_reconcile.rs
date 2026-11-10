@@ -131,6 +131,13 @@ async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
         .await
         .expect("new session");
     let seeded_id = seeded.id();
+    // Reconcile only touches sessions older than LEASE_GRACE whose owner no
+    // longer holds the lease. Nobody holds this one; backdate it past grace.
+    sqlx::query("UPDATE sessions SET started_at = NOW() - INTERVAL '1 hour' WHERE id = $1")
+        .bind(*seeded_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("backdate seeded session");
 
     let orphan_uuid = Uuid::new_v4();
     let orphan_name = format!("stepyard-session-{orphan_uuid}");
