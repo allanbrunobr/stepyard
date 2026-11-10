@@ -300,11 +300,11 @@ Os mesmos comandos dos três jobs de `.github/workflows/check.yml`, com Postgres
 ## O que ficou pendente na P2
 
 - **Decisão do Allan:**
-  - limpar as **230 worktrees** registradas pelas rodadas de teste desta sessão (comando no item 8b);
+  - limpar as **230 worktrees** registradas pelas rodadas de teste desta sessão (comando no item 8b) — feito depois, durante a P3 (`docs/p3-progresso.md`);
   - a imagem `stepyard-sandbox:latest` voltou a existir no M1 (item 2);
   - SEG-TS-05 (um segredo único para telemetria, despacho e login);
   - subscriber do dashboard mandando `DASHBOARD_API_SECRET` para a URL definida no YAML (resto do SEG-RUST-05).
-- **Depende de `.github/` (fora do escopo desta sessão):** fixar actions por SHA e `permissions:` (SEG-TS-10), release com gate de testes e assinatura (SEG-TS-11), `npm audit`/`cargo audit` no CI, job com Docker (TEST-02), `--features slack` no CI (MANUT-05), atalho docs-only (TEST-13) e `STEPYARD_REQUIRE_DB=1` para os testes de banco (TEST-03).
+- **Depende de `.github/` (fora do escopo desta sessão):** fixar actions por SHA e `permissions:` (SEG-TS-10), release com gate de testes e assinatura (SEG-TS-11), `npm audit`/`cargo audit` no CI, job com Docker (TEST-02), `--features slack` no CI (MANUT-05), atalho docs-only (TEST-13) e `STEPYARD_REQUIRE_DB=1` para os testes de banco (TEST-03). Feito depois no item 10 da P3 (`docs/p3-progresso.md`), menos `npm audit`/`cargo audit`.
 - **Exige ambiente que não tenho aqui:** proxy da API inalcançável no Docker Engine do Linux (BUG-MOTOR-02/15). O M1 é Docker Desktop, onde o `host-gateway` alcança o loopback do host, então a falha não é reproduzível. Também o cookie `Secure` atrás do proxy real (SEG-TS-08).
 - **Trabalho maior, ainda não feito:**
   - BUG-CLI-08: evento `WorkflowFailed` no núcleo, para o dashboard não mostrar `success` em run reprovado;

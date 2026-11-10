@@ -1,9 +1,9 @@
 # Progresso das correções P3 — análise de 09/11/2026
 
-Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). Branch local `p3-correcoes`, criada a partir de `437dcf3` (`p2-correcoes`). Um commit local por item. **Sem push e sem PR.**
+Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). Branch local `p3-correcoes`, criada a partir de `437dcf3` (`p2-correcoes`). Um commit local por item. Os itens 1 a 9 foram feitos sem push nem PR. Em 10/11, às 19:16, o Allan autorizou o push de `p2-correcoes` e `p3-correcoes`, **um** PR empilhado sobre o #1 e as mudanças de `.github/` do item 10.
 
 **Regras desta rodada:**
-- não mexer em `.github/`, em credenciais nem em worktrees;
+- não mexer em `.github/` (até o item 10, autorizado à parte), em credenciais nem em worktrees;
 - não apagar nada fora do repositório;
 - pular os itens que dependem de decisão do Allan (SEG-TS-05 e o subscriber do dashboard) e os majors do `vite`, do `vitest` e do `node-cron`.
 
@@ -22,10 +22,11 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | 3 | Saída de passo limitada no log de sessão (1 MiB por stream, configurável) | BUG-HARNESS-08 (BUG-HARNESS-03 pendente) | ✅ feito | `a913232` |
 | 4 | `SessionId` no crate de contrato; o orquestrador deixa de depender do crate de sessão | ARQ-10 (ARQ-09 pendente) | ✅ feito | `78dc9e5` |
 | 5 | Higiene: pool de banco morto da API; `allow(dead_code)` que não suprimiam nada | MANUT-16, MANUT-09 (parcial) | ✅ feito | `1e23944` |
-| 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI pendente) | ✅ feito | `2f67af8` |
+| 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI: item 10) | ✅ feito | `2f67af8` |
 | 7 | Guard do diretório de build calibrado e documentado | MANUT-14 (parcial) | ✅ feito | `c731327` |
 | 8 | Referências a invariantes inexistentes, comentário errado sobre `parallel`, `exclude` órfãos | MANUT-12 (parcial) | ✅ feito | `1b91937`, `8c1cb61` |
 | 9 | Logs de diagnóstico com `session_id` e formato JSON opcional | MANUT-15 (parcial) | ✅ feito | `515eccc` + correção de texto |
+| 10 | CI: actions por SHA, permissões mínimas, MSRV, testes Docker, cobertura com piso, `slack`, docs-only sem renomeação; release com gate e proveniência | SEG-TS-10, SEG-TS-11, TEST-02, TEST-03, TEST-13, TEST-15, MANUT-05, MANUT-08 | ✅ feito (o CI do PR é a prova) | `756f91e`, `7d5df90`, `0957f4f` |
 
 ---
 
@@ -267,16 +268,53 @@ Das 235 worktrees registradas, **230** eram `stepyard-session-*` criadas por su�
 
 Antes de remover, conferi que nenhuma estava travada (`locked`), nenhuma tinha processo aberto e nenhuma tinha alteração não commitada. Todas saíram com `git worktree remove --force`, sem nenhuma falha, e depois rodei `git worktree prune`. O checkout principal, as worktrees das sessões Orca e as 2 `stepyard-session-*` que ficam dentro do checkout principal **não** foram tocadas.
 
+## 10. CI e release — ✅ (o CI do PR é a prova)
+
+Autorizado à parte em 10/11, 19:16. Três commits: `756f91e` (testes), `7d5df90` (`check.yml` e Dependabot) e `0957f4f` (`release.yml`).
+
+| Achado | O que mudou |
+|---|---|
+| SEG-TS-10 | Todas as actions fixadas por SHA de commit, com a tag em comentário (antes: `free-disk-space@main`, `rust-toolchain@stable`, o resto em tags móveis). `permissions: contents: read` no topo dos dois workflows; só o job `release` escreve. `.github/dependabot.yml` para `github-actions`. |
+| SEG-TS-11 | O release chama o `check.yml` (`workflow_call`) e confere se a tag é `v` + a versão do `Cargo.toml` antes de compilar. `merge-multiple` deixa nomes simples no `checksums.sha256`. Cada binário ganha uma atestação de proveniência. O `cross` ficou fixado na v0.2.5. |
+| TEST-02 | O job `docker-tests` roda os testes `#[ignore]` com Docker e Postgres, inclusive os de segurança argv-not-shell. |
+| TEST-03 | 41 pontos de pulo em 35 arquivos falham quando `STEPYARD_REQUIRE_DB` está definido; o job com Postgres o define. |
+| TEST-13 | A detecção de docs-only usa `git diff --no-renames`. |
+| TEST-15 | O job `coverage` roda `cargo llvm-cov` com piso de 75% de linhas. |
+| MANUT-05 | Clippy e testes com `--features slack`. |
+| MANUT-08 | O job `msrv` roda `cargo check --locked --workspace --all-targets` no Rust 1.88. |
+
+O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha CI.
+
+**Medido:**
+- **Cobertura:** 77,40% das linhas (23.629 linhas, 5.339 sem cobertura), com cargo-llvm-cov 0.9.1 e Rust 1.88, num contêiner linux/amd64 com Postgres 16. Todos os testes passaram nessa medição. O piso de 75 deixa margem para diferenças do runner.
+- **TEST-03:** sem URL de banco, com `STEPYARD_REQUIRE_DB=1`, o `cli_execute` teve 4 de 4 falhas e o `agent_replay` 9 de 9. Sem a variável, eles pulam e passam, como antes.
+- **Release:**
+  - a checagem de tag, rodada no ubuntu:22.04, deu rc 0 para `v0.7.6` e rc 1 para `v0.7.7` e para `v0.7.6-rc1`. Uma tag de pré-release agora exige a mesma versão no `Cargo.toml`;
+  - o `sha256sum -c --ignore-missing` foi simulado com o novo formato: OK no arquivo íntegro e FAILED com um byte alterado;
+  - o workflow em si não rodou, porque precisa de uma tag.
+- **actionlint 1.7.7:**
+  - nada no `check.yml`;
+  - no `release.yml`, só achados anteriores a esta mudança: o `matrix.cross`, que nenhuma entrada define, e o passo de Windows em PowerShell. O achado SC2162 do `read` sumiu.
+- **Linux, Rust 1.88 com `-Dwarnings`:** `cargo check --locked` dos perfis default, slack e sqlite deu rc 0.
+- **Verificação final local no `0957f4f`** (os comandos do CI, com Postgres efêmero no M1):
+  - os 17 passos deram rc 0;
+  - a suíte com `STEPYARD_REQUIRE_DB=1` teve 844 passaram, 0 falharam e 18 ignorados;
+  - os 18 testes Docker ignorados passaram (18 de 18);
+  - os testes `slack` passaram (6 de 6).
+- **O que só o CI mostra:** o comportamento dos testes Docker no Docker Engine do Linux, onde mora o BUG-MOTOR-02/15. Aqui eles rodaram no Docker Desktop.
+
 ## O que ficou de fora da P3
 
 ### Pulado por ordem (decisão do Allan ou major de dependência)
 - **SEG-TS-05** e o **segredo do subscriber do dashboard**: dependem de decisão do Allan.
 - **Majors do `vite`, do `vitest` e do `node-cron`.**
 
-### Exige `.github/`, que não posso tocar
-- **Job de MSRV** (MANUT-08): `dtolnay/rust-toolchain@1.88` mais `cargo check --locked --workspace --all-targets`. Sem ele, a MSRV volta a ficar falsa no primeiro `cargo update` que puxar um crate mais novo.
-- **Cobertura com piso** (TEST-15, `cargo llvm-cov`).
-- **SEG-TS-10/11, TEST-02/03/13, MANUT-05**: os achados de CI e workflows do relatório.
+### Do CI, ainda depois do item 10
+- **`npm audit` e `cargo audit` no CI** (SEG-TS-12): o `npm audit` reprovaria hoje pelos 7 avisos que pedem os majors pulados.
+- **Gate de contagem mínima de testes executados** (resto do TEST-03).
+- **Binário Linux com OpenSSL dinâmico** (resto do SEG-TS-11): `rustls` ou alvo musl mudam o código, não o workflow.
+- **Cobertura por crate e da API** (`vitest --coverage`): o piso é um só, para o workspace Rust.
+- **O `release.yml` não foi executado**: só uma tag o dispara.
 
 ### Grandes demais para uma rodada de commits locais (G no relatório)
 - **Desativação do v1** (ARQ-07, MANUT-13, SEG-RUST-10, ARQ-12, TEST-14), estimada em 2–4 semanas. Antes de apagar uma linha, é preciso portar para o v2 o `--repo`, um subscriber de eventos que leia o log de sessão, `stack`/`prompts` e o `--dry-run`. Só depois saem `src/engine`, `src/steps`, `src/sandbox/docker.rs`, `src/events` e `src/plugins` (cerca de 8,9 mil linhas). Não comecei uma remoção parcial: com dois motores convivendo, apagar metade de um deixaria o padrão (v2) e o v1 divergindo ainda mais. Enquanto isso, os plugins seguem com `dlopen` no construtor do v1, nunca despachados e com `unsafe` sem teste.
@@ -301,5 +339,5 @@ Antes de remover, conferi que nenhuma estava travada (`locked`), nenhuma tinha p
 - **TEST-10/11**.
 
 ### Efeitos colaterais fora do repositório (nada apagado)
-- `/tmp/stepyard-target` está com **42,94 GiB**, em boa parte das builds desta análise. Não foi limpo.
-- No daemon Docker do M1 ficaram as imagens `rust:1.87` e `rust:1.88`, baixadas para medir a MSRV. Os contêineres foram todos `--rm`. Antes, na P2, eu já tinha reconstruído a imagem `stepyard-sandbox:latest` lá.
+- `/tmp/stepyard-target` chegou a **48,29 GiB** (`du`, 10/11). O Allan autorizou apagá-lo, mas a permissão da ferramenta negou o `rm`; continua lá.
+- No daemon Docker do M1 ficaram as imagens `rust:1.87` e `rust:1.88`, baixadas para medir a MSRV; para o item 10, também `rhysd/actionlint:1.7.7`. Os contêineres foram todos `--rm`. Antes, na P2, eu já tinha reconstruído a imagem `stepyard-sandbox:latest` lá.
