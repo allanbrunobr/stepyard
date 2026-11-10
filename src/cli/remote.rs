@@ -265,16 +265,10 @@ async fn status_cmd(cfg: &RemoteConfig, workflow: Option<String>, limit: u32) ->
     );
     for entry in body.data {
         let target = entry.target.unwrap_or_default();
-        let target = if target.len() > 18 {
-            &target[..18]
-        } else {
-            &target
-        };
-        let workflow = if entry.workflow.len() > 22 {
-            &entry.workflow[..22]
-        } else {
-            &entry.workflow
-        };
+        // Cut on a char boundary: a byte index inside a multi-byte character
+        // panicked (BUG-CLI-10).
+        let target = crate::display::truncate_at_char_boundary(&target, 18).0;
+        let workflow = crate::display::truncate_at_char_boundary(&entry.workflow, 22).0;
         println!(
             "{:<38}  {:<22}  {:<18}  {:<10}  {}",
             entry.run_id, workflow, target, entry.status, entry.started_at

@@ -366,7 +366,10 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             let combined = if stdout.len() > 1500 {
-                format!("...{}", &stdout[stdout.len() - 1500..])
+                format!(
+                    "...{}",
+                    crate::display::tail_at_char_boundary(&stdout, 1500)
+                )
             } else {
                 stdout.to_string()
             };
@@ -378,7 +381,10 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
                 )
             } else {
                 let err_tail = if stderr.len() > 1000 {
-                    format!("...{}", &stderr[stderr.len() - 1000..])
+                    format!(
+                        "...{}",
+                        crate::display::tail_at_char_boundary(&stderr, 1000)
+                    )
                 } else {
                     stderr.to_string()
                 };

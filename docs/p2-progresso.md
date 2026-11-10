@@ -18,7 +18,8 @@ A verificação de cada item segue o padrão da P1 (ver `docs/p1-progresso.md`):
 | 1 | Segredos do host fora do alcance do YAML (`${VAR}`, `base_url` do chat, env no argv) | SEG-RUST-05 (parcial), SEG-RUST-12 | ✅ feito | `882c323` |
 | 2 | Aviso quando o build roda no host por padrão; contêiner de sessão endurecido | SEG-RUST-06, SEG-RUST-15 | ✅ feito | `be5f483` |
 | 3 | Perdas de trabalho: diretório por execução no `--repo` do v1, commits feitos no contêiner, sessão presa após conflito de merge | BUG-MOTOR-03, BUG-MOTOR-01, BUG-HARNESS-06 | ✅ feito | `029fef2` |
-| 4 | Contrato de eventos do dashboard (`null` recusado pela API; fixture compartilhado) | ARQ-03 (BUG-CLI-08 pendente) | ✅ feito | (este) |
+| 4 | Contrato de eventos do dashboard (`null` recusado pela API; fixture compartilhado) | ARQ-03 (BUG-CLI-08 pendente) | ✅ feito | `9addfd9` |
+| 5 | Pânicos por fatiamento de UTF-8 no Slack e no `remote status` | BUG-CLI-06, BUG-MOTOR-14, BUG-CLI-10 (BUG-CLI-09 pendente) | ✅ feito | (este) |
 
 ---
 
@@ -133,3 +134,20 @@ A checagem de contradições rodou antes do PR #1 e deixou três defeitos reais,
 - Portões do CI: todos com status 0. Suíte completa com banco: **1.194 passaram, 0 falharam, 18 ignorados**. Job SQLite: verde. Job TypeScript: verde (**24 testes**).
 
 **Não coberto: BUG-CLI-08.** O v1 emite `WorkflowCompleted` **sempre**, até quando o run falha (por exemplo num gate), e o núcleo não tem evento `WorkflowFailed`. O status enviado ao dashboard sai dos passos ("failed" só se algum passo falhou), então um run reprovado por gate aparece como `success`. Corrigir exige uma variante nova no contrato de eventos do núcleo (`stepyard-core`), que atravessa os dois motores, e fica registrado. O POST "dispara e esquece", com espera fixa de 500 ms, também continua (BUG-CLI-14).
+
+## 5. Pânicos por fatiamento de UTF-8 — ✅ (parcial)
+
+**Defeitos (BUG-CLI-06, BUG-MOTOR-14, BUG-CLI-10).**
+- O bot do Slack cortava a saída do workflow com `&stdout[stdout.len() - 1500..]` e `&stderr[stderr.len() - 1000..]`. Quando esse índice caía no meio de um caractere de vários bytes (saída acentuada ou com emoji, comum em português), o processo entrava em pânico e o resultado nunca era postado.
+- `stepyard remote status` fazia o mesmo no início do texto, com `&target[..18]` e `&workflow[..22]`.
+
+**Correção** (`src/display.rs`): `tail_at_char_boundary`, nova, e `truncate_at_char_boundary`, que já existia e virou `pub(crate)`, cortam sempre numa fronteira de caractere e ficam dentro do limite de bytes. Os três pontos passaram a usá-las.
+
+**Teste** (`display.rs`): para **todo** limite de 0 ao tamanho de um texto com `ação 🚀 çã` repetido, os dois cortes ficam dentro do orçamento, não partem caractere e são prefixo ou sufixo do original. O mesmo teste traz o **controle**: a expressão antiga do Slack, aplicada a `é` seguido de 1.499 `a`, entra em pânico (`catch_unwind`), e a nova devolve 1.499 bytes.
+
+**Medido:**
+- Os testes do Slack (`--features slack`) passam, e o `clippy` com essa feature sai com status 0.
+- O clippy padrão barrou a primeira versão: a função nova só é usada pelo bot, então vira código morto sem a feature. Ficou anotada com `cfg_attr`.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.196 passaram, 0 falharam, 18 ignorados**. Job SQLite: verde.
+
+**Não coberto: BUG-CLI-09.** O Slack continua sem deduplicação de retries (o Slack reenvia o mesmo evento se não receber resposta em 3 s) e sem limite de tarefas simultâneas. Fica para um próximo item.
