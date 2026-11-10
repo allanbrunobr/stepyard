@@ -50,9 +50,11 @@
 //! scope-body dispatch so scoped chat steps adapt through the same helper
 //! as top-level chat steps.
 //!
-//! Executors for `call` / `repeat` / `map` landed in the scope-runner commit.
-//! `parallel` is the only v1 kind still rejected outright with
-//! [`AdapterError::UnsupportedStepType`].
+//! `parallel` is adapted as well: [`adapt`] turns each top-level
+//! `parallel` body into a synthesised scope named `__parallel_<index>`, run
+//! by the same scope runner as `call` / `repeat` / `map`. Like those, it is
+//! a container, so `parallel` inside another scope body is rejected with
+//! [`AdapterError::NestedScopesNotSupported`].
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;

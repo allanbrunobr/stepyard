@@ -7,7 +7,7 @@
 //! `StepStarted` / `StepCompleted` events with a populated
 //! [`stepyard_core::ScopeContext`], and finally emits the **container's**
 //! own top-level `StepCompleted` with a synthetic output snapshot so the
-//! containing workflow advances by one step — preserving Invariante 11
+//! containing workflow advances by one step — preserving ARCHITECTURE invariant 7
 //! (no per-step memory held on the engine; all state lives in the log).
 //!
 //! # Non-goals for PR 3
@@ -395,7 +395,7 @@ impl ContainerReplayState {
 
 /// Snapshot map visible to templates **inside** a single scope body
 /// iteration. Rebuilt on every render call (no caching) to keep
-/// Invariante 11: scope-body state lives in the session log, not on
+/// ARCHITECTURE invariant 7: scope-body state lives in the session log, not on
 /// the engine.
 ///
 /// Per PR 3 of Task #31 (user-anchored rule 2): scope-body templates

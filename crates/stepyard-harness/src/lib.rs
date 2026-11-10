@@ -15,7 +15,7 @@
 //!
 //! All state lives in the session log — the harness holds zero per-step
 //! memory. A process crash between steps is fully recoverable via
-//! [`Engine::resume`] (Invariante 11).
+//! [`Engine::resume`] (ARCHITECTURE invariant 7).
 //!
 //! # Scope
 //!

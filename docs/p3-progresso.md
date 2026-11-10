@@ -23,7 +23,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P3). 
 | 4 | `SessionId` no crate de contrato; o orquestrador deixa de depender do crate de sessão | ARQ-10 (ARQ-09 pendente) | ✅ feito | `78dc9e5` |
 | 5 | Higiene: pool de banco morto da API; `allow(dead_code)` que não suprimiam nada | MANUT-16, MANUT-09 (parcial) | ✅ feito | `1e23944` |
 | 6 | MSRV medida (1.88) e lint instável que não verificava nada | MANUT-08 (job de MSRV no CI pendente) | ✅ feito | `2f67af8` |
-| 7 | Guard do diretório de build calibrado e documentado | MANUT-14 (parcial) | ✅ feito | (este) |
+| 7 | Guard do diretório de build calibrado e documentado | MANUT-14 (parcial) | ✅ feito | `c731327` |
+| 8 | Referências a invariantes inexistentes, comentário errado sobre `parallel`, `exclude` órfãos | MANUT-12 (parcial) | ✅ feito | (este) |
 
 ---
 
@@ -188,6 +189,40 @@ Não há mutante: a mudança não altera comportamento. A prova é a compilaçã
 - Remover a linha devolveria o `target/` local de mais de 100 GiB para dentro de cada checkout, que é o problema que ela resolveu.
 - Mudar o padrão afeta o fluxo de todas as worktrees, então a escolha fica para quem mantém o repositório.
 - O diretório `/tmp/stepyard-target` está em 42,94 GiB e **não foi limpo**: fica fora do repositório.
+
+## 8. Comentários que apontam para o que não existe — ✅ (parcial)
+
+**Defeito (MANUT-12).** O código cita um planejamento privado que o leitor não consegue consultar. Corrigi a parte com dano concreto:
+- **21 citações de invariantes numeradas** que a `ARCHITECTURE.md` não tinha: "Invariante 11" (16×), "Invariante 9" (3×) e "Invariante 2/3" (uma vez cada). A ARCHITECTURE lista só 6.
+- O cabeçalho de `src/cli/harness_adapter.rs` dizia que `parallel` "is the only v1 kind still rejected outright", mas o `adapt` o converte num escopo sintetizado `__parallel_<índice>`.
+- O `stepyard-session/src/lib.rs` mandava ler uma seção "Data Model" que não existe.
+- O `Cargo.toml` tinha `exclude` para `PROMPT.md`, `EPICS-AND-STORIES.md` e `territory_map.json`, que não existem no repositório nem no histórico.
+
+**Correção.**
+- A `ARCHITECTURE.md` ganhou duas invariantes, com o que o código de fato assume:
+  - **7**: o motor v2 não guarda estado entre passos; tudo é relido do log de sessão;
+  - **8**: sessões concorrentes não interferem umas nas outras (`SandboxLifecycle` é `Send + Sync`; `tests/concurrent_sessions.rs`).
+- As 21 citações agora apontam para "ARCHITECTURE invariant 7/8"; a antiga 3 virou a 5 (contêineres descartáveis) e a 2 virou a 1 (log só de acréscimo).
+- O cabeçalho do adaptador descreve o que acontece com `parallel`: adaptado no nível superior e rejeitado dentro de outro escopo (`NestedScopesNotSupported`, porque é contêiner).
+- Os três `exclude` órfãos saíram.
+
+**Medido:**
+- `rg 'Invariante [0-9]'` em .rs/.toml/.yml/.ts/.sh: de 21 para **0**.
+- Portões do CI: todos com status 0. Suíte completa: **843 passaram**, 0 falharam, 18 ignorados. Job SQLite: verde. Worktrees: +0.
+
+Só comentários e documentação mudaram, então não há mutante.
+
+**Não coberto.** Continuam as referências de **história** de planejamento. Contagem atual nos mesmos tipos de arquivo:
+
+| Referência | Ocorrências | Arquivos |
+|---|---|---|
+| `Story N` | 164 | 65 |
+| `PR N` | 191 | 26 |
+| `Task #N` | 105 | 26 |
+| `Round N` | 29 | 20 |
+| `Epic N` | 15 | 10 |
+
+Trocar cada uma por uma descrição de comportamento é trabalho manual: cerca de 500 comentários em 60+ arquivos, cada um exigindo ler o código ao redor. Não vale fazer isso antes da desativação do v1, que apaga boa parte deles. Também não pus um portão no `audit-patterns.sh` contra ocorrências novas. Com centenas de casos existentes, ele precisaria de uma linha de base, e esse mecanismo o script não tem.
 
 ## Fora do escopo dos itens: limpeza de worktrees (pedida à parte)
 

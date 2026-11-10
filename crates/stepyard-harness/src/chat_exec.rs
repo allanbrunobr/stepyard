@@ -59,7 +59,7 @@ pub trait ChatClient: Debug + Send + Sync {
 /// `history` is the committed prior turns for this chat-session bucket,
 /// rebuilt by `compute_progress` from [`stepyard_core::Event::ChatMessageAppended`]
 /// rows — the harness does **not** keep an in-memory transcript
-/// between step calls (Invariante 11). The incoming user turn is
+/// between step calls (ARCHITECTURE invariant 7). The incoming user turn is
 /// passed separately via `user_message` so the client doesn't have to
 /// guess which tail entry is "the prompt this call is producing a
 /// reply for."

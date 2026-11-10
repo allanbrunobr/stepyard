@@ -303,7 +303,7 @@ fn step_completed_with_agent_session_id_roundtrips() {
     // Emitted by an `agent` step that captured a Claude CLI `session_id`
     // from its streaming JSON. The field must surface on the wire so
     // `progress_from_log` can rebuild the shared/isolated resume chain
-    // from the session log alone (Invariante 11 — no per-process
+    // from the session log alone (ARCHITECTURE invariant 7 — no per-process
     // in-memory state between steps).
     let ts = chrono::Utc.with_ymd_and_hms(2026, 4, 21, 12, 0, 0).unwrap();
     let original = Event::StepCompleted {
@@ -374,7 +374,7 @@ fn legacy_step_completed_without_agent_session_id_deserializes() {
 #[test]
 fn chat_message_appended_roundtrips() {
     // The new variant that lets post-crash replay rebuild
-    // `chat_sessions` from the session log alone (Invariante 11 — no
+    // `chat_sessions` from the session log alone (ARCHITECTURE invariant 7 — no
     // in-memory chat history between `step` calls). Freezes the five
     // fields and the `snake_case` role spelling that subscribers /
     // replay scanners rely on.

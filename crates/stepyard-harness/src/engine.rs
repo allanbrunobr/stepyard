@@ -243,7 +243,7 @@ impl CancelToken {
 /// The key design property: between two `step` calls the engine holds no
 /// state about what has already run. `step` always asks the session log
 /// "how many steps have completed?" and executes the next one. This is
-/// what makes `resume` and `cancel` trivially correct (Invariante 11).
+/// what makes `resume` and `cancel` trivially correct (ARCHITECTURE invariant 7).
 pub struct Engine {
     session: Session,
     executor: Arc<dyn StepExecutor>,
@@ -1133,7 +1133,7 @@ impl Engine {
                 // gate step's `{{ steps.X.stdout }}` survives a process crash
                 // and reloads via `progress_from_log` — without the snapshot
                 // the harness would need per-session memory between steps and
-                // break Invariante 11 on resume (PR 2 of Task #31).
+                // break ARCHITECTURE invariant 7 on resume (PR 2 of Task #31).
                 let snapshot = stepyard_core::StepOutputSnapshot {
                     stdout: output.stdout.clone(),
                     stderr: output.stderr.clone(),
@@ -2251,7 +2251,7 @@ impl Engine {
         // compute_progress relies on. If the assistant append
         // fails, the next scan sees only the staged user turn for
         // this step_name, and the next `step_started` will drop it
-        // on rerun (Invariante 11).
+        // on rerun (ARCHITECTURE invariant 7).
         self.emit(Event::ChatMessageAppended {
             step_name: step.name.clone(),
             session: session_bucket,
@@ -2430,7 +2430,7 @@ pub(crate) struct Progress {
     /// Captured Claude CLI `session_id` keyed by top-level agent step
     /// name, rebuilt on every scan. The v2 agent executor consumes this
     /// to resolve explicit `resume: <step_name>` / `fork_session:
-    /// <step_name>` argv from the log alone — Invariante 11 means the
+    /// <step_name>` argv from the log alone — ARCHITECTURE invariant 7 means the
     /// live-run `SessionManager` is gone after a crash, so the session
     /// log is the only source of truth. PR 5a of Task #31.
     ///
@@ -2460,7 +2460,7 @@ pub(crate) struct Progress {
     /// `session` field on [`Event::ChatMessageAppended`]). Each bucket
     /// holds the **committed** turns in log-append order, so a post-
     /// crash replay of a `session: shared` chat step sees the same
-    /// conversation the pre-crash run durably produced — Invariante 11
+    /// conversation the pre-crash run durably produced — ARCHITECTURE invariant 7
     /// means there's no in-memory chat history between `step` calls,
     /// so the log is the only source of truth (PR 5b of Task #31).
     ///
@@ -2527,7 +2527,7 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
     // 5a gave `agent_session_ids`. Turns from a step that crashes
     // before completion, fails, or is still in flight are discarded;
     // a `step_started` for the same `step_name` clears the stage so a
-    // post-resume rerun re-stages from scratch (Invariante 11).
+    // post-resume rerun re-stages from scratch (ARCHITECTURE invariant 7).
     let mut chat_sessions: HashMap<String, Vec<ChatMessage>> = HashMap::new();
     let mut pending_chat_turns: HashMap<String, Vec<(String, ChatMessage)>> = HashMap::new();
 

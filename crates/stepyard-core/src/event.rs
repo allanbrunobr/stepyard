@@ -170,7 +170,7 @@ pub enum Event {
     /// One turn of an `agent` / `chat` step's conversation was persisted
     /// to the session log. Emitted once per role turn so a post-crash
     /// replay can reconstruct the full `chat_sessions` map from the log
-    /// alone (PR 5b of Task #31 — Invariante 11 means the runtime has no
+    /// alone (PR 5b of Task #31 — ARCHITECTURE invariant 7 means the runtime has no
     /// in-memory chat history between `step` calls).
     ///
     /// `session` is the chat-session bucket key — not necessarily the
@@ -230,7 +230,7 @@ impl Event {
 
 /// Frozen exec output attached to [`Event::StepCompleted`] so the harness can
 /// rebuild a cross-step reference map from the session log alone (no in-memory
-/// state between `step` calls — preserves Invariante 11 under post-crash
+/// state between `step` calls — preserves ARCHITECTURE invariant 7 under post-crash
 /// replay). Added in PR 2 of Task #31.
 ///
 /// Fields are persisted verbatim. Redaction and size caps are deferred to a

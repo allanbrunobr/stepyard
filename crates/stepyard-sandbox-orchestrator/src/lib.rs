@@ -17,7 +17,7 @@
 //! * [`SandboxId`] — newtype over `uuid::Uuid`. The container identifier
 //!   that crosses process boundaries.
 //!
-//! # Invariants (NFC3, Invariante 3 of ARCHITECTURE.md)
+//! # Invariants (invariant 5 of ARCHITECTURE.md)
 //!
 //! * Containers are cattle. Destroying and recreating a sandbox never loses
 //!   state that matters — anything load-bearing is in the `Session` log.
@@ -102,7 +102,7 @@ pub struct ExecOptions {
 /// The contract every sandbox backend implements.
 ///
 /// Implementors are `Send + Sync` so the harness can share a single
-/// orchestrator across concurrent sessions (Invariante 9).
+/// orchestrator across concurrent sessions (ARCHITECTURE invariant 8).
 #[async_trait]
 pub trait SandboxLifecycle: Send + Sync {
     /// Create a brand-new sandbox for this `session_id`.
@@ -220,7 +220,7 @@ pub trait SandboxLifecycle: Send + Sync {
 /// [`SandboxLifecycle`] trait-object surface.
 ///
 /// The harness shares `Arc<dyn SandboxLifecycle>` across tasks
-/// (Invariante 9). These checks are never invoked; the compiler typechecks
+/// (ARCHITECTURE invariant 8). These checks are never invoked; the compiler typechecks
 /// them so that any change which makes a method's returned future `!Send`
 /// (e.g. switching to `#[async_trait(?Send)]`) breaks the build before
 /// the harness can spawn it.

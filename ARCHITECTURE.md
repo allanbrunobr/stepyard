@@ -116,6 +116,14 @@ These hold today. Breaking one is a bug.
    that the engine needs.
 6. **Library crates return typed errors** (`thiserror`). `anyhow` stays in the
    binary.
+7. **The v2 engine keeps no state between steps.** Whatever a step needs from
+   earlier steps (outputs, scope progress, chat history, agent session ids) is
+   read back from the session log, not held in memory. Code comments cite
+   this as "invariant 7".
+8. **Concurrent sessions do not affect each other.** The harness shares one
+   `SandboxLifecycle` (`Send + Sync`) across sessions. Cancelling or failing
+   one session does not change the others
+   (`crates/stepyard-harness/tests/concurrent_sessions.rs`).
 
 ## Direction
 

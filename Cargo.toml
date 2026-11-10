@@ -56,9 +56,6 @@ authors = ["Allan Bruno"]
 exclude = [
   "/Formula/",
   "/.github/",
-  "PROMPT.md",
-  "EPICS-AND-STORIES.md",
-  "territory_map.json",
 ]
 
 [[bin]]
