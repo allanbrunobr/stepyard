@@ -224,6 +224,12 @@ pub const CHAT_BASE_URL_ALLOW_VAR: &str = "STEPYARD_CHAT_BASE_URL_ALLOW";
 /// LiteLLM) are allowed; anything else must start with a prefix the user
 /// listed in `STEPYARD_CHAT_BASE_URL_ALLOW`.
 pub fn chat_base_url_allowed(url: &str) -> Result<(), String> {
+    base_url_allowed_by(url, std::env::var(CHAT_BASE_URL_ALLOW_VAR).ok().as_deref())
+}
+
+/// [`chat_base_url_allowed`] with the allow-list passed in, so tests need not
+/// touch the process environment.
+fn base_url_allowed_by(url: &str, allow_list: Option<&str>) -> Result<(), String> {
     let lower = url.trim().to_ascii_lowercase();
     let after_scheme = lower
         .strip_prefix("http://")
@@ -245,14 +251,27 @@ pub fn chat_base_url_allowed(url: &str) -> Result<(), String> {
     if !after_scheme.is_empty() && !authority.contains('@') && loopback {
         return Ok(());
     }
-    let allowed = std::env::var(CHAT_BASE_URL_ALLOW_VAR)
-        .map(|list| {
-            list.split(',')
-                .map(str::trim)
-                .filter(|p| !p.is_empty())
-                .any(|prefix| url.trim().starts_with(prefix))
-        })
-        .unwrap_or(false);
+    // A listed prefix must end where a URL part ends: `https://llm.example`
+    // allows `https://llm.example/v1`, not `https://llm.example.evil.net` nor
+    // `https://llm.example@evil.net`. A URL with userinfo is never allowed.
+    let candidate = url.trim();
+    let allowed = !after_scheme.is_empty()
+        && !authority.contains('@')
+        && allow_list
+            .map(|list| {
+                list.split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .any(|prefix| {
+                        candidate.starts_with(prefix)
+                            && (prefix.ends_with('/')
+                                || matches!(
+                                    candidate[prefix.len()..].chars().next(),
+                                    None | Some('/' | '?' | '#')
+                                ))
+                    })
+            })
+            .unwrap_or(false);
     if allowed {
         Ok(())
     } else {
@@ -579,5 +598,31 @@ mod tests {
             let err = chat_base_url_allowed(bad).expect_err(bad);
             assert!(err.contains(CHAT_BASE_URL_ALLOW_VAR), "{bad}: {err}");
         }
+    }
+
+    /// A listed prefix allows URLs under it, not hosts that merely start
+    /// with the same text (pre-PR review of the P3 branch).
+    #[test]
+    fn chat_base_url_allow_list_matches_whole_url_parts() {
+        let list = Some("https://llm.corp.example, https://proxy.example:8443/v1/");
+        for ok in [
+            "https://llm.corp.example",
+            "https://llm.corp.example/v1",
+            "https://llm.corp.example?x=1",
+            "https://proxy.example:8443/v1/chat",
+        ] {
+            assert_eq!(base_url_allowed_by(ok, list), Ok(()), "{ok}");
+        }
+        for bad in [
+            "https://llm.corp.example.evil.net/v1",
+            "https://llm.corp.example@evil.net/v1",
+            "https://llm.corp.example:9999/v1",
+            "https://llm.corp.exampleevil/v1",
+            "https://proxy.example:8443/v2",
+            "https://evil.net/v1",
+        ] {
+            assert!(base_url_allowed_by(bad, list).is_err(), "{bad}");
+        }
+        assert!(base_url_allowed_by("https://llm.corp.example", None).is_err());
     }
 }
