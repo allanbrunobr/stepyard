@@ -498,6 +498,13 @@ pub struct Step {
         skip_serializing_if = "Option::is_none"
     )]
     pub idle_timeout: Option<Duration>,
+    /// `cmd` steps only: a non-zero exit code completes the step instead of
+    /// failing the workflow. The exit code stays in the step snapshot, so a
+    /// following gate can branch on `{{ steps.X.exit_code }}`. This is the v2
+    /// form of v1's `config.fail_on_error: false` (the v1→v2 adapter sets
+    /// it). Other step kinds ignore it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_failure: bool,
     /// Step-level env vars. Highest precedence in the cascade resolver
     /// (Story 3.4) — overrides workflow, defaults, and host `${VAR}`.
     /// `#[serde(default)]` keeps existing YAML without `env:` parseable
@@ -788,6 +795,7 @@ impl Step {
             command: String::new(),
             timeout: None,
             idle_timeout: None,
+            allow_failure: false,
             env: HashMap::new(),
             condition: None,
             on_pass: None,
@@ -823,6 +831,12 @@ impl Step {
     /// duration strings after Round 3 Story 1.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Builder variant for [`Step::allow_failure`] (`cmd` steps).
+    pub fn with_allow_failure(mut self, allow_failure: bool) -> Self {
+        self.allow_failure = allow_failure;
         self
     }
 

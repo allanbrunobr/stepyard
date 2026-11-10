@@ -330,6 +330,7 @@ async fn gate_missing_condition_is_structured_step_failure() {
             command: String::new(),
             timeout: None,
             idle_timeout: None,
+            allow_failure: false,
             env: HashMap::new(),
             condition: None,
             on_pass: None,

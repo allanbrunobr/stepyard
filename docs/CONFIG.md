@@ -18,6 +18,14 @@ Workflow step config resolves in four layers, from lowest to highest priority:
 
 For each key, the highest-priority layer that sets it takes effect.
 
+Both engines resolve `timeout` (cmd and agent steps) and `fail_on_error` (cmd
+steps) through these layers. With no layer setting `timeout`, cmd steps stop
+after 60s and agent steps after 600s; the embedded defaults set
+`config.global.timeout: 300s` and `config.cmd.timeout: 60s`. On `--engine v2`,
+a malformed value (`timeout: "soon"`, a bare number such as `timeout: 30`, or
+`fail_on_error: "no"`) is an error when the workflow loads instead of a silent
+fallback to the default.
+
 ## Shape
 
 ```yaml
@@ -112,9 +120,10 @@ more.
 
 ### Cmd
 
-| Key       | Type     | Effect                         |
-|-----------|----------|--------------------------------|
-| `timeout` | duration | Kill the subprocess after this |
+| Key             | Type     | Effect                         |
+|-----------------|----------|--------------------------------|
+| `timeout`       | duration | Kill the subprocess after this |
+| `fail_on_error` | bool (default `true`) | `false`: a non-zero exit completes the step instead of failing the run; `{{ steps.X.exit_code }}` keeps the real code for a following gate |
 
 ### Chat
 

@@ -1119,7 +1119,9 @@ impl Engine {
         };
 
         match exec_result {
-            Ok(output) if output.is_success() => {
+            // `allow_failure` (v1 `fail_on_error: false`): a non-zero exit
+            // completes the step; the snapshot keeps the real exit code.
+            Ok(output) if output.is_success() || step.allow_failure => {
                 // Persist stdout/stderr/exit_code in the session log so a later
                 // gate step's `{{ steps.X.stdout }}` survives a process crash
                 // and reloads via `progress_from_log` — without the snapshot

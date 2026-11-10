@@ -7,6 +7,7 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 - **Testes com Postgres real.** Os testes de banco rodam contra um Postgres 16 efêmero no daemon Docker remoto (`m1-docker`), alcançado pelo IP Tailscale do M1. O contêiner tem `--rm`, uma senha descartável e é removido ao fim de cada execução. Isso corrige a seção 1 do relatório, que dava esses testes como "não medidos": a porta não responde em `127.0.0.1`, mas responde pelo IP Tailscale.
 - **Linha de base com banco, antes de qualquer correção** (commit `ea26129`): `cargo test --workspace --no-fail-fast` → **1.125 passaram, 0 falharam, 13 ignorados** (52 binários). Os 94 testes dependentes de banco passam contra Postgres real.
 - **Portões por item, iguais aos do CI:** `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `scripts/audit-patterns.sh`, `cargo xtask audit-emit-before-io`, perfil SQLite (`cargo check` do engine e `clippy` do session). Por fim, a suíte inteira com banco.
+- **Job SQLite do CI** (a partir do item 7): `cli_lite_smoke` e testes do `stepyard-session` com `--features sqlite` entram na verificação de cada item. Os portões já cobriam o `check` e o `clippy` desse perfil, mas não os testes.
 - **O teste novo precisa distinguir.** Para cada correção, injeto o defeito antigo (mutante) e confirmo que o teste novo reprova na asserção certa. Só então restauro o código.
 
 ## Itens
@@ -18,8 +19,8 @@ Referência: [`docs/analise-20261109.md`](analise-20261109.md), seção 3 (P1). 
 | 3 | Tera sem `get_env` | SEG-RUST-04 | ✅ feito | `2d5ff9f` |
 | 4 | API: `dispatch_log_path` e segredos no log SSH | SEG-TS-01, SEG-TS-02 | ✅ feito | `9adbd5d` |
 | 5 | API resiliente a falhas do Postgres | BUG-CLI-05, SEG-TS-03 | ✅ feito | `a64c4d1` |
-| 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | ✅ feito | (este) |
-| 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 | pendente | |
+| 6 | Contrato de despacho dashboard/remote | ARQ-02, BUG-CLI-03/04/07, MANUT-04/07, SEG-TS-09 | ✅ feito | `8f084a3` |
+| 7 | Adaptador v1→v2: `timeout` e `fail_on_error` | BUG-CLI-02, MANUT-01/02, ARQ-06 (parcial) | ✅ feito | (este) |
 | 8 | v1 `parallel` honra `fail_on_error` resolvido | BUG-MOTOR-08 | pendente | |
 | 9 | Workspace v2: timeout e caminhos excluídos | BUG-HARNESS-02, SEG-RUST-08 | pendente | |
 | 10 | Sandbox: volumes do YAML e bloqueio do v1 `--sandbox` | SEG-RUST-03, SEG-RUST-01, BUG-MOTOR-04, ARQ-04, SEG-RUST-11 | pendente | |
@@ -214,3 +215,40 @@ A API respondia 202, o processo filho morria, e o run ficava em `dispatching` pa
 **Não coberto.**
 - O v2 continua sem suporte a `--repo` e sem eventos para o dashboard. Essas lacunas mantêm o v1 vivo e fazem parte do plano de desativação do v1 (P3).
 - `--sandbox`, que já é o padrão e não muda nada, não foi tocado.
+
+## 7. Adaptador v1→v2: `timeout` e `fail_on_error` — ✅
+
+**Defeito.** O adaptador v1→v2 descartava todo o `config` dos passos `cmd` e `agent` (`src/cli/harness_adapter.rs:479-484`). Com isso, no motor padrão:
+- `fail_on_error: false`, usado em 10 dos 12 workflows embutidos (por exemplo o `lint` do `fix-issue`, seguido de um gate e de um agente que corrige), abortava o run no primeiro código de saída diferente de zero;
+- nenhum `timeout` era aplicado: nem o `config.global.timeout`, nem o `config.cmd.timeout`, nem o próprio do passo. Os workflows embutidos declaram timeouts de propósito (por exemplo `fix-issue.yaml:124`, 600 s no agente), e `cmd` e `agent` rodavam sem limite.
+
+**Correção.**
+- **Harness** (`crates/stepyard-harness`): campo novo `Step::allow_failure` (só `cmd`). Com ele, um código de saída ≠ 0 conclui o passo, e o snapshot guarda o código real para o gate seguinte. É honrado nos três pontos de decisão:
+  - `engine.rs`, em `execute_cmd_with_select`, que também cobre os corpos de repeat/map/call;
+  - os dois pontos do `parallel` em `scope.rs`: o dreno que abortava os irmãos e a emissão de eventos.
+- **Adaptador:**
+  - `timeout` e `fail_on_error` são resolvidos pelo **mesmo** `ConfigManager` do v1 (global < tipo < padrão de nome < passo), inclusive dentro de corpos de `parallel`, e então mapeados para `Step::timeout` e `Step::allow_failure`.
+  - Sem nenhuma camada definindo `timeout`, valem os fallbacks do v1: 60 s para cmd, 600 s para agent.
+  - Valor malformado (`"soon"`, número sem unidade, `fail_on_error: "no"`) passa a ser erro de carga (`AdapterError::InvalidStepConfig`), e não um default silencioso.
+- **Documentação:** `docs/CONFIG.md` ganhou a linha de `fail_on_error` e uma nota sobre o que os dois motores aplicam.
+
+**Mudança de comportamento (atenção):** no v2, que é o padrão, `cmd` e `agent` agora **têm** timeout, como sempre tiveram no v1 e como a `CONFIG.md` prometia. Com os defaults embutidos, cmd para em 60 s e agent em 300 s (`config.global.timeout`). Um workflow que dependia de rodar sem limite no v2 precisa declarar `timeout`. Também: uma config de usuário com `timeout: 30` (número sem unidade), que o v1 ignorava em silêncio, agora é recusada no v2.
+
+**Interação com o item 9:** com timeouts ativos, o defeito do item 9 (timeout destrói o contêiner **antes** da cópia de volta, BUG-HARNESS-02) fica mais fácil de disparar no modo Docker. O item 9 corrige isso. Por isso convém não usar este commit isoladamente sem os seguintes.
+
+**Testes.**
+- Adaptador (`harness_adapter.rs`): as quatro camadas (tipo vence global, padrão `slow_*` vence tipo, passo vence tudo, agent herda global, filho de `parallel` resolvido); fallbacks sem config; valores malformados recusados; o `lint` do `fix-issue.yaml` embutido sai com `allow_failure` e 60 s.
+- **Ponta a ponta pelo binário v2 com Postgres real** (`tests/cli_v2_step_config.rs`):
+  - `exit 3` com `fail_on_error: false` → o gate vê `exit_code == 3` e o run chega ao passo seguinte;
+  - o mesmo com `true` → o run falha;
+  - sub-passo de `parallel` tolerado não aborta o irmão;
+  - `timeout: "1s"` corta um `sleep 30` em menos de 20 s.
+- Dois testes do harness que montam `Step` literal ganharam o campo novo.
+
+**Medido:**
+- **Mutantes**, todos contra o ponta a ponta com Postgres: M1 (engine ignora `allow_failure`) reprova só o teste do gate; M2 (`parallel` ignora) reprova só o do `parallel`; M3 (adaptador não mapeia o timeout) reprova só o do timeout, que esperou os 30 s inteiros. Restaurados.
+- Portões do CI: todos com status 0. Suíte completa com banco: **1.156 passaram, 0 falharam, 13 ignorados**. Job SQLite: smoke 5/5 e session verde.
+
+**Não coberto.**
+- `idle_timeout` e os demais campos que o adaptador ainda descarta (`output_type`, `async_exec`, `events`, `plugins`; ARQ-06) não entraram aqui. Recusar esses campos com erro é uma mudança maior, que fica para P2.
+- O `chat` continua com o caminho próprio de timeout, que já existia.

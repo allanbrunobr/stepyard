@@ -604,6 +604,9 @@ impl Engine {
         let top_outs = top_level_outputs(self).await?;
         let progress = self.progress_from_log().await?;
         let mut to_run: Vec<ParallelTask> = Vec::new();
+        // Per-position `allow_failure`, read before the sub-steps move into
+        // their tasks: a non-zero cmd exit of such a sub-step completes it.
+        let allow_failure: Vec<bool> = scope_def.steps.iter().map(|s| s.allow_failure).collect();
         for (pos, sub) in scope_def.steps.iter().enumerate() {
             let pos = pos as u32;
             if already_completed.contains(&pos) {
@@ -916,7 +919,8 @@ impl Engine {
             match joined {
                 Ok((pos, name, kind, ParallelTaskResult::Completed(out))) => {
                     if let ParallelTaskOutput::Cmd(ref cmd_out) = out {
-                        if cmd_out.exit_code != 0 {
+                        let allowed = allow_failure.get(pos as usize).copied().unwrap_or(false);
+                        if cmd_out.exit_code != 0 && !allowed {
                             terminal = ParallelDrain::Failed(format!(
                                 "parallel sub-step `{name}` failed with exit_code={}",
                                 cmd_out.exit_code
@@ -986,7 +990,8 @@ impl Engine {
                         stderr: cmd_out.stderr.clone(),
                         exit_code: cmd_out.exit_code,
                     };
-                    if cmd_out.exit_code == 0 {
+                    let allowed = allow_failure.get(*pos as usize).copied().unwrap_or(false);
+                    if cmd_out.exit_code == 0 || allowed {
                         completion_snaps.push((*pos, snap.clone()));
                         self.emit(Event::StepCompleted {
                             step_name: name.clone(),
