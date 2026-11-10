@@ -414,20 +414,53 @@ impl Engine {
 
         let t1 = Instant::now();
         if is_repo_mode {
-            // Clone the GitHub repo inside the container instead of copying CWD
-            let repo = self.repo.as_ref().unwrap();
+            // Clone by argv. The value is checked before any container
+            // command is built. A rejected value is not written into the
+            // error: it may contain control characters.
+            let raw = self.repo.as_deref().unwrap();
+            let repo = crate::github_repo::parse_github_repo(raw).map_err(|_| {
+                anyhow::anyhow!(
+                    "--repo must be OWNER/REPO using only ASCII letters, digits, '.', '_' and '-'. Refusing to clone."
+                )
+            })?;
+            // The credential helper is a fixed script. It has to exist
+            // before `git clone` so a private repo can read GH_TOKEN from
+            // the container environment. The token is not placed in argv.
+            let _ = docker
+                .run_command(
+                    "git config --global --add safe.directory /workspace \
+                     && git config --global user.name 'Stepyard' \
+                     && git config --global user.email 'stepyard@localhost' \
+                     && if [ -n \"$GH_TOKEN\" ]; then \
+                          git config --global credential.helper '!f() { echo \"password=$GH_TOKEN\"; }; f'; \
+                          git config --global credential.https://github.com.username x-access-token; \
+                        fi",
+                )
+                .await;
+            let clean = docker
+                .run_command("find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +")
+                .await?;
+            if clean.exit_code != 0 {
+                bail!(
+                    "Failed to clear the sandbox workspace before clone: {}",
+                    clean.stderr.trim()
+                );
+            }
+            let url = format!("https://github.com/{repo}.git");
             let clone_output = docker
-                .run_command(&format!(
-                    "cd /workspace && rm -rf * .* 2>/dev/null; \
-                     git clone --depth=50 https://x-access-token:$GH_TOKEN@github.com/{repo}.git ."
-                ))
+                .run_argv(&[
+                    "git".to_string(),
+                    "clone".to_string(),
+                    "--depth=50".to_string(),
+                    url,
+                    ".".to_string(),
+                ])
                 .await?;
 
             if clone_output.exit_code != 0 {
                 bail!(
-                    "Failed to clone repo '{}' inside sandbox: {}",
-                    repo,
-                    clone_output.stderr
+                    "Failed to clone repo '{repo}' inside sandbox: {}",
+                    clone_output.stderr.trim()
                 );
             }
             tracing::info!(repo = %repo, "Cloned repository inside sandbox");

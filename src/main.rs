@@ -18,6 +18,7 @@ mod display;
 mod engine;
 mod error;
 mod events;
+mod github_repo;
 mod plugins;
 mod prompts;
 mod sandbox;

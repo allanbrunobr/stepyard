@@ -53,6 +53,29 @@ pub struct CliVar {
     value: String,
 }
 
+fn parse_engine(raw: &str) -> Result<String, String> {
+    match raw {
+        "v1" | "v2" => Ok(raw.to_string()),
+        _ => Err(format!(
+            "unknown --engine value `{}` (expected `v1` or `v2`)",
+            display_text(raw)
+        )),
+    }
+}
+
+fn parse_repo(raw: &str) -> Result<String, String> {
+    crate::github_repo::parse_github_repo(raw)
+        .map(str::to_string)
+        .map_err(str::to_string)
+}
+
+fn display_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_control() { '\u{FFFD}' } else { c })
+        .collect()
+}
+
 fn parse_cli_var(raw: &str) -> Result<CliVar, String> {
     let Some((key, value)) = raw.split_once('=') else {
         return Err(format!("--var expects KEY=VALUE, got `{raw}`"));
@@ -195,14 +218,14 @@ pub struct ExecuteArgs {
     /// GitHub repository (OWNER/REPO) to clone inside the Docker sandbox.
     /// When set, the sandbox clones this repo instead of copying the host CWD.
     /// Example: --repo allanbrunobr/stepyard
-    #[arg(long, value_name = "OWNER/REPO")]
+    #[arg(long, value_name = "OWNER/REPO", value_parser = parse_repo)]
     pub repo: Option<String>,
 
     /// Engine implementation to drive the workflow:
     /// `v2` (default) — the `stepyard_harness::Engine` step loop with
     /// session replay, crash recovery, and all supported step types.
     /// `v1` — legacy monolithic `Engine::run()` (deprecated; will be removed).
-    #[arg(long, value_name = "v1|v2", default_value = "v2")]
+    #[arg(long, value_name = "v1|v2", default_value = "v2", value_parser = parse_engine)]
     pub engine: String,
 }
 
@@ -820,6 +843,17 @@ pub async fn execute(
     shutdown_tx: Arc<broadcast::Sender<()>>,
     shutdown_signal: Arc<OnceLock<String>>,
 ) -> anyhow::Result<()> {
+    // Reject an unknown engine before sandbox setup. `validate_environment`
+    // builds the sandbox image when it is missing, and that work must not
+    // start for a flag value the command cannot run.
+    match args.engine.as_str() {
+        "v1" | "v2" => {}
+        other => bail!(
+            "unknown --engine value `{}` (expected `v1` or `v2`)",
+            display_text(other)
+        ),
+    }
+
     let workflow_path = resolve_workflow_path(&args.workflow)?;
 
     let defaults_path = Path::new(".stepyard/defaults.yaml");
@@ -910,10 +944,8 @@ pub async fn execute(
     .await?;
 
     // ── Engine selection (Epic 2 Story 2.4) ──────────────────────────────
-    // `--engine v2` drives the workflow through `stepyard_harness::Engine` — a
-    // thin step/resume loop that delegates persistence to the Session log and
-    // execution to a `SandboxLifecycle`. v2 only supports cmd steps today;
-    // the remaining step types stay on the v1 code path below.
+    // `--engine v2` calls `execute_v2`, which dispatches the full harness.
+    // The v1 branch below is legacy.
     match args.engine.as_str() {
         "v1" => {} // fall through to legacy path
         "v2" => {
@@ -932,7 +964,10 @@ pub async fn execute(
             )
             .await;
         }
-        other => bail!("unknown --engine value `{other}` (expected `v1` or `v2`)"),
+        other => bail!(
+            "unknown --engine value `{}` (expected `v1` or `v2`)",
+            display_text(other)
+        ),
     }
 
     // ── Session setup (Epic 1 Story 1.4) ─────────────────────────────────
@@ -1329,7 +1364,10 @@ pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
 
     let errors = validator::validate(&workflow);
     if errors.is_empty() {
-        println!("\x1b[32m✓\x1b[0m Workflow is valid: {}", workflow.name);
+        println!(
+            "\x1b[32m✓\x1b[0m Workflow is valid: {}",
+            display_text(&workflow.name)
+        );
         Ok(())
     } else {
         eprintln!("Validation errors:");
@@ -1889,6 +1927,23 @@ mod tests {
         assert_eq!(SessionStatus::Completed.as_db_str(), "completed");
         assert_eq!(SessionStatus::Failed.as_db_str(), "failed");
         assert_eq!(SessionStatus::Cancelled.as_db_str(), "cancelled");
+    }
+
+    #[test]
+    fn parse_engine_accepts_only_v1_and_v2() {
+        assert_eq!(parse_engine("v2").unwrap(), "v2");
+        assert!(parse_engine("v9").unwrap_err().contains("v1"));
+    }
+
+    #[test]
+    fn parse_repo_rejects_a_shell_metacharacter() {
+        assert!(parse_repo("o/r;id").is_err());
+        assert_eq!(parse_repo("acme/backend").unwrap(), "acme/backend");
+    }
+
+    #[test]
+    fn display_text_replaces_control_characters() {
+        assert_eq!(display_text("before\u{1b}[31mRED"), "before\u{FFFD}[31mRED");
     }
 
     #[test]

@@ -71,7 +71,7 @@ pub async fn require_docker() -> Result<()> {
              • Docker Desktop 4.40 or later (https://www.docker.com/products/docker-desktop/)\n\
              • Docker daemon must be running\n\
              \n\
-             To disable the sandbox, remove --sandbox flag or set `config.agent.sandbox: false`."
+             To run on the host, pass --no-sandbox or --sandbox-runtime local."
         );
     }
     Ok(())

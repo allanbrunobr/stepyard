@@ -11,6 +11,7 @@ pub mod display;
 pub mod engine;
 pub mod error;
 pub mod events;
+pub mod github_repo;
 pub mod plugins;
 pub mod prompts;
 pub mod sandbox;

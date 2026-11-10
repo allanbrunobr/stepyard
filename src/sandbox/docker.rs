@@ -392,6 +392,51 @@ impl DockerSandbox {
         })
     }
 
+    /// Run `argv` inside the sandbox with no shell.
+    ///
+    /// The working directory is `/workspace`. Each element is one argument,
+    /// so a repository name cannot change which program runs.
+    pub async fn run_argv(&self, argv: &[String]) -> Result<SandboxOutput> {
+        let id = self
+            .container_id
+            .as_ref()
+            .context("Container not created")?;
+        if argv.is_empty() {
+            bail!("sandbox argv is empty");
+        }
+
+        tracing::debug!(
+            container_id = %id,
+            program = %argv[0],
+            argc = argv.len(),
+            "Sandbox: executing argv"
+        );
+
+        let output = Command::new("docker")
+            .args(["exec", "-w", "/workspace", id])
+            .args(argv)
+            .output()
+            .await
+            .context("docker exec failed")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = output.status.code().unwrap_or(-1);
+
+        tracing::debug!(
+            exit_code,
+            stdout_len = stdout.len(),
+            stderr_len = stderr.len(),
+            "Sandbox: argv command completed"
+        );
+
+        Ok(SandboxOutput {
+            stdout,
+            stderr,
+            exit_code,
+        })
+    }
+
     /// Run a shell command inside the sandbox as a specific user.
     /// Used for agent steps that need non-root execution (Claude CLI
     /// refuses `--dangerously-skip-permissions` when running as root).

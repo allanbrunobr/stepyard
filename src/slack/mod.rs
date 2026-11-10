@@ -81,21 +81,26 @@ struct GitHubRef {
 }
 
 fn extract_github_info(input: &str) -> GitHubRef {
-    // Match: https://github.com/owner/repo/pull/N or /issues/N
-    let url_re =
-        regex::Regex::new(r"https?://github\.com/([^/]+/[^/]+)/(?:pull|issues)/(\d+)").unwrap();
+    // Owner and name use the same ASCII class as `parse_github_repo`.
+    // A character such as `;` ends the match, so `o/r;id` is not a repo.
+    let url_re = regex::Regex::new(
+        r"https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:pull|issues)/(\d+)",
+    )
+    .unwrap();
     if let Some(caps) = url_re.captures(input) {
         return GitHubRef {
-            repo: Some(caps[1].to_string()),
+            repo: accepted_repo(&caps[1]),
             number: caps[2].to_string(),
         };
     }
 
     // Match: https://github.com/owner/repo (no PR/issue number — for security-audit, generate-docs)
-    let repo_re = regex::Regex::new(r"https?://github\.com/([^/]+/[^/\s]+)").unwrap();
+    let repo_re =
+        regex::Regex::new(r"https?://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:[/?#\s]|$)")
+            .unwrap();
     if let Some(caps) = repo_re.captures(input) {
         return GitHubRef {
-            repo: Some(caps[1].to_string()),
+            repo: accepted_repo(&caps[1]),
             number: String::new(),
         };
     }
@@ -105,6 +110,21 @@ fn extract_github_info(input: &str) -> GitHubRef {
         repo: None,
         number: input.to_string(),
     }
+}
+
+fn accepted_repo(raw: &str) -> Option<String> {
+    crate::github_repo::parse_github_repo(raw)
+        .ok()
+        .map(str::to_string)
+}
+
+/// A GitHub URL that does not yield OWNER/REPO must not start a workflow.
+/// Running it against the bot's local directory would hide the rejection.
+fn github_ref_or_stop(info: GitHubRef, raw: &str) -> Option<GitHubRef> {
+    if raw.contains("github.com") && info.repo.is_none() {
+        return None;
+    }
+    Some(info)
 }
 
 fn route_message(text: &str) -> Option<WorkflowMatch> {
@@ -128,7 +148,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         .unwrap()
         .captures(&clean)
     {
-        let info = extract_github_info(&caps[1]);
+        let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "fix-issue.yaml".to_string(),
             target: info.number,
@@ -142,7 +162,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         .unwrap()
         .captures(&clean)
     {
-        let info = extract_github_info(&caps[1]);
+        let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "code-review.yaml".to_string(),
             target: info.number,
@@ -156,7 +176,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         .unwrap()
         .captures(&clean)
     {
-        let info = extract_github_info(&caps[1]);
+        let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "security-audit.yaml".to_string(),
             target: if info.number.is_empty() {
@@ -174,7 +194,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         .unwrap()
         .captures(&clean)
     {
-        let info = extract_github_info(&caps[1]);
+        let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "generate-docs.yaml".to_string(),
             target: if info.number.is_empty() {
@@ -192,7 +212,7 @@ fn route_message(text: &str) -> Option<WorkflowMatch> {
         .unwrap()
         .captures(&clean)
     {
-        let info = extract_github_info(&caps[1]);
+        let info = github_ref_or_stop(extract_github_info(&caps[1]), &caps[1])?;
         return Some(WorkflowMatch {
             workflow: "fix-ci.yaml".to_string(),
             target: info.number,
@@ -613,4 +633,22 @@ pub async fn start_server(port: u16) -> anyhow::Result<()> {
 
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slack_does_not_start_a_workflow_for_a_repo_with_a_shell_metacharacter() {
+        assert!(route_message("review pr https://github.com/o/r;id/pull/1").is_none());
+    }
+
+    #[test]
+    fn slack_still_captures_a_normal_pull_request() {
+        let wf = route_message("review pr https://github.com/acme/backend/pull/12")
+            .expect("normal pull request");
+        assert_eq!(wf.repo.as_deref(), Some("acme/backend"));
+        assert_eq!(wf.target, "12");
+    }
 }
