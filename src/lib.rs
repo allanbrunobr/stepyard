@@ -15,6 +15,7 @@ pub mod github_repo;
 pub mod plugins;
 pub mod prompts;
 pub mod sandbox;
+pub mod signal;
 #[cfg(feature = "slack")]
 pub mod slack;
 pub mod startup;

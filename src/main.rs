@@ -9,27 +9,12 @@ use clap::Parser;
 use tokio::sync::broadcast;
 use tracing_subscriber::EnvFilter;
 
-mod chat_client;
-mod claude;
-mod cli;
-mod config;
-mod control_flow;
-mod display;
-mod engine;
-mod error;
-mod events;
-mod github_repo;
-mod plugins;
-mod prompts;
-mod sandbox;
-mod signal;
-#[cfg(feature = "slack")]
-mod slack;
-mod startup;
-mod steps;
-mod workflow;
-
-use cli::Cli;
+// The binary is a thin entry point over the `stepyard_engine` library. It
+// used to re-declare the whole module tree (`mod cli; mod engine; …`), which
+// compiled every module twice, ran every unit test twice and produced two
+// distinct copies of every type (ARQ-11, MANUT-10, TEST-05).
+use stepyard_engine::cli::Cli;
+use stepyard_engine::{display, signal};
 
 #[tokio::main]
 async fn main() -> ExitCode {
