@@ -58,7 +58,7 @@ Calls the Anthropic (or OpenAI-compatible) API directly. No CLI, no session.
     session: review           # optional — grouped multi-turn history
 ```
 
-**Outputs:** `response`; `model` and `stats` are v1 only. Requires `ANTHROPIC_API_KEY`.
+**Outputs:** `response`; `model`, `input_tokens` and `output_tokens` are v1 only. Requires `ANTHROPIC_API_KEY`.
 
 ## `gate` — conditional branch
 

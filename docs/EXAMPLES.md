@@ -184,8 +184,8 @@ steps:
       model: claude-haiku-4-5 # step-inline wins even over pattern
 ```
 
-On v2 (the default) a pattern applies only `timeout` and `fail_on_error`;
-its `model` is ignored, so `lint_check` runs with the `agent` layer's model.
+On v2 (the default) a pattern applies only `timeout` (cmd and agent steps)
+and `fail_on_error` (cmd steps); its `model` is ignored, so `lint_check` runs with the `agent` layer's model.
 Run this example with `--engine v1` to get the pattern's model.
 
 ## Running the examples
