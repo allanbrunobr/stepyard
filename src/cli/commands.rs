@@ -1505,44 +1505,59 @@ fn v1_only_template_namespaces(path: &std::path::Path) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "uses {}, which --engine v2 does not render yet (run it with --engine v1)",
+            "uses {}, which --engine v2 does not render (a v2 step exposes only \
+             stdout, stderr, exit_code and response; names documented as v1 only \
+             need --engine v1)",
             found.join(", ")
         ))
     }
 }
 
-/// The v1-only template names and operators used in `texts`, as the
-/// YAML-SPEC writes them, sorted and without duplicates.
-fn v1_only_template_uses(texts: &[&str]) -> Vec<&'static str> {
-    let expr = regex::Regex::new(r"(?s)\{\{(.*?)\}\}").expect("valid regex");
-    let rules: [(&str, &'static str); 7] = [
-        (r"^-?\s*stack\b", "{{ stack.* }}"),
-        (r"^-?\s*prompts\b", "{{ prompts.* }}"),
-        (r"^-?\s*session_id\b", "{{ session_id }}"),
-        (r"\bsteps\.[\w-]+\.output\b", "{{ steps.<name>.output }}"),
-        (
-            r"\bsteps\.[\w-]+\.session_id\b",
-            "{{ steps.<name>.session_id }}",
-        ),
-        (r"\bfrom\s*\(", "{{ from(\"<name>\") }}"),
+/// The v1-only template names and operators used in `texts`, as the docs
+/// write them, sorted and without duplicates. Looks inside `{{ … }}` and
+/// `{% … %}`. A step exposes only `stdout`, `stderr`, `exit_code` and
+/// `response` on v2, so any other `steps.<name>.<field>` is v1 only.
+fn v1_only_template_uses(texts: &[&str]) -> Vec<String> {
+    const V2_STEP_FIELDS: &[&str] = &["stdout", "stderr", "exit_code", "response"];
+    let expr = regex::Regex::new(r"(?s)\{\{(.*?)\}\}|\{%(.*?)%\}").expect("valid regex");
+    // `(^|[^\w.])` keeps `steps.stack.stdout` (a step named `stack`) out.
+    let rules: [(&str, &str); 5] = [
+        (r"(^|[^\w.])stack\b", "{{ stack.* }}"),
+        (r"(^|[^\w.])prompts\.", "{{ prompts.* }}"),
+        (r"(^|[^\w.])session_id\b", "{{ session_id }}"),
+        (r"(^|[^\w.])from\s*\(", "{{ from(\"<name>\") }}"),
         (r"[\w\]][?!]\s*(\||$)", "the `?`/`!` accessors"),
     ];
-    let shorthand = regex::Regex::new(r"^-?\s*([A-Za-z_]\w*)\.output\b").expect("valid regex");
-    let mut found = Vec::new();
+    let rules: Vec<(regex::Regex, &str)> = rules
+        .iter()
+        .map(|(p, l)| (regex::Regex::new(p).expect("valid regex"), *l))
+        .collect();
+    let step_field =
+        regex::Regex::new(r"(^|[^\w.])steps\.[\w-]+\.([A-Za-z_]\w*)").expect("valid regex");
+    let shorthand = regex::Regex::new(r"(^|[^\w.])([A-Za-z_]\w*)\.output\b").expect("valid regex");
+    let mut found: Vec<String> = Vec::new();
     for text in texts {
         for cap in expr.captures_iter(text) {
-            let inner = cap.get(1).map_or("", |m| m.as_str()).trim_end_matches('-');
-            for (pattern, label) in rules {
-                if regex::Regex::new(pattern)
-                    .expect("valid regex")
-                    .is_match(inner)
-                {
-                    found.push(label);
+            let inner = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .map_or("", |m| m.as_str())
+                .trim_matches('-');
+            for (pattern, label) in &rules {
+                if pattern.is_match(inner) {
+                    found.push((*label).to_string());
                 }
             }
-            if let Some(name) = shorthand.captures(inner).and_then(|c| c.get(1)) {
-                if !["steps", "scope", "vars", "args", "target"].contains(&name.as_str()) {
-                    found.push("{{ <name>.output }}");
+            for c in step_field.captures_iter(inner) {
+                let field = c.get(2).map_or("", |m| m.as_str());
+                if !V2_STEP_FIELDS.contains(&field) {
+                    found.push(format!("{{{{ steps.<name>.{field} }}}}"));
+                }
+            }
+            for c in shorthand.captures_iter(inner) {
+                let name = c.get(2).map_or("", |m| m.as_str());
+                if !["steps", "scope", "vars", "args", "target"].contains(&name) {
+                    found.push("{{ <name>.output }}".to_string());
                 }
             }
         }
@@ -2263,6 +2278,23 @@ sandbox:
         );
         assert_eq!(uses(&["{{ foo.bar? }}"]), ["the `?`/`!` accessors"]);
         assert_eq!(uses(&["{{ foo.bar! | upper }}"]), ["the `?`/`!` accessors"]);
+        // Any step field v2 does not expose, also inside `{% … %}`.
+        assert_eq!(
+            uses(&["{{ steps.tpl.rendered }}"]),
+            ["{{ steps.<name>.rendered }}"]
+        );
+        assert_eq!(
+            uses(&["{% for i in steps.loop.iterations %}{{ i }}{% endfor %}"]),
+            ["{{ steps.<name>.iterations }}"]
+        );
+        assert_eq!(
+            uses(&["{%- if stack.name == \"rust\" -%}x{% endif %}"]),
+            ["{{ stack.* }}"]
+        );
+        assert!(
+            uses(&["{{ steps.stack.stdout }} {% if steps.a.exit_code == 0 %}{% endif %}"])
+                .is_empty()
+        );
     }
 
     #[test]

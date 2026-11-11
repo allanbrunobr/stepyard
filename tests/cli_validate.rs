@@ -92,6 +92,46 @@ fn the_yaml_spec_full_example_is_v1_only() {
         .success();
 }
 
+/// Each complete workflow in docs/EXAMPLES.md validates for the engine its
+/// heading declares: the default (v2), or v1 when it says "v1 only", and then
+/// the default engine must refuse it. Keeps the examples and `validate`
+/// telling the same story.
+#[test]
+fn every_complete_example_validates_for_its_engine() {
+    let doc = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/EXAMPLES.md"),
+    )
+    .unwrap();
+    let (mut v2, mut v1) = (0, 0);
+    for section in doc.split("\n### ").skip(1) {
+        let heading = section.lines().next().unwrap_or_default();
+        let Some(yaml) = section
+            .split("```yaml\n")
+            .nth(1)
+            .and_then(|rest| rest.split("```").next())
+        else {
+            continue;
+        };
+        if !(yaml.starts_with("name:") && yaml.contains("\nsteps:")) {
+            continue;
+        }
+        let wf = workflow(yaml);
+        let file = wf.path().to_str().unwrap();
+        if heading.contains("v1 only") {
+            stepyard()
+                .args(["validate", "--engine", "v1", file])
+                .assert()
+                .success();
+            stepyard().args(["validate", file]).assert().failure();
+            v1 += 1;
+        } else {
+            stepyard().args(["validate", file]).assert().success();
+            v2 += 1;
+        }
+    }
+    assert!(v2 >= 3 && v1 >= 2, "v2 {v2}, v1 {v1}");
+}
+
 /// Each shipped workflow validates for the engine it declares: the default
 /// (v2), or v1 when its header says `Requires --engine v1`, and then the
 /// default engine must refuse it.
