@@ -186,12 +186,12 @@ value. Useful for light data shaping between steps without spawning a shell.
 ```
 
 On v2 (the default) earlier step outputs are read with
-`ctx_get("<step>.stdout")` (also `.stderr` and `.exit_code`) for every step
-type, and the target with `ctx_get("target")`; there is no `steps.*`
-variable in the script, and `ctx_get` returns `()` for a missing key. On
-`--engine v1` the keys are each step's own output fields: the same three
-for a `cmd` step, but `.response` (not `.stdout`) for `agent` and `chat`
-and `.rendered` for `template`.
+`ctx_get("<step>.stdout")` (also `.stderr` and `.exit_code`), and the target
+with `ctx_get("target")`; there is no `steps.*` variable in the script, and
+`ctx_get` returns `()` for a missing key. A `gate` records no output, so it
+has no keys. On `--engine v1` the keys are each step's own output fields:
+`agent` and `chat` have `.response` (not `.stdout`) and `template` has
+`.rendered`.
 
 **Outputs:** the evaluated Rhai value (coerced to JSON), as `stdout` on v2.
 

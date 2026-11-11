@@ -290,6 +290,7 @@ Details: [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 | `parallel:` on `map` | Ignored. Items run one after another (v1 also runs them one after another by default) |
 | `config.events.dashboard` | Not sent. Dashboard events work only with v1 |
 | `config.patterns` | Only `timeout` (cmd and agent steps) and `fail_on_error` (cmd steps) are applied, as on v1. Other pattern keys, such as `model`, are ignored |
+| `config.agent` keys other than `model`, `command` and `timeout` | Not passed to agent steps (`system_prompt_append`, `session`, `resume`, `fork_session`; `permissions` on purpose). Set them on each step. The shipped `refactor.yaml` and `flaky-test-fix.yaml` keep their rules in `config.agent.system_prompt_append`, so on v2 their agent steps run without them |
 | `--timeout` | Has no effect in either engine (a warning says so). Set `config.global.timeout` or a step `timeout:` |
 
 ## CLI overview

@@ -21,7 +21,7 @@ use stepyard_engine::{display, signal};
 /// timestamp and the fields of the enclosing spans (for example the
 /// `session_id` of `stepyard_harness::Engine::step`), for runs nobody watches.
 /// The default stays the compact text format without timestamps; lines
-/// logged inside a span are prefixed with it (`session{session_id=…}:`).
+/// logged inside a span carry it after the level (` WARN session{session_id=…}: …`).
 fn init_tracing() {
     let builder = tracing_subscriber::fmt().with_env_filter(
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
