@@ -356,14 +356,19 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **Introduzido aqui, corrigido:**
   - **Frases sobre o v2 escritas sem medir.** Na rodada anterior, descrevi na STEP-TYPES a saída do `repeat` e do `map` no v2 a partir de um trecho de código, e as duas descrições estavam erradas. Agora só sobra o que está ligado a uma linha de código ou a uma medição.
   - **Saída de um `call` no v2.** É o `outputs:` renderizado, ou o `stdout` do último passo. Medi com um teste novo (`tests/cli_v2_call_stdout.rs`, com Postgres), e é nisso que se apoia a correção do `flaky-test-fix.yaml`.
-  - **Exemplo de `script`.** Agora usa `ctx_get("<passo>.stdout")`, a forma que os dois motores implementam.
+  - **Exemplo de `script`.** Agora usa `ctx_get("<passo>.stdout")`. É a forma do v2 para todo tipo de passo; no v1 vale para `cmd` (ver a sétima rodada).
   - **Falso positivo do `validate`.** Ele recusava um literal de texto (`{{ "stack" }}`) ou uma variável de `for`/`set` chamada `stack` ou `session_id`. Agora os literais são ignorados, e os nomes declarados no próprio workflow também. Caso no teste; mutante morto.
   - **A promessa do `validate`.** O README e a YAML-SPEC agora dizem que a checagem é de melhor esforço, só no arquivo do workflow: os arquivos `.md.tera` e o Rhai ficam de fora.
 - **Já existia, agora documentado como lacuna** (ver "O que ficou de fora"):
   - o `repeat` com `break`;
   - o `map` ignora `outputs:`;
-  - `config.patterns` não vale no v2;
+  - no v2, um padrão de `config.patterns` não aplica o `model` (corrigido na sétima rodada: antes eu escrevi que o v2 ignorava a camada inteira);
   - o `parallel` não tem `steps.checks.<nome>`.
+
+**Sétima rodada, no `5aeacf1`, só estática (sem build no M5): 3 achados vivos, todos de texto introduzido no `5aeacf1`, corrigidos.**
+- **`config.patterns` no v2.** O README, a EXAMPLES e esta página diziam que o v2 ignora a camada de padrões. Não ignora. O adaptador resolve `timeout` (cmd e agent) e `fail_on_error` (cmd) pelas quatro camadas do v1, padrão incluído (`resolve_runtime_config` em `src/cli/harness_adapter.rs`). O teste `cmd_and_agent_timeout_and_fail_on_error_follow_the_four_v1_layers`, anterior ao PR, fixa isso. A lacuna real é só o `model` e as demais chaves de agent e chat, que no v2 vêm apenas de `config.agent`/`config.chat`. O texto agora diz isso, de acordo com a CONFIG.
+- **Seção de defeitos antigos no lugar errado.** O título "Defeitos antigos do motor v2" tinha entrado no meio de "Ficou parcial", e seis pendências da própria P3 (G3/Rule7a, MANUT-09, -12, -14, -15 e a regra 8) caíram sob "Todos são anteriores a este PR". Voltaram para "Ficou parcial".
+- **`ctx_get` no v1.** A STEP-TYPES dava `ctx_get("<passo>.stdout")` como forma geral. No v1 as chaves são os campos de saída de cada tipo: `.stdout` só existe para `cmd`; `agent` e `chat` têm `.response` e `template` tem `.rendered` (`build_ctx_snapshot` em `src/steps/script.rs` achata os campos do `StepOutput`). A STEP-TYPES agora separa os dois motores.
 
 ## O que ficou de fora da P3
 
@@ -387,19 +392,20 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **BUG-HARNESS-03** (item 3): o `parallel` só grava `StepStarted`/`StepCompleted` dos sub-passos no fim. A correção muda a ordem dos eventos no log. Precisa ser conferida contra a invariante 2 (pareamento por passo de nível superior), a contagem de progresso e retomada, o contrato do dashboard (`tests/fixtures/dashboard-event.json`) e o limite de saída do item 3. Não a comecei para não deixá-la pela metade.
 - **Releitura completa do log** várias vezes por passo (item 3): agora limitada por passo, mas ainda linear no número de passos.
 - **Limite de saída no v1** (item 3): o erro de um passo que falha entra inteiro no log de sessão do v1. Fica para a desativação do v1.
-
-### Defeitos antigos do motor v2 achados pela revisão pré-PR (documentados, não corrigidos)
-Todos são anteriores a este PR. A STEP-TYPES, a EXAMPLES e o README agora os descrevem como lacuna, em vez de prometer o contrário.
-- **`repeat` com `break` depois da primeira iteração.** O `outputs:` é renderizado com os passos da iteração anterior. O `break` não incrementa `next_iteration` (`scope.rs`, ramo `Break` contra o `Completed`), e o `synthesise` usa `next_iteration - 1`. Cenário: um `cmd` com `fail_on_error: false` que passa na segunda tentativa, seguido de um gate `break` e de `outputs: "{{ scope.index }}:{{ steps.work.stdout }}"`.
-- **`map` ignora `outputs:`.** O `stdout` é um array JSON com a saída de cada item (`scope.rs`, `serde_json::to_string(&collected)`).
-- **`config.patterns` não vale no v2.** O adaptador não lê a camada de padrões, então o exemplo 8 da EXAMPLES só aplica o modelo do padrão no v1.
-- **`parallel`.** Nenhum motor expõe `steps.<parallel>.<ramo>`.
 - **G3 e Rule7a mais amplos** (item 2): exigem um mecanismo de exceção por linha no `audit-patterns.sh`.
 - **MANUT-09** (item 5): restam 24 `allow(dead_code)` em 7 arquivos sobre código de fato morto, mais 2 para alvos não-Unix e 2 em `tests/support`.
 - **MANUT-12** (item 8): continuam cerca de 500 referências de história de planejamento (`Story N`, `PR N`, `Task #N`, `Round N`, `Epic N`). Melhor tratá-las depois da desativação do v1.
 - **MANUT-14** (item 7): o `target-dir` versionado em `/tmp` continua. Mudar o padrão é decisão do Allan.
 - **MANUT-15** (item 9): o span cobre `Engine::step`. Ficam fora a reconciliação de inicialização (antes de existir sessão), as tarefas criadas com `spawn` dentro do `parallel` e os ~270 `println!`/`eprintln!` da interface.
 - **A regra 8 da ARCHITECTURE** (sem estado entre passos) não vale hoje. As exceções nomeadas lá são BUG-HARNESS-03, -04, -07 e a falta de retomada na CLI.
+
+### Defeitos antigos do motor v2 achados pela revisão pré-PR (documentados, não corrigidos)
+Todos são anteriores a este PR. A STEP-TYPES, a EXAMPLES e o README agora os descrevem como lacuna, em vez de prometer o contrário.
+- **`repeat` com `break` depois da primeira iteração.** O `outputs:` é renderizado com os passos da iteração anterior. O `break` não incrementa `next_iteration` (`scope.rs`, ramo `Break` contra o `Completed`), e o `synthesise` usa `next_iteration - 1`. Cenário: um `cmd` com `fail_on_error: false` que passa na segunda tentativa, seguido de um gate `break` e de `outputs: "{{ scope.index }}:{{ steps.work.stdout }}"`.
+- **`map` ignora `outputs:`.** O `stdout` é um array JSON com a saída de cada item (`scope.rs`, `serde_json::to_string(&collected)`).
+- **`model` de `config.patterns` no v2.** O adaptador aplica do padrão só `timeout` (cmd e agent) e `fail_on_error` (cmd). O `model` e as demais chaves de agent e chat vêm só de `config.agent`/`config.chat`, então o exemplo 8 da EXAMPLES só aplica o modelo do padrão no v1.
+- **`parallel`.** Nenhum motor expõe `steps.<parallel>.<ramo>`.
+- **`ctx_get` difere entre motores.** No v2 todo passo tem `.stdout`/`.stderr`/`.exit_code`; no v1 só o `cmd` tem `.stdout` (`agent`/`chat` têm `.response`, `template` tem `.rendered`).
 
 ### Ainda abertos da P2 (fora do escopo desta rodada)
 - **BUG-CLI-08**: evento `WorkflowFailed` no core.

@@ -289,7 +289,7 @@ Details: [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 | `--quiet` | No effect (a warning says so; `--verbose` works: it prints cmd output) |
 | `parallel:` on `map` | Ignored. Items run one after another (v1 also runs them one after another by default) |
 | `config.events.dashboard` | Not sent. Dashboard events work only with v1 |
-| `config.patterns` | Ignored: a step does not take the model or settings of a matching name pattern |
+| `config.patterns` | Only `timeout` (cmd and agent steps) and `fail_on_error` (cmd steps) are applied, as on v1. Other pattern keys, such as `model`, are ignored |
 | `--timeout` | Has no effect in either engine (a warning says so). Set `config.global.timeout` or a step `timeout:` |
 
 ## CLI overview
