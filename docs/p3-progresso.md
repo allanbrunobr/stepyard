@@ -311,6 +311,14 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
   - a suíte com `STEPYARD_REQUIRE_DB=1` teve 844 passaram, 0 falharam e 18 ignorados;
   - os 18 testes Docker ignorados passaram (18 de 18);
   - os testes `slack` passaram (6 de 6).
+- **Verificação completa no `4e003f9`, no M1** (Postgres efêmero e Docker Desktop; logs em `/tmp/iago-ci-m5/stepyard/final-4e003f9/`):
+  - fmt e clippy rodaram no Rust 1.99.1, e build e testes no 1.93.0, o default do M1. O CI usa `stable` para tudo;
+  - dos 16 passos, 15 deram rc 0. O `audit-patterns.sh` deu rc 1 porque o `rg` do M1 tinha sido compilado sem PCRE2, e o autoteste dos portões falhou fechado, como deve. Com o `rg` recompilado com PCRE2, esse passo, repetido sozinho, deu rc 0;
+  - a suíte com `STEPYARD_REQUIRE_DB=1` teve 853 passaram, 0 falharam e 18 ignorados;
+  - os 18 testes Docker ignorados passaram (18 de 18);
+  - os testes `slack` passaram (6 de 6), assim como o smoke SQLite (6 de 6), o `stepyard-session` com SQLite (11 passaram, 1 ignorado) e o TypeScript no `node:20` (28 de 28);
+  - o `msrv` no `rust:1.88` rodou o comando do CI, só com as features padrão, e deu rc 0;
+  - a árvore ficou limpa.
 - **O que só o CI mostra:** o comportamento dos testes Docker no Docker Engine do Linux, onde mora o BUG-MOTOR-02/15. Aqui eles rodaram no Docker Desktop.
 
 ## Revisão pré-PR (`pre-pr-contradicoes`)
@@ -365,12 +373,16 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
   - o que o v2 aplica de `config.patterns`;
   - o `parallel` não tem `steps.checks.<nome>`.
 
-**Sétima a décima rodadas, só estáticas (sem build no M5).** Cada uma achou erros no texto que eu tinha escrito para fechar a rodada anterior; nenhuma achou defeito de código deste PR. O estado final de cada assunto está na doc de uso e em "Defeitos antigos do motor v2", abaixo; este registro só aponta onde.
+**Sétima a 12ª rodadas.** Da 7ª à 11ª foram só estáticas, sem build no M5. Cada uma achou erros no texto que eu tinha escrito para fechar a rodada anterior, e nenhuma achou defeito de código deste PR. A 12ª rodou depois da verificação completa no M1. Ela achou dois comportamentos deste PR que a doc descrevia de forma estreita demais. O estado final de cada assunto está na doc de uso e em "Defeitos antigos do motor v2", abaixo; este registro só aponta onde.
 - **7ª, no `5aeacf1`, corrigida em `fefe2e8`:** o que o v2 aplica de `config.patterns`; a ordem das seções desta página; o `ctx_get` no v1.
 - **8ª, no `fefe2e8`, corrigida em `64fb2d2`:** a herança de `config.agent` no v2; o `ctx_get` de um `gate`; o `ctx_get` no v1; a posição do prefixo de sessão no log em texto.
 - **9ª, no `64fb2d2`, corrigida em `f733f32`:** o `ctx_get` de `call`/`repeat` no v1. A mensagem do commit `64fb2d2` ficou com o erro.
 - **10ª, no `f733f32`, corrigida no commit que traz este parágrafo:** a STEP-TYPES remetia às saídas de cada tipo, e o `gate` não tem linha de saídas; este registro estava fora de ordem; o título da lista de defeitos antigos dizia que a doc de uso cobria todos, e a herança de `config.chat` não estava em lugar nenhum (agora está na CONFIG).
 - **11ª, no `c99d357`, corrigida no commit seguinte:** a EXAMPLES não limitava o `timeout`/`fail_on_error` de um padrão no v2 aos passos cmd e agent; a STEP-TYPES dava `stats` como saída v1 do `chat`, que tem `model`, `input_tokens` e `output_tokens`. A CONFIG passa a dizer que o log em texto mantém as cores ANSI mesmo redirecionado para arquivo (medido na saída do item 9: o grep por `session_id=` dá 0 linhas com as cores e acha a linha ` WARN session{session_id=…}: …` sem elas). Anterior ao PR, só registro: a CONFIG diz que `stepyard inspect` imprime a config resolvida de cada passo, e ele imprime só as camadas `global`, `agent`, `cmd` e o número de padrões.
+- **12ª, no `4e003f9`, depois da verificação completa no M1, corrigida no commit seguinte:**
+  - **O limite de 1 MiB (item 3) vale para a saída de todo tipo de passo.** Inclui o array do `map`, e a CONFIG falava só em `cmd`, `agent` e `chat`. Um `map` cujo `items:` lê uma saída cortada recebe o texto cortado com o marcador, não a lista, e não falha (`parse_items` não tem caminho de erro). A CONFIG passa a dizer as duas coisas. Lido, não medido.
+  - **O job `msrv` (item 10) checa só as features padrão no 1.88.** A CONTRIBUTING prometia que qualquer `cargo update` que subisse a MSRV reprovaria o CI. Agora ela diz que `sqlite` e `slack` ficam de fora e dá os dois comandos para checar à mão. A correção de verdade são dois `cargo check` a mais no job, mudança em `.github/` que fica para o Allan.
+  - **Anterior ao PR, só registrado:** o env de um passo `agent` no contêiner, em "Defeitos antigos", abaixo.
 - **O que não foi medido.** As afirmações novas dessas rodadas vêm da leitura do código, salvo onde um teste é citado. Quatro delas têm sonda escrita, fora do repositório, para a vez do M1: o `fail_on_error` de um padrão no v2, o `system_prompt_append` de `config.agent` no v2, a linha de log em texto com o span de sessão e as chaves do `ctx_get` no v1.
 
 ## O que ficou de fora da P3
@@ -382,6 +394,7 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 ### Do CI, ainda depois do item 10
 - **`npm audit` e `cargo audit` no CI** (SEG-TS-12): o `npm audit` reprovaria hoje pelos 7 avisos que pedem os majors pulados.
 - **Gate de contagem mínima de testes executados** (resto do TEST-03).
+- **MSRV dos perfis `sqlite` e `slack`**: o job `msrv` checa só as features padrão. Faltam dois `cargo check` no job, mudança em `.github/` que fica para o Allan.
 - **Binário Linux com OpenSSL dinâmico** (resto do SEG-TS-11): `rustls` ou alvo musl mudam o código, não o workflow.
 - **Cobertura por crate e da API** (`vitest --coverage`): o piso é um só, para o workspace Rust.
 - **O `release.yml` não foi executado**: só uma tag o dispara.
@@ -410,6 +423,7 @@ Todos são anteriores a este PR e vêm da leitura do código, salvo onde um test
 - **`config.agent` e `config.chat` no v2.** Do `config.agent` o passo recebe `model` e `command` (`INHERITED_AGENT_KEYS`); do `config.chat`, as sete chaves de `INHERITED_CHAT_KEYS`. As outras (`system_prompt_append`, `session`, `resume`, `fork_session`, `truncation_*`) só valem no próprio passo; `permissions` fica de fora de propósito. Os workflows `refactor.yaml` e `flaky-test-fix.yaml` põem suas regras em `config.agent.system_prompt_append`, e no v2 os passos agent rodam sem elas.
 - **`parallel`.** Nenhum motor expõe `steps.<parallel>.<ramo>`.
 - **`ctx_get` difere entre motores.** As chaves do v1 são os campos da saída de cada tipo, mais `.output`; as do v2 são `.stdout`/`.stderr`/`.exit_code`, e o `gate` não tem nenhuma. O `flaky-test-fix.yaml` lê `.stdout` de um `call` num template; no v1 o `call` não tem `.stdout`, então ele deve falhar no v1, embora o README o liste como "v1, v2". Não medi.
+- **Env de um passo `agent` num contêiner.** A correção `43654be` (regressão da P2) vale para passos `cmd`. Num passo `agent` com sandbox, o env do passo vai inteiro para o processo do CLI `docker`/`podman` (`agent_exec.rs`, `.envs(env)`), com `-e KEY` no argv e sem a separação de `governs_container_cli`. Assim, um `PATH` ou `DOCKER_HOST` vindo do workflow ainda decide qual `docker` roda e com que daemon fala. É anterior a este PR: o caminho do agente não mudou desde a base. Não medi.
 
 ### Ainda abertos da P2 (fora do escopo desta rodada)
 - **BUG-CLI-08**: evento `WorkflowFailed` no core.

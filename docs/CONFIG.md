@@ -178,15 +178,18 @@ or which daemon it talks to; those values are visible in `ps`.
 
 ## Step output kept in the session log
 
-On `--engine v2` (the default), `cmd`, `agent` and `chat` output (stdout and
-stderr, each, the error of a failed step and a chat reply) is kept in the
-session log up to `STEPYARD_MAX_STEP_OUTPUT_BYTES` (default 1 MiB). The v1
+On `--engine v2` (the default), the output of every step type (stdout and
+stderr, each, including the aggregated `stdout` of `map`, `call` and `repeat`,
+the error of a failed step and a chat reply) is kept in the session log up to
+`STEPYARD_MAX_STEP_OUTPUT_BYTES` (default 1 MiB). The v1
 engine (`--engine v1`, also used by remote dispatch and the Slack bot) does
 not apply this cap: it records no step output, but a failed step's error,
 which holds a `cmd`'s stderr, is kept whole. Longer
 output is cut on a character boundary and ends with a
 `…[stepyard: output truncated, N more bytes …]` marker; later steps that read
-`{{ steps.X.stdout }}` see the same capped value. The engine reads the log back
+`{{ steps.X.stdout }}` see the same capped value. Do not feed a value that can
+reach the cap to a `map`'s `items:`: the cut text with the marker is not the
+original list, and the `map` does not fail because of it. The engine reads the log back
 several times per step, so a very large value here slows every later step.
 
 ## Diagnostic logs
