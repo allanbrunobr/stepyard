@@ -26,6 +26,14 @@ a malformed value (`timeout: "soon"`, a bare number such as `timeout: 30`, or
 `fail_on_error: "no"`) is an error when the workflow loads instead of a silent
 fallback to the default.
 
+On `--engine v2` the other keys do not go through the four layers. A `chat`
+step takes `provider`, `model`, `api_key_env`, `base_url`, `temperature`,
+`max_tokens` and `timeout` from `config.chat` (not `model`, `api_key_env` or
+`base_url` when the step sets a different provider); an `agent` step takes
+`model` and `command` from `config.agent`. Any other key, such as `session`,
+`truncation_strategy` or `system_prompt_append`, counts only when it is set on
+the step itself.
+
 ## Shape
 
 ```yaml

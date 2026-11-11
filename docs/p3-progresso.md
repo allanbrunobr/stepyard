@@ -356,29 +356,21 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **Introduzido aqui, corrigido:**
   - **Frases sobre o v2 escritas sem medir.** Na rodada anterior, descrevi na STEP-TYPES a saída do `repeat` e do `map` no v2 a partir de um trecho de código, e as duas descrições estavam erradas. Agora só sobra o que está ligado a uma linha de código ou a uma medição.
   - **Saída de um `call` no v2.** É o `outputs:` renderizado, ou o `stdout` do último passo. Medi com um teste novo (`tests/cli_v2_call_stdout.rs`, com Postgres), e é nisso que se apoia a correção do `flaky-test-fix.yaml`.
-  - **Exemplo de `script`.** Agora usa `ctx_get("<passo>.stdout")`. É a forma do v2 para todo tipo de passo; no v1 vale para `cmd` (ver a sétima rodada).
+  - **Exemplo de `script`.** Agora usa `ctx_get("<passo>.stdout")`.
   - **Falso positivo do `validate`.** Ele recusava um literal de texto (`{{ "stack" }}`) ou uma variável de `for`/`set` chamada `stack` ou `session_id`. Agora os literais são ignorados, e os nomes declarados no próprio workflow também. Caso no teste; mutante morto.
   - **A promessa do `validate`.** O README e a YAML-SPEC agora dizem que a checagem é de melhor esforço, só no arquivo do workflow: os arquivos `.md.tera` e o Rhai ficam de fora.
 - **Já existia, agora documentado como lacuna** (ver "O que ficou de fora"):
   - o `repeat` com `break`;
   - o `map` ignora `outputs:`;
-  - no v2, um padrão de `config.patterns` não aplica o `model` (corrigido na sétima rodada: antes eu escrevi que o v2 ignorava a camada inteira);
+  - o que o v2 aplica de `config.patterns`;
   - o `parallel` não tem `steps.checks.<nome>`.
 
-**Sétima rodada, no `5aeacf1`, só estática (sem build no M5): 3 achados vivos, todos de texto introduzido no `5aeacf1`, corrigidos.**
-- **`config.patterns` no v2.** O README, a EXAMPLES e esta página diziam que o v2 ignora a camada de padrões. Não ignora. O adaptador resolve `timeout` (cmd e agent) e `fail_on_error` (cmd) pelas quatro camadas do v1, padrão incluído (`resolve_runtime_config` em `src/cli/harness_adapter.rs`). O teste `cmd_and_agent_timeout_and_fail_on_error_follow_the_four_v1_layers`, anterior ao PR, fixa isso. O que o padrão não aplica no v2 é o `model` e as demais chaves de agent e chat. O README e a EXAMPLES agora dizem isso, de acordo com a CONFIG.
-- **Seção de defeitos antigos no lugar errado.** O título "Defeitos antigos do motor v2" tinha entrado no meio de "Ficou parcial", e seis pendências da própria P3 (G3/Rule7a, MANUT-09, -12, -14, -15 e a regra 8) caíram sob "Todos são anteriores a este PR". Voltaram para "Ficou parcial".
-- **`ctx_get` no v1.** A STEP-TYPES dava `ctx_get("<passo>.stdout")` como forma geral. No v1 as chaves são os campos de saída de cada tipo: `agent` e `chat` têm `.response`, não `.stdout`, e `template` tem `.rendered` (`build_ctx_snapshot` em `src/steps/script.rs` achata os campos do `StepOutput`). A STEP-TYPES agora separa os dois motores.
-
-**Oitava rodada, no `fefe2e8`, só estática: 4 achados vivos, todos de texto deste PR, corrigidos.**
-- **Herança de `config.agent` no v2.** Na sétima rodada escrevi aqui que as chaves de agent e chat vêm de `config.agent`/`config.chat` no v2. Do `config.agent` o passo herda só `model` e `command` (`INHERITED_AGENT_KEYS`), mais o `timeout` pelas quatro camadas. Do `config.chat` herda `provider`, `model`, `api_key_env`, `base_url`, `temperature`, `max_tokens` e `timeout` (`INHERITED_CHAT_KEYS`). O resto fica registrado em "Defeitos antigos do motor v2".
-- **`ctx_get` de um `gate` no v2.** A STEP-TYPES dizia "for every step type", mas um `gate` não grava saída (`output: None` em `engine.rs` e `scope.rs`), então não tem chave.
-- **`ctx_get` no v1.** Eu tinha escrito que só o `cmd` tem `.stdout`. No v1, `script` também devolve a variante `Cmd` do `StepOutput`; quem não tem `.stdout` é `agent`/`chat` (`.response`), `template` (`.rendered`), `gate` (`.passed`, `.message`) e `call`/`repeat`, que devolvem `Scope` (`.iterations`, `.final_value`; `src/steps/call.rs` e `repeat.rs`). A STEP-TYPES remete às saídas de cada tipo, sem lista própria.
-
-**Nona rodada, no `64fb2d2`, só estática: 1 achado vivo deste PR, corrigido.**
-- **Registro da oitava rodada errado.** O item acima (e a mensagem do commit `64fb2d2`) dizia que no v1 `call` e `repeat` devolvem `Cmd`. Devolvem `Scope`. Corrigi o texto; a mensagem do commit fica como está.
-- **Anterior ao PR, só registro (precisa de execução):** no v1, o `flaky-test-fix.yaml` lê `steps.test_run_1.stdout` de um `call`, que no v1 não tem `.stdout`. Já quebrava antes (lia `.outputs`, que não existe em nenhum motor). O README ainda o lista como "v1, v2".
-- **Prefixo do log em texto.** A CONFIG, o comentário de `init_tracing` em `src/main.rs` e o item 9 diziam que a linha *começa* com `session{session_id=…}:`. O formato padrão do `tracing-subscriber` escreve o nível antes dos spans: a linha é ` WARN session{session_id=…}: …`. O prefixo existe, mas depois do nível.
+**Sétima a décima rodadas, só estáticas (sem build no M5).** Cada uma achou erros no texto que eu tinha escrito para fechar a rodada anterior; nenhuma achou defeito de código deste PR. O estado final de cada assunto está na doc de uso e em "Defeitos antigos do motor v2", abaixo; este registro só aponta onde.
+- **7ª, no `5aeacf1`, corrigida em `fefe2e8`:** o que o v2 aplica de `config.patterns`; a ordem das seções desta página; o `ctx_get` no v1.
+- **8ª, no `fefe2e8`, corrigida em `64fb2d2`:** a herança de `config.agent` no v2; o `ctx_get` de um `gate`; o `ctx_get` no v1; a posição do prefixo de sessão no log em texto.
+- **9ª, no `64fb2d2`, corrigida em `f733f32`:** o `ctx_get` de `call`/`repeat` no v1. A mensagem do commit `64fb2d2` ficou com o erro.
+- **10ª, no `f733f32`, corrigida no commit que traz este parágrafo:** a STEP-TYPES remetia às saídas de cada tipo, e o `gate` não tem linha de saídas; este registro estava fora de ordem; o título da lista de defeitos antigos dizia que a doc de uso cobria todos, e a herança de `config.chat` não estava em lugar nenhum (agora está na CONFIG).
+- **O que não foi medido.** As afirmações novas dessas rodadas vêm da leitura do código, salvo onde um teste é citado. Quatro delas têm sonda pronta para a vez do M1: o `fail_on_error` de um padrão no v2, o `system_prompt_append` de `config.agent` no v2, a linha de log em texto com o span de sessão e as chaves do `ctx_get` no v1.
 
 ## O que ficou de fora da P3
 
@@ -410,13 +402,13 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **A regra 8 da ARCHITECTURE** (sem estado entre passos) não vale hoje. As exceções nomeadas lá são BUG-HARNESS-03, -04, -07 e a falta de retomada na CLI.
 
 ### Defeitos antigos do motor v2 achados pela revisão pré-PR (documentados, não corrigidos)
-Todos são anteriores a este PR. A STEP-TYPES, a EXAMPLES e o README agora os descrevem como lacuna, em vez de prometer o contrário.
+Todos são anteriores a este PR e vêm da leitura do código, salvo onde um teste é citado. A doc de uso descreve cada um como lacuna: a STEP-TYPES (`repeat`, `map`, `parallel`, `ctx_get`), a EXAMPLES e o README (`config.patterns`), o README (`config.agent`) e a CONFIG (`config.agent` e `config.chat`). A nota sobre o `flaky-test-fix.yaml` no v1 fica só aqui.
 - **`repeat` com `break` depois da primeira iteração.** O `outputs:` é renderizado com os passos da iteração anterior. O `break` não incrementa `next_iteration` (`scope.rs`, ramo `Break` contra o `Completed`), e o `synthesise` usa `next_iteration - 1`. Cenário: um `cmd` com `fail_on_error: false` que passa na segunda tentativa, seguido de um gate `break` e de `outputs: "{{ scope.index }}:{{ steps.work.stdout }}"`.
 - **`map` ignora `outputs:`.** O `stdout` é um array JSON com a saída de cada item (`scope.rs`, `serde_json::to_string(&collected)`).
-- **`model` de `config.patterns` no v2.** O adaptador aplica do padrão só `timeout` (cmd e agent) e `fail_on_error` (cmd). O `model` e as demais chaves de agent e chat do padrão ficam de fora, então o exemplo 8 da EXAMPLES só aplica o modelo do padrão no v1.
-- **`config.agent` no v2 só passa `model`, `command` e `timeout`.** `system_prompt_append`, `session`, `resume` e `fork_session` só valem no próprio passo (`permissions` fica de fora de propósito). Os workflows `refactor.yaml` e `flaky-test-fix.yaml` põem suas regras em `config.agent.system_prompt_append`, e no v2 os passos agent rodam sem elas. Do `config.chat`, `session` e `truncation_*` também não passam.
+- **`config.patterns` no v2.** Só `timeout` (cmd e agent) e `fail_on_error` (cmd) passam pelas quatro camadas (`resolve_runtime_config`; o teste `cmd_and_agent_timeout_and_fail_on_error_follow_the_four_v1_layers` cobre o `timeout` de um padrão). O `model` de um padrão fica de fora, então o exemplo 8 da EXAMPLES só aplica o modelo do padrão no v1.
+- **`config.agent` e `config.chat` no v2.** Do `config.agent` o passo recebe `model` e `command` (`INHERITED_AGENT_KEYS`); do `config.chat`, as sete chaves de `INHERITED_CHAT_KEYS`. As outras (`system_prompt_append`, `session`, `resume`, `fork_session`, `truncation_*`) só valem no próprio passo; `permissions` fica de fora de propósito. Os workflows `refactor.yaml` e `flaky-test-fix.yaml` põem suas regras em `config.agent.system_prompt_append`, e no v2 os passos agent rodam sem elas.
 - **`parallel`.** Nenhum motor expõe `steps.<parallel>.<ramo>`.
-- **`ctx_get` difere entre motores.** No v2 todo passo que grava saída (todos menos o `gate`) tem `.stdout`/`.stderr`/`.exit_code`; no v1 `agent`/`chat` têm `.response`, `template` tem `.rendered` e `call`/`repeat` têm `.iterations`/`.final_value`, não `.stdout`. Pela leitura do código, o `flaky-test-fix.yaml` (que lê `.stdout` de um `call` num template) deve falhar no v1, embora o README o liste como "v1, v2"; não medi.
+- **`ctx_get` difere entre motores.** As chaves do v1 são os campos da saída de cada tipo, mais `.output`; as do v2 são `.stdout`/`.stderr`/`.exit_code`, e o `gate` não tem nenhuma. O `flaky-test-fix.yaml` lê `.stdout` de um `call` num template; no v1 o `call` não tem `.stdout`, então ele deve falhar no v1, embora o README o liste como "v1, v2". Não medi.
 
 ### Ainda abertos da P2 (fora do escopo desta rodada)
 - **BUG-CLI-08**: evento `WorkflowFailed` no core.
