@@ -77,8 +77,13 @@ pub(crate) fn setup_script(container_dir: &str, agent_user: Option<&str>) -> Str
            git init -q && git add -A && \
            git -c user.name=stepyard -c user.email=stepyard@localhost \
              commit -q --allow-empty -m 'stepyard: workspace baseline'; \
-         fi; "
+         fi; \
+         git rev-parse -q --verify HEAD > .git/stepyard-base || true; "
     );
+    // `.git/stepyard-base` records the commit the copy-in started from, so
+    // copy-out can compare against it instead of the container's HEAD: work
+    // a step commits inside the container must still reach the host
+    // (BUG-MOTOR-01).
     if let Some(user) = agent_user {
         let user = shell_quote(user);
         script.push_str(&format!(

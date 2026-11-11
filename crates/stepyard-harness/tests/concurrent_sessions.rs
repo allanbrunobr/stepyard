@@ -4,7 +4,7 @@
 //! serves many sessions concurrently without data races, and that the
 //! Postgres `UNIQUE(session_id, seq)` constraint keeps session logs pristine
 //! under load. One of the ten sessions is cancelled mid-flight to prove
-//! that a cancel signal does not contaminate its siblings (Invariante 9,
+//! that a cancel signal does not contaminate its siblings (ARCHITECTURE invariant 7,
 //! NFC2).
 //!
 //! Skipped gracefully if `STEPYARD_HARNESS_DATABASE_URL` is unset.
@@ -74,6 +74,10 @@ fn five_step_workflow(prefix: &str) -> Workflow {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn ten_concurrent_sessions_with_five_steps_each_stay_isolated_and_fast() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };

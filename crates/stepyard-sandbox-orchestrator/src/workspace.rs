@@ -12,7 +12,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::{Duration, SystemTime};
-use stepyard_session::SessionId;
+use stepyard_core::SessionId;
 use thiserror::Error;
 use tokio::process::Command;
 

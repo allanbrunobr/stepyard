@@ -1,7 +1,8 @@
 # Step Types
 
 Each step has `type:` — one of the ten values below. Shared fields (`name`,
-`config`, `output_type`, `async_exec`) are documented in `YAML-SPEC.md`.
+`config`, `output_type`, `async_exec`) are documented in `YAML-SPEC.md`;
+`output_type` and `async_exec` only take effect with `--engine v1`.
 
 ## `cmd` — shell command
 
@@ -14,7 +15,7 @@ Runs `/bin/sh -c "<run>"` and captures stdout, stderr, exit code.
   output_type: integer
 ```
 
-**Outputs:** `stdout`, `stderr`, `exit_code`, `duration`.
+**Outputs:** `stdout`, `stderr`, `exit_code`; `duration` is v1 only.
 Non-zero exit fails the step unless wrapped in a `gate` with `on_fail: continue`.
 
 ## `agent` — Claude Code CLI
@@ -33,7 +34,7 @@ the streaming response.
     system_prompt_append: "Reply in JSON."
 ```
 
-**Outputs:** `response` (final text), `session_id`, `stats` (tokens, cost, duration).
+**Outputs:** `response` (final text); `session_id` and `stats` (tokens, cost, duration) are v1 only.
 
 ### Session management
 
@@ -57,7 +58,7 @@ Calls the Anthropic (or OpenAI-compatible) API directly. No CLI, no session.
     session: review           # optional — grouped multi-turn history
 ```
 
-**Outputs:** `response`, `model`, `stats`. Requires `ANTHROPIC_API_KEY`.
+**Outputs:** `response`; `model`, `input_tokens` and `output_tokens` are v1 only. Requires `ANTHROPIC_API_KEY`.
 
 ## `gate` — conditional branch
 
@@ -88,7 +89,7 @@ is available as `{{ scope.value }}` in the first iteration.
   initial_value: "first attempt"
 ```
 
-**Outputs:** `iterations` (list of per-iteration outputs), `final_value`.
+**Outputs:** v1 only: `iterations` (list of per-iteration outputs), `final_value`. What v2 puts in the step's `stdout` is a known gap: after a gate `break` in a later iteration, `outputs:` is rendered with the previous iteration's steps (see `docs/p3-progresso.md`).
 
 ## `map` — collection processing
 
@@ -105,7 +106,7 @@ expression producing one). `parallel:` controls concurrency.
 
 Each scope invocation gets `{{ scope.value }}` (the item) and `{{ scope.index }}`.
 
-**Outputs:** `iterations` (one per item), `final_value` (last).
+**Outputs:** v1 only: `iterations` (one per item), `final_value` (last). On v2 the step's `stdout` is a JSON array with each item's output and `outputs:` is ignored, a known gap (see `docs/p3-progresso.md`).
 
 ## `parallel` — concurrent nested steps
 
@@ -126,8 +127,9 @@ Runs a fixed set of nested steps concurrently and waits for all.
       run: "cargo fmt --check"
 ```
 
-A failure in any branch fails the parent step. Outputs are stored by child `name`
-in `steps.checks.<name>`.
+A failure in any branch fails the parent step. Reading a branch's output from a
+later step is a known gap: neither engine exposes `steps.checks.<name>` (see
+`docs/p3-progresso.md`).
 
 ## `call` — single scope invocation
 
@@ -140,7 +142,7 @@ Runs a scope once. Useful for grouping reusable logic without looping.
   initial_value: "{{ target }}"
 ```
 
-**Outputs:** `iterations: [single]`, `final_value`.
+**Outputs:** v2: `stdout` is the scope's `outputs:` rendered after the run, or the last scope step's `stdout` when there is no `outputs:`. v1 only: `iterations: [single]`, `final_value`.
 
 ## `template` — Tera file rendering
 
@@ -160,14 +162,14 @@ With a prompt template used as a dynamic path:
   prompt: "fix-lint/{{ stack.name }}"   # → prompts/fix-lint/react.md.tera
 ```
 
-**Outputs:** `rendered` (string). Typically fed to a subsequent agent step:
+**Outputs:** the rendered text, as `stdout` on v2 and as `rendered` on v1 (v1 only). Typically fed to a subsequent agent step:
 
 ```yaml
 - name: prompt_file
   type: template
 - name: run_agent
   type: agent
-  prompt: "{{ steps.prompt_file.rendered }}"
+  prompt: "{{ steps.prompt_file.stdout }}"   # v1: .rendered
 ```
 
 ## `script` — inline Rhai
@@ -179,13 +181,25 @@ value. Useful for light data shaping between steps without spawning a shell.
 - name: total
   type: script
   run: |
-    let tokens = steps.plan.stats.input_tokens + steps.plan.stats.output_tokens;
-    tokens
+    let count = ctx_get("count.stdout");
+    "files changed: " + count
 ```
 
-**Outputs:** the evaluated Rhai value (coerced to JSON).
+On v2 (the default) earlier step outputs are read with
+`ctx_get("<step>.stdout")` (also `.stderr` and `.exit_code`), and the target
+with `ctx_get("target")`; there is no `steps.*` variable in the script, and
+`ctx_get` returns `()` for a missing key. On v2 a `gate` records no output,
+so it has no keys. On `--engine v1` every earlier step has `.output` (its
+text, or the parsed value with `output_type`) plus the fields of its v1 output, which differ by type: for example a
+`script` has `.stdout`, `agent` and `chat` have `.response` (not `.stdout`),
+a `gate` has `.passed`, and `call` and `repeat` have `.final_value`.
+
+**Outputs:** the evaluated Rhai value (coerced to JSON), as `stdout` on v2.
 
 ## Async execution (`async_exec`)
+
+**v1 only.** The v2 engine (the default) ignores `async_exec` and runs the step
+in order; use `--engine v1` for this.
 
 Any step can declare `async_exec: true` — it launches in the background and its
 output is awaited when first referenced (lazily) or at workflow completion.

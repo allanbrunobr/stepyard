@@ -1,0 +1,4 @@
+use tracing::info;
+fn f() {
+    info!(%env, "starting");
+}

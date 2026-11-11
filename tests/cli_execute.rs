@@ -8,6 +8,8 @@
 use assert_cmd::Command;
 use uuid::Uuid;
 
+mod support;
+
 fn db_url() -> Option<String> {
     std::env::var("DATABASE_URL").ok()
 }
@@ -16,6 +18,10 @@ fn db_url() -> Option<String> {
 #[test]
 fn v2_executes_cmd_only_workflow_to_completion() {
     let Some(url) = db_url() else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };
@@ -23,11 +29,14 @@ fn v2_executes_cmd_only_workflow_to_completion() {
     // each other's rows (pitfall #3 from PROMPT_STORY_2_4.md).
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
+    let repo = support::temp_git_repo();
+    let wf = support::repo_path("workflows/hello-world-cmd.yaml");
     Command::cargo_bin("stepyard")
         .unwrap()
+        .current_dir(repo.path())
         .args([
             "execute",
-            "workflows/hello-world-cmd.yaml",
+            wf.to_str().unwrap(),
             "--no-sandbox",
             "--engine",
             "v2",
@@ -42,16 +51,23 @@ fn v2_executes_cmd_only_workflow_to_completion() {
 #[test]
 fn v2_rejects_dry_run() {
     let Some(url) = db_url() else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
+    let repo = support::temp_git_repo();
+    let wf = support::repo_path("workflows/hello-world-cmd.yaml");
     Command::cargo_bin("stepyard")
         .unwrap()
+        .current_dir(repo.path())
         .args([
             "execute",
-            "workflows/hello-world-cmd.yaml",
+            wf.to_str().unwrap(),
             "--no-sandbox",
             "--engine",
             "v2",
@@ -68,16 +84,23 @@ fn v2_rejects_dry_run() {
 #[test]
 fn v1_engine_still_works_when_explicit() {
     let Some(url) = db_url() else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
+    let repo = support::temp_git_repo();
+    let wf = support::repo_path("workflows/hello-world-cmd.yaml");
     Command::cargo_bin("stepyard")
         .unwrap()
+        .current_dir(repo.path())
         .args([
             "execute",
-            "workflows/hello-world-cmd.yaml",
+            wf.to_str().unwrap(),
             "--no-sandbox",
             "--engine",
             "v1",
@@ -92,14 +115,21 @@ fn v1_engine_still_works_when_explicit() {
 #[test]
 fn default_engine_is_v2_and_still_works() {
     let Some(url) = db_url() else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };
     let tenant = format!("cli-execute-{}", Uuid::new_v4());
 
+    let repo = support::temp_git_repo();
+    let wf = support::repo_path("workflows/hello-world-cmd.yaml");
     Command::cargo_bin("stepyard")
         .unwrap()
-        .args(["execute", "workflows/hello-world-cmd.yaml", "--no-sandbox"])
+        .current_dir(repo.path())
+        .args(["execute", wf.to_str().unwrap(), "--no-sandbox"])
         .env("DATABASE_URL", &url)
         .env("STEPYARD_TENANT", &tenant)
         .assert()

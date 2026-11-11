@@ -1,6 +1,3 @@
-// Sandbox API — some items used only in integration paths
-#![allow(dead_code)]
-
 use anyhow::{bail, Context, Result};
 use tokio::process::Command;
 

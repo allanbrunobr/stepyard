@@ -33,6 +33,16 @@ if ! command -v rg >/dev/null 2>&1; then
 fi
 
 RG=$(command -v rg)
+
+# Patterns live in variables so the self-test below runs exactly what the
+# gates run. G1/G2 match the macros with or without the `tracing::` prefix:
+# `use tracing::info; info!(…)` used to slip through (TEST-06).
+TRACING_MACRO='(?:\btracing::|(?<![\w:]))(info|warn|error|debug|trace)(_span)?!'
+G1_PATTERN="${TRACING_MACRO}"'\s*\([^)]*(\benv\s*=|[?%]env\b)'
+G2_PATTERN="${TRACING_MACRO}"'\s*\([^)]*\b(api_key|secret|token|password|credential)\b\s*=\s*%'
+G3_PATTERN='Command::new\(\s*"(sh|bash|zsh|dash)"\s*\)[\s\S]{0,200}\.arg\(\s*"-c"\s*\)'
+G5_PATTERN='(TerminationReason|SandboxError)::Other\s*\('
+RULE7A_PATTERN='^\s*(?!//).*tokio::time::sleep\s*\('
 BLOCKING_FAILED=0
 
 # run_gate <gate-id> <description> <mode: block|warn> <pattern> [extra-glob]
@@ -73,12 +83,36 @@ run_gate() {
     echo
 }
 
+# --- Self-test (TEST-06) --------------------------------------------------------
+# Each gate must match a known-bad sample in scripts/audit-fixtures/ (the
+# `.fixture` extension keeps them out of the `--type rust` scans). A pattern
+# that stops matching its sample would turn the gate into a silent pass.
+FIXTURES="$(dirname "$0")/audit-fixtures"
+self_test() {
+    local gate="$1" pattern="$2" fixture="$3"
+    if ! "${RG}" -U --pcre2 -q "${pattern}" "${FIXTURES}/${fixture}"; then
+        echo "FAIL self-test: ${gate} does not match ${fixture}" >&2
+        BLOCKING_FAILED=1
+    fi
+}
+self_test G1 "${G1_PATTERN}" g1_qualified.rs.fixture
+self_test G1 "${G1_PATTERN}" g1_unqualified.rs.fixture
+self_test G2 "${G2_PATTERN}" g2_qualified.rs.fixture
+self_test G2 "${G2_PATTERN}" g2_unqualified.rs.fixture
+self_test G3 "${G3_PATTERN}" g3_sh_c.rs.fixture
+self_test G5 "${G5_PATTERN}" g5_other.rs.fixture
+self_test Rule7a "${RULE7A_PATTERN}" rule7a_sleep.rs.fixture
+if [[ "${BLOCKING_FAILED}" -eq 0 ]]; then
+    echo "== self-test: every gate matches its known-bad sample =="
+    echo
+fi
+
 # --- G1: env-value leak guard (blocking) --------------------------------------
 # Matches `tracing::info!( … env = … )` or `… %env` / `… ?env` shapes where the
 # full env map's Display/Debug is about to be rendered (leaks values).
 run_gate \
     "G1" "env-value leak in tracing macros" "block" \
-    'tracing::(info|warn|error|debug|trace)(_span)?!\s*\([^)]*(\benv\s*=|[?%]env\b)'
+    "${G1_PATTERN}"
 
 # --- G2: secret field guard (blocking) ----------------------------------------
 # Matches `tracing::…!( … api_key = %… )` and friends — renders a secret via
@@ -86,7 +120,7 @@ run_gate \
 # redacts) or omitting the field entirely.
 run_gate \
     "G2" "secret field rendered via Display in tracing macros" "block" \
-    'tracing::(info|warn|error|debug|trace)(_span)?!\s*\([^)]*\b(api_key|secret|token|password|credential)\b\s*=\s*%'
+    "${G2_PATTERN}"
 
 # --- G3: shell-string joining guard (blocking) --------------------------------
 # `Command::new("sh").arg("-c")` is the string-concat anti-pattern — untrusted
@@ -101,7 +135,7 @@ run_gate \
 # when the test lands.
 run_gate \
     "G3" "shell-string joining (Command::new(shell) + -c)" "block" \
-    'Command::new\(\s*"(sh|bash|zsh|dash)"\s*\)[\s\S]{0,200}\.arg\(\s*"-c"\s*\)' \
+    "${G3_PATTERN}" \
     '!**/injection_negative.rs'
 
 # --- G5: Other(...) construction outside classifier (blocking) ----------------
@@ -110,7 +144,7 @@ run_gate \
 # warning-only after the false-positive baseline was burned down.
 run_gate \
     "G5" "Other(...) construction outside classifier modules" "block" \
-    '(TerminationReason|SandboxError)::Other\s*\(' \
+    "${G5_PATTERN}" \
     '!**/*_errors.rs'
 
 # --- Rule 7a: real sleep in integration tests (blocking) ----------------------
@@ -120,7 +154,7 @@ run_gate \
 # inside production modules needs a real parser or a separate allowlist pass.
 run_gate \
     "Rule7a" "tokio::time::sleep in integration tests" "block" \
-    '^\s*(?!//).*tokio::time::sleep\s*\(' \
+    "${RULE7A_PATTERN}" \
     '**/tests/**/*.rs'
 
 # --- Summary ------------------------------------------------------------------

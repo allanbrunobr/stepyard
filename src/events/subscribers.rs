@@ -95,10 +95,17 @@ struct TrackedStep {
     step_name: String,
     step_type: String,
     status: String,
+    // ARQ-03: absent, not `null`. The API schema (zod `.optional()`) used to
+    // reject `null`, so every run with a cmd step (no tokens) or a passing
+    // step (no error) was refused with 400 and never reached the dashboard.
+    #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tokens_in: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tokens_out: Option<u64>,
     sandboxed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
@@ -191,7 +198,9 @@ impl DashboardSubscriber {
             "status": status,
             "duration_ms": duration_ms,
             "total_tokens": total_tokens,
-            "started_at": state.started_at.map(|t| t.to_rfc3339()),
+            // `started_at` is required by the API: fall back to the finish
+            // time if WorkflowStarted was never observed.
+            "started_at": state.started_at.unwrap_or(finished_at).to_rfc3339(),
             "finished_at": finished_at.to_rfc3339(),
             "event_version": 1,
             "steps": state.steps,
@@ -268,7 +277,7 @@ impl EventSubscriber for DashboardSubscriber {
                     tokens_in: None,
                     tokens_out: None,
                     sandboxed: *sandboxed,
-                    error: Some(error.clone()),
+                    error: Some(dashboard_error(error)),
                 });
             }
             Event::WorkflowCompleted {
@@ -323,23 +332,17 @@ impl EventSubscriber for DashboardSubscriber {
                 state.send_handle = Some(handle);
             }
             Event::StepTimeoutFired { .. } => {
-                // Story 1.3: handled explicitly so the workspace
-                // `non_exhaustive_omitted_patterns` lint has a real
-                // opportunity to fire if a future variant is missed.
                 // Dashboard payload is emitted by the subsequent
                 // StepFailed event, so nothing to accumulate here.
             }
             Event::IdleTimeoutFired { .. } => {
-                // Story 5.1: handled explicitly for the same reason as
-                // StepTimeoutFired. Dashboard payload remains driven by the
-                // subsequent StepFailed event.
+                // Dashboard payload remains driven by the subsequent
+                // StepFailed event.
             }
             Event::SignalReceived { .. } => {
-                // Story 2.3: signals surface as a subsequent StepFailed event
-                // carrying TerminationReason::SignalReceived — so the
-                // dashboard payload is built from that, not here. Matched
-                // explicitly so `non_exhaustive_omitted_patterns` fires if a
-                // future variant is forgotten.
+                // Signals surface as a subsequent StepFailed event carrying
+                // TerminationReason::SignalReceived — so the dashboard
+                // payload is built from that, not here.
             }
             Event::CompletionSignaled { .. } => {
                 // Story 5.5: the completion signal is an audit/control-flow
@@ -369,6 +372,26 @@ impl EventSubscriber for DashboardSubscriber {
             _ => {}
         }
     }
+}
+
+/// Most bytes of a step error sent to the dashboard. A failing `cmd` puts its
+/// whole stderr in the error, and the API refuses an event body over 100 kB
+/// (413), which left the run as "exited before reporting".
+const DASHBOARD_ERROR_MAX_BYTES: usize = 8 * 1024;
+
+fn dashboard_error(error: &str) -> String {
+    if error.len() <= DASHBOARD_ERROR_MAX_BYTES {
+        return error.to_string();
+    }
+    let mut end = DASHBOARD_ERROR_MAX_BYTES;
+    while !error.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n…[stepyard: error truncated, {} more bytes]",
+        &error[..end],
+        error.len() - end
+    )
 }
 
 fn dashboard_artifacts_url(events_url: &str, run_id: &str) -> String {
@@ -474,7 +497,10 @@ impl DashboardSubscriber {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_encode, dashboard_artifacts_url};
+    use super::{
+        base64_encode, dashboard_artifacts_url, dashboard_error, DashboardSubscriber, Event,
+        EventSubscriber,
+    };
 
     #[test]
     fn derives_artifact_url_from_events_endpoint() {
@@ -495,5 +521,108 @@ mod tests {
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"hello world"), "aGVsbG8gd29ybGQ=");
+    }
+
+    /// ARQ-03 (analysis 2026-11-09) — contract golden test. The JSON this
+    /// subscriber sends for a run with a cmd step (no tokens) and a failed
+    /// agent step must equal `tests/fixtures/dashboard-event.json`, which the
+    /// API test `packages/api/src/routes/events-contract.test.ts` validates
+    /// against its zod schema. Regenerate with `UPDATE_FIXTURES=1`.
+    #[test]
+    fn dashboard_payload_matches_the_shared_contract_fixture() {
+        use chrono::TimeZone;
+        let t0 = chrono::Utc
+            .with_ymd_and_hms(2026, 11, 10, 12, 0, 0)
+            .unwrap();
+        let t1 = chrono::Utc
+            .with_ymd_and_hms(2026, 11, 10, 12, 0, 7)
+            .unwrap();
+        let mut sub = DashboardSubscriber::new(
+            "http://127.0.0.1:1/api/events",
+            None,
+            "contract",
+            "42",
+            Some("acme/app".into()),
+            "dev",
+            "Disabled",
+            Vec::new(),
+        );
+        sub.run_id = "6f1c2f43-2f43-4c2f-8f43-2f432f432f43".into();
+        sub.dispatch_log_path = None;
+        sub.on_event(&Event::WorkflowStarted { timestamp: t0 });
+        sub.on_event(&Event::StepCompleted {
+            step_name: "lint".into(),
+            step_type: "cmd".into(),
+            duration_ms: 1200,
+            timestamp: t0,
+            input_tokens: None,
+            output_tokens: None,
+            cost_usd: None,
+            sandboxed: false,
+            output: None,
+            scope_context: None,
+            gate_outcome: None,
+            agent_session_id: None,
+        });
+        sub.on_event(&Event::StepFailed {
+            step_name: "fix".into(),
+            step_type: "agent".into(),
+            error: "exit 1".into(),
+            duration_ms: 3400,
+            timestamp: t1,
+            sandboxed: true,
+        });
+        let payload = sub.build_payload(7000, t1);
+        let rendered = serde_json::to_string_pretty(&payload).unwrap() + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/dashboard-event.json");
+        if std::env::var("UPDATE_FIXTURES").as_deref() == Ok("1") {
+            std::fs::write(&path, &rendered).unwrap();
+        }
+        let expected =
+            std::fs::read_to_string(&path).expect("fixture (UPDATE_FIXTURES=1 creates it)");
+        assert_eq!(
+            rendered, expected,
+            "payload drifted from the shared contract fixture"
+        );
+        assert!(
+            !rendered.contains("null"),
+            "no null may reach the API: {rendered}"
+        );
+    }
+
+    /// A failing step with a huge stderr must not push the event body past
+    /// the API's 100 kB limit (pre-PR review of the P3 branch).
+    #[test]
+    fn a_huge_step_error_is_cut_before_it_reaches_the_dashboard() {
+        let mut sub = DashboardSubscriber::new(
+            "http://127.0.0.1:1/api/events",
+            None,
+            "big",
+            "1",
+            None,
+            "dev",
+            "Disabled",
+            Vec::new(),
+        );
+        sub.dispatch_log_path = None;
+        let t = chrono::Utc::now();
+        sub.on_event(&Event::WorkflowStarted { timestamp: t });
+        sub.on_event(&Event::StepFailed {
+            step_name: "build".into(),
+            step_type: "cmd".into(),
+            error: format!("Command failed (exit 1): {}", "é".repeat(100_000)),
+            duration_ms: 1,
+            timestamp: t,
+            sandboxed: false,
+        });
+        let body = serde_json::to_string(&sub.build_payload(1, t)).unwrap();
+        assert!(
+            body.len() < 100 * 1024,
+            "event body is {} bytes",
+            body.len()
+        );
+        assert!(body.contains("error truncated"), "marker missing");
+        assert_eq!(dashboard_error("short"), "short");
     }
 }

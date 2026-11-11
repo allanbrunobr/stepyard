@@ -120,7 +120,6 @@ impl Context {
     }
 
     /// Create a child context for a scope
-    #[allow(dead_code)]
     pub fn child(
         parent: Arc<Context>,
         scope_value: Option<serde_json::Value>,

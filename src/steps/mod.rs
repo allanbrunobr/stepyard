@@ -93,7 +93,6 @@ impl StepOutput {
     }
 
     /// Exit code (only meaningful for cmd, 0 for others)
-    #[allow(dead_code)]
     pub fn exit_code(&self) -> i32 {
         match self {
             StepOutput::Cmd(o) => o.exit_code,
@@ -102,7 +101,6 @@ impl StepOutput {
     }
 
     /// Whether the step succeeded
-    #[allow(dead_code)]
     pub fn success(&self) -> bool {
         match self {
             StepOutput::Cmd(o) => o.exit_code == 0,
@@ -112,7 +110,6 @@ impl StepOutput {
     }
 
     /// Split text into lines
-    #[allow(dead_code)]
     pub fn lines(&self) -> Vec<&str> {
         self.text().lines().filter(|l| !l.is_empty()).collect()
     }

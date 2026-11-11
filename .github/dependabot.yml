@@ -1,0 +1,8 @@
+# The workflows pin every action by commit SHA with the tag in a comment;
+# Dependabot proposes the SHA (and comment) updates (SEG-TS-10).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

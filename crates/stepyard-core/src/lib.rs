@@ -12,6 +12,7 @@ pub mod duration;
 pub mod env;
 mod error;
 mod event;
+mod session_id;
 pub mod signal;
 mod subscriber;
 pub mod template;
@@ -22,6 +23,7 @@ pub use event::{
     ChatMessage, ChatRole, Event, GateOutcome, ScopeContext, StepOutputSnapshot,
     WorkspacePruneReason,
 };
+pub use session_id::SessionId;
 pub use signal::Signal;
 pub use subscriber::EventSubscriber;
 pub use workflow::WorkflowVersion;

@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
+mod support;
+
 struct KillOnDrop(Child);
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
@@ -20,9 +22,10 @@ impl Drop for KillOnDrop {
     }
 }
 
-fn stepyard(args: &[&str], url: &str, tenant: &str) -> Command {
+fn stepyard(args: &[&str], url: &str, tenant: &str, cwd: &std::path::Path) -> Command {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin("stepyard"));
-    cmd.args(args)
+    cmd.current_dir(cwd)
+        .args(args)
         .env("DATABASE_URL", url)
         .env("STEPYARD_TENANT", tenant)
         .env("STEPYARD_NO_FILE_LOGS", "1")
@@ -88,13 +91,17 @@ async fn wait_for_lease(pool: &sqlx::PgPool, session: Uuid) {
 
 async fn second_run_spares_the_first(engine: &str) {
     let Ok(url) = std::env::var("DATABASE_URL") else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };
     let pool = sqlx::PgPool::connect(&url).await.expect("connect");
     // A fresh database has no tables until some process migrates it.
     stepyard_session::migrate(&pool).await.expect("migrations");
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::temp_git_repo();
     let wf = dir.path().join("long.yaml");
     std::fs::write(
         &wf,
@@ -114,6 +121,7 @@ async fn second_run_spares_the_first(engine: &str) {
             ],
             &url,
             &long_tenant,
+            dir.path(),
         )
         .spawn()
         .expect("spawn long run"),
@@ -127,10 +135,13 @@ async fn second_run_spares_the_first(engine: &str) {
         .expect("backdate");
 
     // The second process runs the startup reconcile, then a short workflow.
+    let short_repo = support::temp_git_repo();
+    let short_wf = support::repo_path("workflows/hello-world-cmd.yaml");
     let status = stepyard(
-        &["execute", "workflows/hello-world-cmd.yaml", "--no-sandbox"],
+        &["execute", short_wf.to_str().unwrap(), "--no-sandbox"],
         &url,
         &format!("concurrent-short-{}", Uuid::new_v4()),
+        short_repo.path(),
     )
     .status()
     .expect("run second process");

@@ -9,36 +9,32 @@ use clap::Parser;
 use tokio::sync::broadcast;
 use tracing_subscriber::EnvFilter;
 
-mod chat_client;
-mod claude;
-mod cli;
-mod config;
-mod control_flow;
-mod display;
-mod engine;
-mod error;
-mod events;
-mod github_repo;
-mod plugins;
-mod prompts;
-mod sandbox;
-mod signal;
-#[cfg(feature = "slack")]
-mod slack;
-mod startup;
-mod steps;
-mod workflow;
+// The binary is a thin entry point over the `stepyard_engine` library. It
+// used to re-declare the whole module tree (`mod cli; mod engine; …`), which
+// compiled every module twice, ran every unit test twice and produced two
+// distinct copies of every type (ARQ-11, MANUT-10, TEST-05).
+use stepyard_engine::cli::Cli;
+use stepyard_engine::{display, signal};
 
-use cli::Cli;
+/// Diagnostic logs. `RUST_LOG` sets the filter (default `info`).
+/// `STEPYARD_LOG_FORMAT=json` switches to one JSON object per line, with a
+/// timestamp and the fields of the enclosing spans (for example the
+/// `session_id` of `stepyard_harness::Engine::step`), for runs nobody watches.
+/// The default stays the compact text format without timestamps; lines
+/// logged inside a span carry it after the level (` WARN session{session_id=…}: …`).
+fn init_tracing() {
+    let builder = tracing_subscriber::fmt().with_env_filter(
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+    );
+    match std::env::var("STEPYARD_LOG_FORMAT").as_deref() {
+        Ok("json") => builder.json().init(),
+        _ => builder.without_time().init(),
+    }
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .without_time()
-        .init();
+    init_tracing();
 
     // Register SIGINT/SIGTERM handlers SYNCHRONOUSLY before anything else
     // kicks off — in particular, before the `tokio::select!` below spawns

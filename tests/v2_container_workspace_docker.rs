@@ -191,3 +191,41 @@ steps:
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// BUG-MOTOR-01: copy-out compared the container's working tree with its own
+/// `HEAD`, so a file a step committed inside the container (fix-test.yaml
+/// commits before pushing) looked unchanged and never reached the host.
+#[test]
+#[ignore = "needs a Docker daemon and Postgres; STEPYARD_TEST_DOCKER=1 cargo test -- --ignored"]
+fn work_committed_inside_the_container_is_copied_back() {
+    let dir = project(&[]);
+    let yaml = r#"
+name: commit-inside
+steps:
+  - name: commit
+    type: cmd
+    run: "echo committed > committed.txt && git add committed.txt && git -c user.name=t -c user.email=t@example.invalid commit -qm inside"
+  - name: also_uncommitted
+    type: cmd
+    run: "echo loose > loose.txt"
+"#;
+    let Some(out) = run_v2_docker(dir.path(), yaml) else {
+        return;
+    };
+    assert!(
+        out.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("committed.txt"))
+            .ok()
+            .as_deref(),
+        Some("committed\n"),
+        "a file committed inside the container must reach the host"
+    );
+    assert!(
+        dir.path().join("loose.txt").exists(),
+        "uncommitted work still copied"
+    );
+}

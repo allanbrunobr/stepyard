@@ -82,18 +82,42 @@ fn main() -> ExitCode {
     }
 }
 
+/// The workspace root, independent of the directory `cargo xtask` was
+/// invoked from (BUG-CLI-15: a CWD-relative path made the audit "skip the
+/// absent path" and pass with 0 findings when run from a subdirectory).
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask lives one level below the workspace root")
+        .to_path_buf()
+}
+
 fn run_emit_before_io() -> ExitCode {
     let mut findings: Vec<Finding> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let root = workspace_root();
     for crate_dir in TARGET_CRATES {
-        let src_dir = Path::new(crate_dir).join("src");
+        let src_dir = root.join(crate_dir).join("src");
         if !src_dir.exists() {
-            eprintln!(
-                "audit-emit-before-io: skipping absent path '{}' (repo layout may have changed)",
+            // Fail closed: an audit that cannot see its target must not pass.
+            errors.push(format!(
+                "target path '{}' does not exist",
                 src_dir.display()
-            );
+            ));
             continue;
         }
-        walk_dir(&src_dir, &mut findings);
+        walk_dir(&src_dir, &mut findings, &mut errors);
+    }
+
+    if !errors.is_empty() {
+        for e in &errors {
+            eprintln!("audit-emit-before-io: ERROR: {e}");
+        }
+        eprintln!(
+            "audit-emit-before-io: {} file(s)/path(s) could not be audited — failing closed",
+            errors.len()
+        );
+        return ExitCode::from(2);
     }
 
     findings.sort_by(|a, b| (a.file.as_path(), a.line).cmp(&(b.file.as_path(), b.line)));
@@ -133,56 +157,62 @@ struct Finding {
     method: String,
 }
 
-fn walk_dir(dir: &Path, findings: &mut Vec<Finding>) {
+fn walk_dir(dir: &Path, findings: &mut Vec<Finding>, errors: &mut Vec<String>) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(err) => {
-            eprintln!("audit-emit-before-io: cannot read {}: {err}", dir.display());
+            errors.push(format!("cannot read {}: {err}", dir.display()));
             return;
         }
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            walk_dir(&path, findings);
+            walk_dir(&path, findings, errors);
         } else if path.extension().is_some_and(|e| e == "rs") {
-            walk_file(&path, findings);
+            walk_file(&path, findings, errors);
         }
     }
 }
 
-fn walk_file(path: &Path, findings: &mut Vec<Finding>) {
+fn walk_file(path: &Path, findings: &mut Vec<Finding>, errors: &mut Vec<String>) {
     let src = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(err) => {
-            eprintln!(
-                "audit-emit-before-io: cannot read {}: {err}",
-                path.display()
-            );
+            errors.push(format!("cannot read {}: {err}", path.display()));
             return;
         }
     };
-    let file = match syn::parse_file(&src) {
-        Ok(f) => f,
-        Err(err) => {
-            // Non-Rust or broken file: a silent skip here would hide a real
-            // parse regression, so surface it as a warning on stderr. The
-            // audit step still exits 0 because G4 is warning-first overall.
-            eprintln!(
-                "audit-emit-before-io: syn parse failed on {}: {err} (skipping file)",
-                path.display()
-            );
-            return;
-        }
-    };
+    audit_source_into(path, &src, findings, errors);
+}
 
+/// Audit `src` and record the outcome. A file the walker cannot parse is a
+/// file it did not audit: it is counted as an error (which fails the run)
+/// instead of being skipped with exit 0 (TEST-08).
+fn audit_source_into(
+    path: &Path,
+    src: &str,
+    findings: &mut Vec<Finding>,
+    errors: &mut Vec<String>,
+) {
+    match check_source(path, src) {
+        Ok(found) => findings.extend(found),
+        Err(err) => errors.push(format!("syn parse failed on {}: {err}", path.display())),
+    }
+}
+
+/// Audit one source file. `Err` when it does not parse.
+fn check_source(path: &Path, src: &str) -> Result<Vec<Finding>, syn::Error> {
+    let file = syn::parse_file(src)?;
     let mut collector = FnBodyCollector { bodies: Vec::new() };
     collector.visit_file(&file);
 
     let lines: Vec<&str> = src.lines().collect();
+    let mut findings = Vec::new();
     for body in collector.bodies {
-        check_body(path, &lines, body, findings);
+        check_body(path, &lines, body, &mut findings);
     }
+    Ok(findings)
 }
 
 /// First pass: collect every function body in the file. We check each body
@@ -291,8 +321,13 @@ fn is_self(expr: &Expr) -> bool {
     false
 }
 
-/// Returns true iff `expr` is `self.<SANDBOX_FIELD>`.
+/// Returns true iff `expr` is `self.<SANDBOX_FIELD>` or the accessor form
+/// `self.<SANDBOX_FIELD>()` (TEST-08: scope.rs reaches the lifecycle through
+/// the accessor, which the walker used to miss).
 fn is_self_sandbox_field(expr: &Expr) -> bool {
+    if let Expr::MethodCall(mc) = expr {
+        return mc.method == SANDBOX_FIELD && mc.args.is_empty() && is_self(&mc.receiver);
+    }
     if let Expr::Field(ExprField {
         base,
         member: Member::Named(ident),
@@ -350,4 +385,70 @@ fn is_emit_like(mc: &ExprMethodCall) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    //! The G4 gate had no tests (TEST-08); each case below is a shape the
+    //! gate must flag or accept.
+    use super::*;
+
+    fn audit(src: &str) -> Vec<Finding> {
+        check_source(Path::new("t.rs"), src).expect("parses")
+    }
+
+    #[test]
+    fn flags_sandbox_io_without_an_earlier_emit() {
+        let found = audit(
+            "impl E { async fn f(&mut self) { self.lifecycle.destroy_by_session(id).await; } }",
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].method, "destroy_by_session");
+    }
+
+    #[test]
+    fn accepts_sandbox_io_after_an_emit_or_a_session_append() {
+        // The gate compares line numbers ("an earlier line"), so each call
+        // sits on its own line, as in real code.
+        for src in [
+            "impl E { async fn f(&mut self) {\n self.emit(ev).await;\n self.lifecycle.destroy(id).await;\n } }",
+            "impl E { async fn f(&mut self) {\n self.session.append(p).await;\n self.lifecycle.exec(id).await;\n } }",
+        ] {
+            assert!(audit(src).is_empty(), "{src}");
+        }
+    }
+
+    #[test]
+    fn sees_the_accessor_form_used_by_scope_rs() {
+        let found = audit(
+            "impl E { async fn f(&mut self) {\n let _ = self\n .lifecycle()\n .destroy_by_session(id)\n .await;\n } }",
+        );
+        assert_eq!(found.len(), 1, "self.lifecycle().<m>() must be audited too");
+    }
+
+    #[test]
+    fn honours_an_explicit_audited_exemption() {
+        let src = "impl E { async fn f(&mut self) {\n // audit: emit-before-io exempt - reason: caller persists\n self.lifecycle.destroy(id).await;\n } }";
+        assert!(audit(src).is_empty());
+    }
+
+    #[test]
+    fn a_file_that_does_not_parse_is_counted_as_an_error_not_a_pass() {
+        let (mut findings, mut errors) = (Vec::new(), Vec::new());
+        audit_source_into(
+            Path::new("t.rs"),
+            "fn broken( {",
+            &mut findings,
+            &mut errors,
+        );
+        assert!(findings.is_empty());
+        assert_eq!(errors.len(), 1, "an unparsable file must make the run fail");
+        assert!(errors[0].contains("t.rs"), "{errors:?}");
+    }
+
+    #[test]
+    fn the_target_crate_is_found_from_any_working_directory() {
+        let src = workspace_root().join(TARGET_CRATES[0]).join("src");
+        assert!(src.is_dir(), "{} must exist", src.display());
+    }
 }

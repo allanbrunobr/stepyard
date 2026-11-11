@@ -227,6 +227,10 @@ impl ChatClient for RigChatClient {
 
         let api_key = req.api_key.as_deref().unwrap_or("");
         let base_url = req.base_url.as_deref();
+        if let Some(url) = base_url {
+            stepyard_harness::chat_base_url_allowed(url)
+                .map_err(|message| ChatClientError::ProviderFailure { message })?;
+        }
 
         call_provider(
             provider,

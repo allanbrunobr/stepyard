@@ -59,7 +59,7 @@ pub trait ChatClient: Debug + Send + Sync {
 /// `history` is the committed prior turns for this chat-session bucket,
 /// rebuilt by `compute_progress` from [`stepyard_core::Event::ChatMessageAppended`]
 /// rows — the harness does **not** keep an in-memory transcript
-/// between step calls (Invariante 11). The incoming user turn is
+/// between step calls (ARCHITECTURE invariant 8). The incoming user turn is
 /// passed separately via `user_message` so the client doesn't have to
 /// guess which tail entry is "the prompt this call is producing a
 /// reply for."
@@ -211,6 +211,80 @@ pub(crate) enum ChatApiKeyError {
     /// variant so operators can tell "missing" from "corrupt."
     #[error("chat step `{step}` api_key_env `{key}` holds non-UTF-8 data")]
     NotUnicode { step: String, key: String },
+}
+
+/// Environment variable in which the *user* lists URL prefixes that chat
+/// steps may use as `base_url` (comma-separated).
+pub const CHAT_BASE_URL_ALLOW_VAR: &str = "STEPYARD_CHAT_BASE_URL_ALLOW";
+
+/// Whether a chat step may send its request (with the API key read from
+/// `api_key_env`) to `base_url` (SEG-RUST-05). A workflow could otherwise set
+/// `base_url: https://attacker.example` with `api_key_env: GH_TOKEN` and have
+/// the host send the token as an API key. Loopback endpoints (Ollama, a local
+/// LiteLLM) are allowed; anything else must start with a prefix the user
+/// listed in `STEPYARD_CHAT_BASE_URL_ALLOW`.
+pub fn chat_base_url_allowed(url: &str) -> Result<(), String> {
+    base_url_allowed_by(url, std::env::var(CHAT_BASE_URL_ALLOW_VAR).ok().as_deref())
+}
+
+/// [`chat_base_url_allowed`] with the allow-list passed in, so tests need not
+/// touch the process environment.
+fn base_url_allowed_by(url: &str, allow_list: Option<&str>) -> Result<(), String> {
+    let lower = url.trim().to_ascii_lowercase();
+    let after_scheme = lower
+        .strip_prefix("http://")
+        .or_else(|| lower.strip_prefix("https://"))
+        .unwrap_or("");
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    // Parse the host as an IP: a prefix test would accept 127.0.0.1.evil.example.
+    let loopback = host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+    if !after_scheme.is_empty() && !authority.contains('@') && loopback {
+        return Ok(());
+    }
+    // A listed prefix must end where a URL part ends: `https://llm.example`
+    // allows `https://llm.example/v1`, not `https://llm.example.evil.net` nor
+    // `https://llm.example@evil.net`. A URL with userinfo is never allowed.
+    let candidate = url.trim();
+    let allowed = !after_scheme.is_empty()
+        && !authority.contains('@')
+        && allow_list
+            .map(|list| {
+                list.split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .any(|prefix| {
+                        candidate.starts_with(prefix)
+                            && (prefix.ends_with('/')
+                                || matches!(
+                                    candidate[prefix.len()..].chars().next(),
+                                    None | Some('/' | '?' | '#')
+                                ))
+                    })
+            })
+            .unwrap_or(false);
+    if allowed {
+        Ok(())
+    } else if authority.contains('@') {
+        Err(format!(
+            "chat base_url `{url}` carries credentials before `@`; that is never \
+             allowed, not even when its prefix is in {CHAT_BASE_URL_ALLOW_VAR}"
+        ))
+    } else {
+        Err(format!(
+            "chat base_url `{url}` is not a loopback endpoint; list its prefix in \
+             {CHAT_BASE_URL_ALLOW_VAR} to allow it"
+        ))
+    }
 }
 
 /// Resolve `api_key_env` (a variable NAME) to its value.
@@ -505,5 +579,64 @@ mod tests {
             }
             other => panic!("expected NotSet, got {other:?}"),
         }
+    }
+
+    /// P2-1 (analysis 2026-11-09, SEG-RUST-05)
+    #[test]
+    fn chat_base_url_allows_loopback_and_refuses_the_rest() {
+        for ok in [
+            "http://localhost:11434",
+            "http://127.0.0.1:4000/v1",
+            "http://[::1]:8080",
+            "https://localhost",
+        ] {
+            assert_eq!(chat_base_url_allowed(ok), Ok(()), "{ok}");
+        }
+        for bad in [
+            "https://evil.example",
+            "http://127.0.0.1.evil.example",
+            "http://localhost@evil.example",
+            "http://localhost.evil.example",
+            "ftp://localhost",
+            "localhost:11434",
+        ] {
+            let err = chat_base_url_allowed(bad).expect_err(bad);
+            assert!(err.contains(CHAT_BASE_URL_ALLOW_VAR), "{bad}: {err}");
+        }
+    }
+
+    /// A listed prefix allows URLs under it, not hosts that merely start
+    /// with the same text (pre-PR review of the P3 branch).
+    #[test]
+    fn chat_base_url_allow_list_matches_whole_url_parts() {
+        let list = Some("https://llm.corp.example, https://proxy.example:8443/v1/");
+        for ok in [
+            "https://llm.corp.example",
+            "https://llm.corp.example/v1",
+            "https://llm.corp.example?x=1",
+            "https://proxy.example:8443/v1/chat",
+        ] {
+            assert_eq!(base_url_allowed_by(ok, list), Ok(()), "{ok}");
+        }
+        for bad in [
+            "https://llm.corp.example.evil.net/v1",
+            "https://llm.corp.example@evil.net/v1",
+            "https://llm.corp.example:9999/v1",
+            "https://llm.corp.exampleevil/v1",
+            "https://proxy.example:8443/v2",
+            "https://evil.net/v1",
+        ] {
+            assert!(base_url_allowed_by(bad, list).is_err(), "{bad}");
+        }
+        // The refusal of userinfo says why, instead of asking to list it.
+        for with_user in [
+            "https://key@gw.corp.example/v1",
+            "http://user@localhost:4000",
+        ] {
+            let err =
+                base_url_allowed_by(with_user, Some("https://key@gw.corp.example")).unwrap_err();
+            assert!(err.contains("credentials before `@`"), "{with_user}: {err}");
+        }
+        assert!(base_url_allowed_by("https://llm.corp.example", None).is_err());
     }
 }

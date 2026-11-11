@@ -75,7 +75,7 @@ fn needs_escape(ch: char) -> bool {
     matches!(ch as u32, 0x202A..=0x202E | 0x2066..=0x2069)
 }
 
-fn truncate_at_char_boundary(input: &str, max_bytes: usize) -> (&str, usize) {
+pub(crate) fn truncate_at_char_boundary(input: &str, max_bytes: usize) -> (&str, usize) {
     if input.len() <= max_bytes {
         return (input, 0);
     }
@@ -86,9 +86,47 @@ fn truncate_at_char_boundary(input: &str, max_bytes: usize) -> (&str, usize) {
     (&input[..end], input.len() - end)
 }
 
+/// The last `max_bytes` (at most) of `input`, cut on a char boundary.
+/// `&s[s.len() - n..]` panics when that index falls inside a multi-byte
+/// character (accented output, emoji), which crashed the Slack bot and
+/// `stepyard remote status` (BUG-CLI-06, BUG-MOTOR-14, BUG-CLI-10).
+// Only the Slack bot uses it outside tests.
+#[cfg_attr(not(feature = "slack"), allow(dead_code))]
+pub(crate) fn tail_at_char_boundary(input: &str, max_bytes: usize) -> &str {
+    if input.len() <= max_bytes {
+        return input;
+    }
+    let mut start = input.len() - max_bytes;
+    while start < input.len() && !input.is_char_boundary(start) {
+        start += 1;
+    }
+    &input[start..]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BUG-CLI-06 / BUG-MOTOR-14 / BUG-CLI-10: every cut point inside a
+    /// multi-byte character must be handled without panicking, and the
+    /// result must stay within the byte budget.
+    #[test]
+    fn head_and_tail_cuts_never_split_a_multibyte_character() {
+        let text = "ação 🚀 çã".repeat(50);
+        for budget in 0..text.len() + 2 {
+            let tail = tail_at_char_boundary(&text, budget);
+            assert!(tail.len() <= budget);
+            assert!(text.ends_with(tail));
+            let (head, _) = truncate_at_char_boundary(&text, budget);
+            assert!(head.len() <= budget);
+            assert!(text.starts_with(head));
+        }
+        // The old Slack expression panics on such input; the helper does not.
+        // 1 501 bytes: the cut at len - 1500 = 1 falls inside the 2-byte "é".
+        let stdout = format!("é{}", "a".repeat(1499));
+        assert!(std::panic::catch_unwind(|| stdout[stdout.len() - 1500..].to_string()).is_err());
+        assert_eq!(tail_at_char_boundary(&stdout, 1500).len(), 1499);
+    }
 
     #[test]
     fn ascii_printable_and_preserved_whitespace_pass_verbatim() {

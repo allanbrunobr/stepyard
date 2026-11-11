@@ -29,12 +29,20 @@ fn stepyard_bin() -> Option<PathBuf> {
     // `assert_cmd::cargo_bin` reads `CARGO_BIN_EXE_<name>`, which is only set
     // inside the crate that declares `[[bin]]` — `stepyard-harness` doesn't.
     // Fall back to the canonical workspace-root `target/debug/stepyard` path.
+    // TEST-04: also look next to this test's own build directory
+    // (`<target>/<profile>/deps/<test>`), wherever cargo put it — e.g.
+    // /tmp/stepyard-target locally — or the test silently skips.
+    let from_exe = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("stepyard")));
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let candidates = [
-        manifest.join("../../target/debug/stepyard"),
-        manifest.join("../../target/release/stepyard"),
-    ];
-    candidates.into_iter().find(|p| p.exists())
+    from_exe
+        .into_iter()
+        .chain([
+            manifest.join("../../target/debug/stepyard"),
+            manifest.join("../../target/release/stepyard"),
+        ])
+        .find(|p| p.exists())
 }
 
 fn write_fixture(dir: &TempDir) -> PathBuf {
@@ -59,12 +67,41 @@ fn sigterm_yields_exit_143_within_grace() {
         return;
     };
     let Ok(db_url) = std::env::var("STEPYARD_HARNESS_DATABASE_URL") else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
 
     let tmp = TempDir::new().expect("tempdir");
     let fixture = write_fixture(&tmp);
+    // v2 needs a git repository as its working directory (it prepares a
+    // worktree per session). Use a throwaway one: running in the crate dir
+    // registered session worktrees in the developer's own repository.
+    for args in [
+        &["init", "-q"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ][..],
+    ] {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(tmp.path())
+            .status()
+            .expect("git")
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
 
     // `--no-sandbox` avoids needing Docker for `cmd` steps. Stepyard's v2
     // engine requires a PG session pool — we hand it the harness test DB via
@@ -82,6 +119,10 @@ fn sigterm_yields_exit_143_within_grace() {
         .arg("v2")
         .env("STEPYARD_SHUTDOWN_GRACE_S", "2")
         .env("DATABASE_URL", &db_url)
+        // Run in the test's temp dir and without the file-log mirror: in the
+        // crate dir the run wrote `.stepyard/{logs,workspaces}` into the repo.
+        .current_dir(tmp.path())
+        .env("STEPYARD_NO_FILE_LOGS", "1")
         // Detach from the test's pid group so our kill only hits stepyard.
         .stdin(Stdio::null())
         .stdout(Stdio::null())

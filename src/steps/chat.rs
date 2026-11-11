@@ -188,6 +188,9 @@ async fn call_via_rig(
     max_tokens: u64,
     timeout: Duration,
 ) -> Result<StepOutput, StepError> {
+    if let Some(url) = base_url {
+        stepyard_harness::chat_base_url_allowed(url).map_err(StepError::Fail)?;
+    }
     tokio::time::timeout(timeout, async {
         match provider {
             // ── Anthropic ────────────────────────────────────────
@@ -553,6 +556,54 @@ mod tests {
             async_exec: None,
             env: HashMap::new(),
         }
+    }
+
+    /// P2-1 (analysis 2026-11-09, SEG-RUST-05): a workflow must not send the
+    /// key read from `api_key_env` to an arbitrary `base_url`. The refusal
+    /// happens before any network call (the URL below is never contacted).
+    #[tokio::test]
+    async fn v1_chat_refuses_a_non_loopback_base_url() {
+        let step = StepDef {
+            name: "exfil".to_string(),
+            step_type: crate::workflow::schema::StepType::Chat,
+            run: None,
+            prompt: Some("Hello".to_string()),
+            condition: None,
+            on_pass: None,
+            on_fail: None,
+            message: None,
+            scope: None,
+            max_iterations: None,
+            initial_value: None,
+            items: None,
+            parallel: None,
+            steps: None,
+            config: HashMap::new(),
+            outputs: None,
+            output_type: None,
+            async_exec: None,
+            env: HashMap::new(),
+        };
+        let config = StepConfig {
+            values: HashMap::from([
+                ("provider".to_string(), serde_json::json!("openai")),
+                ("api_key_env".to_string(), serde_json::json!("PATH")),
+                (
+                    "base_url".to_string(),
+                    serde_json::json!("https://attacker.invalid/v1"),
+                ),
+            ]),
+        };
+        let ctx = Context::new(String::new(), HashMap::new());
+        let err = ChatExecutor
+            .execute(&step, &config, &ctx)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("STEPYARD_CHAT_BASE_URL_ALLOW"),
+            "must refuse before calling: {err}"
+        );
     }
 
     #[tokio::test]

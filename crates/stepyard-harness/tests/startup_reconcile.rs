@@ -117,6 +117,10 @@ async fn container_alive(name: &str) -> bool {
 #[tokio::test(flavor = "current_thread")]
 async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
@@ -217,19 +221,12 @@ async fn reconcile_flips_orphan_session_and_destroys_orphan_container() {
         .await
         .expect("reconcile idempotent");
 
-    // The direct observable of "no state change": both counters are zero.
-    // The first reconcile drained every `running` session and every orphan
-    // `stepyard-session-*` container, so the second pass has nothing to do.
-    assert_eq!(
-        report2.sessions_reconciled, 0,
-        "idempotent reconcile must reconcile zero sessions, got {}",
-        report2.sessions_reconciled,
-    );
-    assert_eq!(
-        report2.containers_pruned, 0,
-        "idempotent reconcile must prune zero containers, got {}",
-        report2.containers_pruned,
-    );
+    // Idempotency is checked on THIS test's objects (below), not with
+    // database-wide counters: the database is shared with other test
+    // binaries, and since the liveness lease (P1-1) a `running` session left
+    // by another test becomes a candidate when it crosses LEASE_GRACE —
+    // which can happen between the two calls. `report2` is still exercised.
+    let _ = report2;
 
     // Per-row confirmation: seeded session still `failed`, event log still
     // has exactly one `signal_received/crash_recovery` entry.

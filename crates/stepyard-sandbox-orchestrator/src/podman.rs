@@ -85,6 +85,7 @@ impl SandboxLifecycle for PodmanLifecycle {
         let mut command = Command::new(PODMAN);
         command
             .args(["run", "-d", "--name", &name])
+            .args(crate::HARDENING_ARGS)
             .arg("--label")
             .arg(format!("session_id={session_id}"));
         for volume in &opts.volumes {
@@ -186,13 +187,13 @@ impl SandboxLifecycle for PodmanLifecycle {
         let name = Self::container_name(*id.as_uuid());
         let mut pairs: Vec<(&String, &String)> = env.iter().collect();
         pairs.sort_by(|a, b| a.0.cmp(b.0));
-        let env_values: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        // Names only on the argv; values go through the CLI's env (SEG-RUST-12).
+        let (env_argv, env_values) = crate::env_by_name(env);
 
-        let mut args: Vec<&str> = Vec::with_capacity(2 + env_values.len() * 2 + 1 + cmd.len());
+        let mut args: Vec<&str> = Vec::with_capacity(2 + env_argv.len() + 1 + cmd.len());
         args.push("exec");
-        for value in &env_values {
-            args.push("--env");
-            args.push(value);
+        for arg in &env_argv {
+            args.push(arg);
         }
         args.push(&name);
         args.extend(cmd.iter().map(String::as_str));
@@ -207,6 +208,7 @@ impl SandboxLifecycle for PodmanLifecycle {
 
         let output = Command::new(PODMAN)
             .args(&args)
+            .envs(env_values.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output()
             .await
             .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
@@ -230,13 +232,12 @@ impl SandboxLifecycle for PodmanLifecycle {
         let name = Self::container_name(*id.as_uuid());
         let mut pairs: Vec<(&String, &String)> = opts.env.iter().collect();
         pairs.sort_by(|a, b| a.0.cmp(b.0));
-        let env_values: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let (env_argv, env_values) = crate::env_by_name(&opts.env);
 
         let mut command = Command::new(PODMAN);
         command.arg("exec");
-        for value in &env_values {
-            command.arg("--env").arg(value);
-        }
+        command.args(&env_argv);
+        command.envs(env_values.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         command.arg(&name);
         command.args(cmd);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());

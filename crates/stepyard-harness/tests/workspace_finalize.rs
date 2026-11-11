@@ -18,7 +18,7 @@ use stepyard_sandbox_orchestrator::{
     BranchStrategy, ExecOutput, FinalizeReport, MockLifecycle, SandboxError, SandboxLifecycle,
     WorkflowOutcome, Workspace, WorkspaceError, WorkspaceManager,
 };
-use stepyard_session::{migrate, Session, SessionEvent, SessionId};
+use stepyard_session::{migrate, Session, SessionEvent, SessionId, SessionStatus};
 use uuid::Uuid;
 
 async fn pool() -> Option<sqlx::PgPool> {
@@ -35,6 +35,10 @@ async fn pool() -> Option<sqlx::PgPool> {
 macro_rules! db_test {
     ($pool:ident, $body:block) => {{
         let Some($pool) = pool().await else {
+            assert!(
+                std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+                "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+            );
             eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
             return;
         };
@@ -248,5 +252,13 @@ async fn engine_emits_merge_conflict_before_returning_finalize_error() {
             events[6].payload["files"],
             serde_json::json!(["README.md", "src/lib.rs"])
         );
+
+        // BUG-HARNESS-06: the session must not stay `running` after a
+        // finalization error, in memory or in the database.
+        assert_eq!(engine.session().status(), SessionStatus::Failed);
+        let reloaded = Session::load(&pool, engine.session().id())
+            .await
+            .expect("reload");
+        assert_eq!(reloaded.status(), SessionStatus::Failed);
     });
 }

@@ -1,0 +1,4 @@
+use tracing::debug;
+fn f() {
+    debug!(token = %t, "bad");
+}

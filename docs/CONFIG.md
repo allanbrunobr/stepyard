@@ -26,6 +26,14 @@ a malformed value (`timeout: "soon"`, a bare number such as `timeout: 30`, or
 `fail_on_error: "no"`) is an error when the workflow loads instead of a silent
 fallback to the default.
 
+On `--engine v2` the other keys do not go through the four layers. A `chat`
+step takes `provider`, `model`, `api_key_env`, `base_url`, `temperature`,
+`max_tokens` and `timeout` from `config.chat` (not `model`, `api_key_env` or
+`base_url` when the step sets a different provider); an `agent` step takes
+`model` and `command` from `config.agent`. Any other key, such as `session`,
+`truncation_strategy` or `system_prompt_append`, counts only when it is set on
+the step itself.
+
 ## Shape
 
 ```yaml
@@ -146,3 +154,57 @@ Requires `--engine v1` today — the v2 harness rejects `--dry-run`.
 - `YAML-SPEC.md` — overall workflow schema
 - `STEP-TYPES.md` — which config keys each step type honors
 - `DOCKER-SANDBOX.md` — sandbox and API proxy settings
+
+## Host secrets and workflows
+
+Workflow files, the project's `.stepyard/` files and prompts can come from a
+repository you do not control, so two host-side controls are off by default
+and can only be lifted from the environment of `stepyard` (a workflow cannot
+set them):
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `STEPYARD_ENV_ALLOW` | empty | Comma-separated host variable names that `env:` values of the form `${NAME}` may read even though the name looks like a credential (`*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*_KEY`, `DATABASE_URL`, …). Other names (`${HOME}`, `${CI}`) expand as before. |
+| `STEPYARD_CHAT_BASE_URL_ALLOW` | empty | Comma-separated URL prefixes a chat step may use as `base_url`. A prefix matches only up to a URL part boundary: `https://llm.example` allows `https://llm.example/v1`, not `https://llm.example.evil.net` nor `https://llm.example:9999`; a `base_url` with `user@` is never allowed. Loopback endpoints (`http://localhost:…`, `http://127.0.0.1:…`, `http://[::1]:…`) are always allowed; any other `base_url` is refused before the request, so a workflow cannot send the key read from `api_key_env` to its own server. |
+
+Environment values passed to `cmd` steps in a Docker/Podman sandbox reach the
+container through the CLI's environment (`docker exec --env NAME`), not on the
+command line, so they do not show up in `ps`. Names the container CLI reads
+itself (`PATH`, `HOME`, `TMPDIR`, `SHELL`, `USER`, `*_PROXY` and names
+starting with `DOCKER_`, `CONTAINER_`, `CONTAINERS_`, `PODMAN_`, `BUILDKIT_`,
+`BUILDX_`, `XDG_`, `SSH_`, `LD_`, `DYLD_`) go as `--env NAME=VALUE` instead,
+so a step value meant for the container does not change which `docker` runs
+or which daemon it talks to; those values are visible in `ps`.
+
+## Step output kept in the session log
+
+On `--engine v2` (the default), the output of every step type (stdout and
+stderr, each, including the `stdout` of `map` (the JSON array of every item's output), `call` and `repeat`,
+the error of a failed step and a chat reply) is kept in the session log up to
+`STEPYARD_MAX_STEP_OUTPUT_BYTES` (default 1 MiB). The v1
+engine (`--engine v1`, also used by remote dispatch and the Slack bot) does
+not apply this cap: it records no step output, but a failed step's error,
+which holds a `cmd`'s stderr, is kept whole. Longer
+output is cut on a character boundary and ends with a
+`…[stepyard: output truncated, N more bytes …]` marker; later steps that read
+`{{ steps.X.stdout }}` see the same capped value. Do not feed a value that can
+reach the cap to a `map`'s `items:`: the cut text with the marker is not the
+original list, and the `map` does not fail because of it. The engine reads the log back
+several times per step, so a very large value here slows every later step.
+
+## Diagnostic logs
+
+Two kinds of logs exist:
+
+- **The session log**: every event of a run (step started, completed,
+  failed, outputs). It is stored in the database and, unless
+  `--no-file-logs` or `STEPYARD_NO_FILE_LOGS=1` is set, mirrored to
+  `.stepyard/logs/<session_id>.jsonl`. It is the record of what the workflow
+  did.
+- **Diagnostic logs** from the CLI itself (startup reconcile, sandbox and
+  workspace warnings), written to stdout through `tracing`.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `RUST_LOG` | `info` | Filter for diagnostic logs, e.g. `warn`, `debug`, `stepyard_harness=debug`. |
+| `STEPYARD_LOG_FORMAT` | text | `json` writes one JSON object per line with a `timestamp` and, for lines logged while a v2 step runs, `span.session_id`. Use it for v2 runs nobody watches (CI, cron) to match a line to `.stepyard/logs/<session_id>.jsonl`. Remote dispatch runs v1, whose lines carry no `session_id`; its log file is named after the run id instead. The default text format has no timestamps; a line logged while a v2 step runs carries `session{session_id=…}:` after the level (` WARN session{session_id=…}: …`). The text format keeps ANSI colours even when redirected to a file (`NO_COLOR=1` turns them off), so strip them before matching on `session_id=`. |

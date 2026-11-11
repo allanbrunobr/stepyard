@@ -1,6 +1,7 @@
 //! Integration tests exercising the full append/replay/load contract against
 //! a real PostgreSQL. Skipped (without failing) when `STEPYARD_SESSION_DATABASE_URL`
-//! is not set so `cargo test` stays green in CI without a DB sidecar.
+//! is not set, unless `STEPYARD_REQUIRE_DB` is set (CI sets it), which turns
+//! the skip into a failure.
 //!
 //! To run against a local database:
 //!
@@ -38,6 +39,10 @@ async fn pool() -> Option<sqlx::PgPool> {
 macro_rules! db_test {
     ($pool:ident, $body:block) => {{
         let Some($pool) = pool().await else {
+            assert!(
+                std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+                "STEPYARD_SESSION_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+            );
             eprintln!("[skip] STEPYARD_SESSION_DATABASE_URL not set");
             return;
         };

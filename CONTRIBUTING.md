@@ -37,6 +37,35 @@ npm run test  --workspace @stepyard/api
 CI (`.github/workflows/check.yml`) runs these commands. Run them before you
 open a pull request.
 
+The minimum supported Rust version is **1.88** (`rust-version` in
+`Cargo.toml`). The locked dependencies set it (`home` 0.5.12 needs 1.88),
+not our own code. The `msrv` job of `.github/workflows/check.yml` runs
+`cargo check --locked --workspace --all-targets` on 1.88 with the default
+features only, so a `cargo update` that raises it for the default build fails
+CI. The `sqlite` and `slack` builds are not checked on 1.88: after a
+`cargo update`, check them by hand with
+`cargo +1.88 check --locked -p stepyard-engine --no-default-features --features sqlite`
+and `cargo +1.88 check --locked -p stepyard-engine --features slack`.
+
+CI also sets `STEPYARD_REQUIRE_DB=1` in the jobs that have Postgres: a
+database test whose URL is missing fails there instead of skipping. Locally,
+without that variable, database tests still print `[skip]` and pass.
+
+### Build directory
+
+`.cargo/config.toml` points `target-dir` at `/tmp/stepyard-target`, outside
+the checkout, because a repo-local `target/` has grown past 100 GiB. That
+directory is shared: every checkout and worktree on the machine builds into
+it and waits on the same Cargo lock. To keep a worktree separate, set
+`CARGO_TARGET_DIR`, which overrides the config, for example
+`export CARGO_TARGET_DIR="$HOME/.cache/stepyard-target/<worktree>"`.
+
+`scripts/cargo-guarded.sh <cargo-args>` runs Cargo between two size checks
+(`scripts/guard-cargo-target-size.sh`). The check fails if a repo-local
+`target/` exists or if the target dir is over `STEPYARD_CARGO_TARGET_MAX_MIB`
+(default 16384, about twice one full CI-equivalent pass). Clean it with
+`cargo clean` when it fails.
+
 ### Tests with external services
 
 Some tests need a service. They skip when the service is not configured:

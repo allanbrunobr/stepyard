@@ -24,9 +24,9 @@ There are two engines in the same binary:
 |---|---|---|
 | Code | `src/engine/`, `src/steps/` | `crates/stepyard-harness/` |
 | State | In memory | Append-only session log, replayed on every step |
-| Crash recovery | No | Yes: a new process replays the log and continues |
+| Crash recovery | No | The log survives a crash and can be replayed (`Engine::resume_existing` in the library), but the CLI has no resume command: a later `stepyard execute` starts a new session; the PostgreSQL build also marks a session whose owner is gone as `failed`, the SQLite build leaves it `running` |
 | Sandbox | Copies the project into the container and copies results back | Copies the project into the session container. `cmd` and `agent` run there; changes are copied back. `chat` stays on the host |
-| Features | All | Same YAML; a few features are still v1-only (README, "Known limitations of v2") |
+| Features | All | Same YAML; a few features are still v1-only (README, "Known limitations of v2"; template names and step outputs marked **v1 only** in docs/YAML-SPEC.md and docs/STEP-TYPES.md) |
 
 v1 is the original engine. v2 is the rewrite around a durable session log; it
 is the default and new work goes there. The CLI translates the shared YAML
@@ -70,7 +70,9 @@ each session to `.stepyard/logs/<session_id>.jsonl` unless disabled.
 
 The v2 engine. `Engine::step()` runs exactly one top-level step: it replays
 the log, works out the next step, runs it, and appends the result. A crash
-between steps loses nothing, because the next process starts from the log.
+between steps loses nothing that was recorded: the log holds every completed
+step, and a library caller can continue from it (`Engine::resume_existing`).
+The CLI does not do that today; it always starts a new session.
 
 - `executor.rs`, `agent_exec.rs`, `chat_exec.rs`, `script_exec.rs`,
   `template_exec.rs`: one executor per step type.
@@ -78,8 +80,10 @@ between steps loses nothing, because the next process starts from the log.
   event so progress is tracked per iteration.
 - `render.rs`: Tera templates (`{{ steps.x.stdout }}`, `{{ target }}`,
   `{{ vars.* }}`).
-- `startup.rs`: on start, marks sessions left `running` by a dead process and
-  removes orphaned `stepyard-session-<uuid>` containers.
+- `startup.rs`: on start, marks sessions left `running` by a dead process as
+  `failed` (the owner holds a PostgreSQL advisory lock while it runs, so live
+  sessions are skipped) and removes the `stepyard-session-<uuid>` containers
+  of sessions this database knows are over.
 - `process_group.rs`: child processes run in their own process group so a
   timeout or Ctrl-C kills the whole tree.
 
@@ -112,6 +116,27 @@ These hold today. Breaking one is a bug.
    that the engine needs.
 6. **Library crates return typed errors** (`thiserror`). `anyhow` stays in the
    binary.
+7. **Concurrent sessions do not affect each other.** The harness shares one
+   `SandboxLifecycle` (`Send + Sync`) across sessions. Cancelling or failing
+   one session does not change the others
+   (`crates/stepyard-harness/tests/concurrent_sessions.rs`). The startup
+   reconcile (PostgreSQL build) only fails sessions whose owner no longer
+   holds the session lease (`tests/cli_concurrent_runs.rs`).
+
+### Design rule with known gaps
+
+8. **The v2 engine should keep no state between steps.** What a step needs
+   from earlier steps (outputs, scope progress, chat history, agent session
+   ids) should be read back from the session log, not held in memory. Code
+   comments cite this as "invariant 8". It does **not** fully hold today:
+   - `parallel` writes its sub-steps' `StepStarted`/`StepCompleted` only after
+     every sub-step finishes, so a crash mid-way leaves no record of them;
+   - chat turns of steps inside a scope body never reach the chat history;
+   - replay inside a scope recovers only `cmd` outputs, not `agent`/`chat`;
+   - the CLI has no resume command (only the library's
+     `Engine::resume_existing`).
+
+   Until these are fixed, do not rely on rule 8 for crash recovery.
 
 ## Direction
 
@@ -125,7 +150,7 @@ Still missing on v2:
 
 - Dashboard events (`config.events.dashboard` is sent only by v1).
 - Nested scopes.
-- `{{ stack.* }}` and `{{ prompts.* }}`.
+- `{{ stack.* }}`, `{{ prompts.* }}` and the other template names and step outputs marked **v1 only** in docs/YAML-SPEC.md and docs/STEP-TYPES.md.
 - `--repo`.
 - `--dry-run`.
 

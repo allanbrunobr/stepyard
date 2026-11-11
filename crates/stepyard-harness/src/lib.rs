@@ -15,7 +15,7 @@
 //!
 //! All state lives in the session log — the harness holds zero per-step
 //! memory. A process crash between steps is fully recoverable via
-//! [`Engine::resume`] (Invariante 11).
+//! [`Engine::resume`] (ARCHITECTURE invariant 8).
 //!
 //! # Scope
 //!
@@ -46,12 +46,15 @@ pub mod startup;
 mod template_exec;
 mod workflow;
 
-pub use chat_exec::{ChatClient, ChatClientError, ChatCompletionRequest, ChatCompletionResponse};
+pub use chat_exec::{
+    chat_base_url_allowed, ChatClient, ChatClientError, ChatCompletionRequest,
+    ChatCompletionResponse, CHAT_BASE_URL_ALLOW_VAR,
+};
 pub use container_workspace::{ContainerWorkspace, WorkspaceSync};
 pub use defaults::Defaults;
 pub use engine::{
-    apply_anthropic_proxy_env, resolve_env, AnthropicProxyEnv, CancelToken, Engine, EngineError,
-    HarnessConfig, RunContext, StepOutcome,
+    apply_anthropic_proxy_env, host_var_allowed, resolve_env, AnthropicProxyEnv, CancelToken,
+    Engine, EngineError, HarnessConfig, RunContext, StepOutcome, ENV_ALLOW_VAR,
 };
 pub use executor::StepExecutor;
 pub use gate::{GateAction, GateError, GateOutcome};

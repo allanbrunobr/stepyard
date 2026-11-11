@@ -70,6 +70,10 @@ async fn crash_recovery_events(pool: &sqlx::PgPool, id: Uuid) -> usize {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reconcile_spares_a_session_whose_owner_holds_the_lease_and_fails_it_once_released() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
@@ -122,6 +126,10 @@ async fn reconcile_spares_a_session_whose_owner_holds_the_lease_and_fails_it_onc
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reconcile_spares_a_fresh_session_inside_the_grace_window() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
@@ -152,6 +160,10 @@ async fn reconcile_spares_a_fresh_session_inside_the_grace_window() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropping_the_lease_releases_it_so_a_crashed_owner_is_detected() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };

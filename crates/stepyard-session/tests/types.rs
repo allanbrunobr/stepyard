@@ -82,7 +82,6 @@ fn session_event_is_serde_roundtrip() {
 // The harness requires Session to be Clone + Send + Sync so it can be
 // shared across tokio tasks without wrapping in Arc<Mutex<...>>.
 
-#[allow(dead_code)]
 fn assert_clone_send_sync<T: Clone + Send + Sync>() {}
 
 #[test]

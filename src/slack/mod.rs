@@ -249,6 +249,40 @@ struct AppState {
     signing_secret: String,
     workflows_dir: String,
     http: reqwest::Client,
+    /// Mentions already handled (BUG-CLI-09).
+    seen: Arc<MentionDedup>,
+    /// Bounds concurrent workflow runs (STEPYARD_SLACK_MAX_RUNS, default 2).
+    runs: Arc<tokio::sync::Semaphore>,
+}
+
+/// Remembers which mentions (`channel:ts`) were already handled. Slack
+/// retries an event when it gets no answer within 3 s, so one mention could
+/// start the same workflow several times (BUG-CLI-09).
+struct MentionDedup {
+    seen: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    ttl: std::time::Duration,
+}
+
+impl MentionDedup {
+    fn new(ttl: std::time::Duration) -> Self {
+        Self {
+            seen: std::sync::Mutex::new(std::collections::HashMap::new()),
+            ttl,
+        }
+    }
+
+    /// `true` the first time `key` is seen within the TTL; `false` for a
+    /// retry. Expired entries are dropped on each call, so memory is bounded
+    /// by the mentions of the last TTL.
+    fn claim(&self, key: &str, now: std::time::Instant) -> bool {
+        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        seen.retain(|_, at| now.duration_since(*at) < self.ttl);
+        if seen.contains_key(key) {
+            return false;
+        }
+        seen.insert(key.to_string(), now);
+        true
+    }
 }
 
 // ── Signature Verification ──────────────────────────────────────────────────
@@ -366,7 +400,10 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             let combined = if stdout.len() > 1500 {
-                format!("...{}", &stdout[stdout.len() - 1500..])
+                format!(
+                    "...{}",
+                    crate::display::tail_at_char_boundary(&stdout, 1500)
+                )
             } else {
                 stdout.to_string()
             };
@@ -378,7 +415,10 @@ async fn run_workflow(state: Arc<AppState>, channel: String, thread_ts: String, 
                 )
             } else {
                 let err_tail = if stderr.len() > 1000 {
-                    format!("...{}", &stderr[stderr.len() - 1000..])
+                    format!(
+                        "...{}",
+                        crate::display::tail_at_char_boundary(&stderr, 1000)
+                    )
                 } else {
                     stderr.to_string()
                 };
@@ -457,33 +497,63 @@ async fn slack_events(
                         "Received app_mention"
                     );
 
+                    // Slack retries an unanswered event: handle a mention once.
+                    if !state
+                        .seen
+                        .claim(&format!("{channel}:{ts}"), std::time::Instant::now())
+                    {
+                        info!(channel = %channel, ts = %ts, "Ignoring a retried app_mention");
+                        return Ok(Json(serde_json::json!({"ok": true})));
+                    }
+
+                    // Every reply is posted from a task, so this handler answers
+                    // Slack well within its 3 s deadline (a late answer makes
+                    // Slack retry the event).
+                    let state = Arc::clone(&state);
                     match route_message(&text) {
-                        Some(wf) => {
-                            let state = Arc::clone(&state);
-                            let ch = channel.clone();
-                            let thread = ts.clone();
-                            tokio::spawn(async move {
-                                run_workflow(state, ch, thread, wf).await;
-                            });
-                        }
+                        Some(wf) => match Arc::clone(&state.runs).try_acquire_owned() {
+                            Ok(permit) => {
+                                tokio::spawn(async move {
+                                    run_workflow(state, channel, ts, wf).await;
+                                    drop(permit);
+                                });
+                            }
+                            Err(_) => {
+                                tokio::spawn(async move {
+                                    post_message(
+                                        &state,
+                                        &SlackMessage {
+                                            channel,
+                                            text: "⏳ Already running the maximum number of workflows. \
+                                                   Try again when one finishes."
+                                                .to_string(),
+                                            thread_ts: Some(ts),
+                                        },
+                                    )
+                                    .await;
+                                });
+                            }
+                        },
                         None => {
-                            let state_ref = &*state;
-                            post_message(
-                                state_ref,
-                                &SlackMessage {
-                                    channel,
-                                    text: "🤔 I didn't understand that command. Try:\n\
-                                        • `@stepyard fix issue https://github.com/owner/repo/issues/10`\n\
-                                        • `@stepyard review pr https://github.com/owner/repo/pull/42`\n\
-                                        • `@stepyard security audit https://github.com/owner/repo`\n\
-                                        • `@stepyard generate docs https://github.com/owner/repo`\n\
-                                        • `@stepyard fix ci https://github.com/owner/repo/pull/8`\n\
-                                        \nYou can also use just numbers (e.g. `fix issue #10`) if the bot is running inside the repo."
-                                        .to_string(),
-                                    thread_ts: Some(ts),
-                                },
-                            )
-                            .await;
+                            tokio::spawn(async move {
+                                post_message(
+                                    &state,
+                                    &SlackMessage {
+                                        channel,
+                                        text: "🤔 I didn't understand that command. Try:\n\
+                                            • `@stepyard fix issue https://github.com/owner/repo/issues/10`\n\
+                                            • `@stepyard review pr https://github.com/owner/repo/pull/42`\n\
+                                            • `@stepyard security audit https://github.com/owner/repo`\n\
+                                            • `@stepyard generate docs https://github.com/owner/repo`\n\
+                                            • `@stepyard fix ci https://github.com/owner/repo/pull/8`\n\
+                                            \nInclude the repository URL: without it the bot would run in its own \
+                                            directory, which the sandbox refuses."
+                                            .to_string(),
+                                        thread_ts: Some(ts),
+                                    },
+                                )
+                                .await;
+                            });
                         }
                     }
                 }
@@ -632,11 +702,18 @@ pub async fn start_server(port: u16) -> anyhow::Result<()> {
     println!("\x1b[2mWaiting for Slack events... (Ctrl+C to stop)\x1b[0m");
     println!();
 
+    let max_runs = env::var("STEPYARD_SLACK_MAX_RUNS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(2);
     let state = Arc::new(AppState {
         bot_token,
         signing_secret,
         workflows_dir,
         http: reqwest::Client::new(),
+        seen: Arc::new(MentionDedup::new(std::time::Duration::from_secs(600))),
+        runs: Arc::new(tokio::sync::Semaphore::new(max_runs)),
     });
 
     let app = Router::new()
@@ -723,5 +800,23 @@ mod tests {
             .expect("normal pull request");
         assert_eq!(wf.repo.as_deref(), Some("acme/backend"));
         assert_eq!(wf.target, "12");
+    }
+
+    /// BUG-CLI-09: a retried event (same channel and ts) must not start the
+    /// workflow again; after the TTL the key is forgotten.
+    #[test]
+    fn a_retried_mention_is_claimed_only_once() {
+        let dedup = MentionDedup::new(std::time::Duration::from_secs(600));
+        let t0 = std::time::Instant::now();
+        assert!(dedup.claim("C1:1700000000.0001", t0));
+        assert!(!dedup.claim("C1:1700000000.0001", t0 + std::time::Duration::from_secs(5)));
+        assert!(
+            dedup.claim("C1:1700000000.0002", t0),
+            "another mention is new"
+        );
+        assert!(dedup.claim(
+            "C1:1700000000.0001",
+            t0 + std::time::Duration::from_secs(601)
+        ));
     }
 }

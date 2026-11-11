@@ -142,7 +142,6 @@ fn validate_step(step: &StepDef, scope_names: &HashSet<String>, errors: &mut Vec
 ///   - Applies default values for missing optional fields (mutates the steps)
 ///
 /// Returns a list of validation error messages (empty means all ok).
-#[allow(dead_code)]
 pub fn validate_plugin_configs(steps: &[StepDef], registry: &PluginRegistry) -> Vec<String> {
     let mut errors = Vec::new();
     for step in steps {

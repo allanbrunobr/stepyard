@@ -6,6 +6,10 @@ on:
     tags:
       - "v*"
 
+# Least privilege for GITHUB_TOKEN; only the release job below writes.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   # Release packaging copies binaries from target/<triple>/release below.
@@ -17,13 +21,42 @@ env:
   # needed. The PostgreSQL build is installed with `cargo install`.
   BUILD_FEATURES: --no-default-features --features sqlite
 
+# Third-party actions are pinned by commit SHA (the tag is in the comment).
+
 jobs:
+  # ──────────────────────────────────────────────────────────
+  # Gates: a tag publishes nothing unless the full CI passes on its commit
+  # and the tag matches the version in Cargo.toml.
+  # ──────────────────────────────────────────────────────────
+  check:
+    name: CI checks
+    uses: ./.github/workflows/check.yml
+
+  tag-version:
+    name: Tag matches Cargo.toml version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Compare the tag with the package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(sed -n '/^\[package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' Cargo.toml | head -n 1)"
+          echo "tag=${TAG} Cargo.toml version=${version}"
+          if [ -z "$version" ] || [ "${TAG#v}" != "$version" ]; then
+            echo "::error::tag ${TAG} does not match Cargo.toml version ${version}"
+            exit 1
+          fi
+
   # ──────────────────────────────────────────────────────────
   # Build pre-compiled binaries for all supported targets
   # ──────────────────────────────────────────────────────────
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: [check, tag-version]
     strategy:
       fail-fast: false
       matrix:
@@ -52,20 +85,21 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master (v1)
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       # Install cross for Linux aarch64 cross-compilation
       - name: Install cross
         if: matrix.cross == true
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: cargo install cross --locked --git https://github.com/cross-rs/cross --tag v0.2.5
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
@@ -97,7 +131,7 @@ jobs:
              ${{ matrix.artifact_name }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
@@ -111,16 +145,22 @@ jobs:
     needs: build
     permissions:
       contents: write
+      # Build provenance attestation (actions/attest-build-provenance).
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # Download all build artifacts into ./artifacts/
+      # Download all build artifacts into ./artifacts/. `merge-multiple`
+      # puts every binary directly in artifacts/ instead of one subdirectory
+      # per artifact, so checksums.sha256 lists plain file names.
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: List artifacts
         run: find artifacts -type f | sort
@@ -129,21 +169,26 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          find . -type f | sort | while read f; do
-            sha256sum "$f" >> ../checksums.sha256
-          done
+          sha256sum stepyard-* > ../checksums.sha256
           cat ../checksums.sha256
+
+      # Signed SLSA provenance for each binary, verifiable with
+      # `gh attestation verify <file> --repo <owner>/<repo>`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/stepyard-*
 
       # Create GitHub Release with all binaries and checksums
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           name: "Stepyard ${{ github.ref_name }}"
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
-            artifacts/**/*
+            artifacts/stepyard-*
             checksums.sha256
           body: |
             Stepyard is alpha software. These binaries use the **SQLite** session
@@ -195,7 +240,11 @@ jobs:
             stepyard --version
             ```
 
-            ## Verify checksums
+            ## Verify a download
+            Keep the release file name (for example `stepyard-linux-x86_64`)
+            until it is verified, in the directory that holds `checksums.sha256`:
             ```bash
-            sha256sum -c checksums.sha256
+            sha256sum -c --ignore-missing checksums.sha256          # Linux
+            shasum -a 256 -c --ignore-missing checksums.sha256      # macOS
+            gh attestation verify stepyard-linux-x86_64 --repo ${{ github.repository }}
             ```

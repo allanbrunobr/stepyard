@@ -1,0 +1,5 @@
+fn f() {
+    Command::new("sh")
+        .arg("-c")
+        .arg(user_input);
+}

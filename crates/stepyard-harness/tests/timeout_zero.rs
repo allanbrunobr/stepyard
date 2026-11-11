@@ -63,6 +63,10 @@ impl StepExecutor for BlockingExecutor {
 #[tokio::test(flavor = "current_thread")]
 async fn zero_second_timeout_fires_step_timeout_fired_then_step_failed() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };
@@ -136,11 +140,11 @@ async fn zero_second_timeout_fires_step_timeout_fired_then_step_failed() {
     let calls = mock.calls().await;
     let destroys: Vec<&MockCall> = calls
         .iter()
-        .filter(|c| matches!(c, MockCall::Destroy { .. }))
+        .filter(|c| matches!(c, MockCall::DestroyBySession { .. }))
         .collect();
     assert_eq!(destroys.len(), 1, "expected one destroy, got {calls:?}");
-    let MockCall::Destroy { id } = destroys[0] else {
+    let MockCall::DestroyBySession { session_id: id } = destroys[0] else {
         unreachable!("filtered for Destroy above")
     };
-    assert_eq!(*id.as_uuid(), session_uuid);
+    assert_eq!(*id, session_uuid);
 }

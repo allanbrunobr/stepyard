@@ -1,7 +1,10 @@
 #!/bin/sh
 set -eu
 
-limit_mib="${STEPYARD_CARGO_TARGET_MAX_MIB:-1024}"
+# One full CI-equivalent pass (build, tests, clippy, SQLite profile) leaves
+# about 8.4 GiB in the target dir; 16 GiB lets one pass through and catches
+# growth across several branches or worktrees. Override per run if needed.
+limit_mib="${STEPYARD_CARGO_TARGET_MAX_MIB:-16384}"
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 workspace_target="$repo_root/target"
 target_dir="${CARGO_TARGET_DIR:-/tmp/stepyard-target}"

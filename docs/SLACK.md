@@ -121,6 +121,11 @@ run in its own working directory, and the v1 sandbox refuses that mode (it
 bind-mounts and re-owns the directory): include the repository URL in the
 message, or run the bot with sandboxing disabled on purpose.
 
+The bot handles each mention once: Slack re-sends an event it did not get an
+answer to within 3 seconds, and repeats of the same message are ignored. At most
+`STEPYARD_SLACK_MAX_RUNS` workflows (default 2) run at the same time; a mention
+beyond that gets a "try again" reply instead of queueing.
+
 ## Security notes
 
 - The bot verifies every request with the signing secret. Do not share it.

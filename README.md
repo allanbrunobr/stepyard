@@ -63,7 +63,7 @@ The CLI has two engines:
 
 | Engine | Status | Use it when |
 |--------|--------|-------------|
-| `v2` (default) | Session log in PostgreSQL or SQLite, resumes after a crash | Most workflows, on the host or in a Docker/Podman container |
+| `v2` (default) | Session log in PostgreSQL or SQLite; it survives a crash, but the CLI has no resume command. A later run starts a new session; in the PostgreSQL build it also marks the orphaned one `failed`, in the SQLite build it stays `running` | Most workflows, on the host or in a Docker/Podman container |
 | `v1` (`--engine v1`) | Legacy | You need `{{ stack }}` / `{{ prompts.* }}`, `--dry-run`, `--repo`, or dashboard events. With a container sandbox, v1 only runs in `--repo OWNER/REPO` mode: it refuses to mount and re-own your working directory (use `--no-sandbox` to run it on the host) |
 
 Read [Known limitations of v2](#known-limitations-of-v2) before you depend on the default engine.
@@ -284,11 +284,13 @@ Details: [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 
 | Feature | Status in v2 |
 |---------|--------------|
-| `{{ stack.* }}`, `{{ prompts.* }}` | Not rendered. Use `--engine v1` |
+| `{{ stack.* }}`, `{{ prompts.* }}`, and the template names and step outputs marked **v1 only** in [YAML-SPEC](docs/YAML-SPEC.md) and [STEP-TYPES](docs/STEP-TYPES.md) (`steps.X.output`, `.rendered`, `.iterations`, …) | Not rendered. `stepyard validate` refuses them when they appear in the workflow file (not in prompt template files). Use `--engine v1` |
 | `--dry-run`, `--repo`, `--resume`, `--json` | Rejected with an error. Use `--engine v1` (or `stepyard inspect` for a dry run) |
 | `--quiet` | No effect (a warning says so; `--verbose` works: it prints cmd output) |
 | `parallel:` on `map` | Ignored. Items run one after another (v1 also runs them one after another by default) |
 | `config.events.dashboard` | Not sent. Dashboard events work only with v1 |
+| `config.patterns` | Only `timeout` (cmd and agent steps) and `fail_on_error` (cmd steps) are applied, as on v1. Other pattern keys, such as `model`, are ignored |
+| `config.agent` keys other than `model`, `command` and `timeout` | Not passed to agent steps (`system_prompt_append`, `session`, `resume`, `fork_session`; `permissions` on purpose). Set them on each step. The shipped `refactor.yaml` and `flaky-test-fix.yaml` keep their rules in `config.agent.system_prompt_append`, so on v2 their agent steps run without them |
 | `--timeout` | Has no effect in either engine (a warning says so). Set `config.global.timeout` or a step `timeout:` |
 
 ## CLI overview
@@ -296,7 +298,7 @@ Details: [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 | Command | Purpose |
 |---------|---------|
 | `stepyard execute <file> [flags] -- [target]` | Run a workflow |
-| `stepyard validate <file>` | Check a workflow without running it |
+| `stepyard validate <file>` | Check a workflow without running it, for the default v2 engine (`--engine v1` checks only the v1 rules) |
 | `stepyard inspect <file>` | Show config layers, scopes, and the step graph |
 | `stepyard list` | List workflows in `.`, `./workflows/`, and `~/.stepyard/workflows/` |
 | `stepyard init <name> [--template blank\|fix-issue\|code-review\|security-audit]` | Create a workflow from a template |

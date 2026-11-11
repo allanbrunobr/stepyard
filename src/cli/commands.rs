@@ -177,7 +177,10 @@ pub struct ExecuteArgs {
     #[arg(long, value_name = "STEP_NAME")]
     pub resume: Option<String>,
 
-    /// Run inside a Docker sandbox (default: true). Use --no-sandbox to run locally.
+    /// Run inside a container sandbox when the selected runtime is docker or
+    /// podman. The default runtime depends on the build: the Postgres build
+    /// uses docker; the SQLite build (the released binary) uses `local`, which
+    /// runs steps on this machine. Use --sandbox-runtime to choose.
     #[arg(long, default_value_t = true, action = clap::ArgAction::SetTrue)]
     pub sandbox: bool,
 
@@ -255,6 +258,12 @@ pub struct ExecArgs {
 pub struct ValidateArgs {
     /// Path to the workflow YAML file
     pub workflow: PathBuf,
+
+    /// Engine to validate for, as `execute --engine`: `v2` (the default)
+    /// also runs the v1→v2 adapter and the harness checks, which reject
+    /// workflows the v1 validator accepts.
+    #[arg(long, value_name = "v1|v2", default_value = "v2", value_parser = parse_engine)]
+    pub engine: String,
 }
 
 #[derive(Args)]
@@ -962,6 +971,19 @@ pub async fn execute(
     if args.no_sandbox && args.sandbox_runtime.is_some() {
         tracing::warn!("--no-sandbox was also provided; --sandbox-runtime takes precedence");
     }
+    // SEG-RUST-06: the released binary (SQLite profile) defaults to the
+    // `local` runtime, so a workflow from an untrusted repository ran on the
+    // host with nothing said. Say it unless the user chose the runtime.
+    let runtime_chosen = args.sandbox_runtime.is_some()
+        || args.no_sandbox
+        || std::env::var_os("STEPYARD_SANDBOX").is_some();
+    if sandbox_runtime == SandboxRuntime::Local && !runtime_chosen {
+        eprintln!(
+            "warning: no container sandbox: this build runs workflow steps directly on this \
+             machine by default. Pass --sandbox-runtime docker (or podman) to isolate them, \
+             or --sandbox-runtime local to run locally on purpose."
+        );
+    }
     if args.engine == "v1" && sandbox_runtime == SandboxRuntime::Podman {
         bail!("--sandbox-runtime podman currently requires --engine v2");
     }
@@ -1459,6 +1481,109 @@ async fn collect_missing_prompts(
     missing
 }
 
+/// The v2 renderer knows only `steps` (with `stdout`, `stderr`, `exit_code`
+/// and `response`), `target`, `vars`, `args` and `scope`. A step using a
+/// v1-only name or operator from docs/YAML-SPEC.md fails when it renders,
+/// after the steps before it already ran; `validate` reports it up front.
+/// Only text inside `{{ … }}` of YAML values counts (comments do not).
+fn v1_only_template_namespaces(path: &std::path::Path) -> Result<(), String> {
+    fn strings<'a>(v: &'a serde_yaml::Value, out: &mut Vec<&'a str>) {
+        match v {
+            serde_yaml::Value::String(s) => out.push(s),
+            serde_yaml::Value::Sequence(items) => items.iter().for_each(|i| strings(i, out)),
+            serde_yaml::Value::Mapping(map) => map.values().for_each(|i| strings(i, out)),
+            serde_yaml::Value::Tagged(t) => strings(&t.value, out),
+            _ => {}
+        }
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&text).map_err(|e| e.to_string())?;
+    let mut all = Vec::new();
+    strings(&value, &mut all);
+    let found = v1_only_template_uses(&all);
+    if found.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "uses {}, which --engine v2 does not render (a v2 step exposes only \
+             stdout, stderr, exit_code and response; names documented as v1 only \
+             need --engine v1)",
+            found.join(", ")
+        ))
+    }
+}
+
+/// The v1-only template names and operators used in `texts`, as the docs
+/// write them, sorted and without duplicates. Looks inside `{{ … }}` and
+/// `{% … %}`. A step exposes only `stdout`, `stderr`, `exit_code` and
+/// `response` on v2, so any other `steps.<name>.<field>` is v1 only.
+fn v1_only_template_uses(texts: &[&str]) -> Vec<String> {
+    const V2_STEP_FIELDS: &[&str] = &["stdout", "stderr", "exit_code", "response"];
+    let expr = regex::Regex::new(r"(?s)\{\{(.*?)\}\}|\{%(.*?)%\}").expect("valid regex");
+    // `(^|[^\w.])` keeps `steps.stack.stdout` (a step named `stack`) out.
+    // Third field: the top-level name a rule is about, so a loop or `set`
+    // variable with that name (valid on v2) is not reported.
+    let rules: [(&str, &str, &str); 5] = [
+        (r"(^|[^\w.])stack\b", "{{ stack.* }}", "stack"),
+        (r"(^|[^\w.])prompts\.", "{{ prompts.* }}", "prompts"),
+        (r"(^|[^\w.])session_id\b", "{{ session_id }}", "session_id"),
+        (r"(^|[^\w.])from\s*\(", "{{ from(\"<name>\") }}", ""),
+        (r"[\w\]][?!]\s*(\||$)", "the `?`/`!` accessors", ""),
+    ];
+    let rules: Vec<(regex::Regex, &str, &str)> = rules
+        .iter()
+        .map(|(p, l, n)| (regex::Regex::new(p).expect("valid regex"), *l, *n))
+        .collect();
+    let step_field =
+        regex::Regex::new(r"(^|[^\w.])steps\.[\w-]+\.([A-Za-z_]\w*)").expect("valid regex");
+    let shorthand = regex::Regex::new(r"(^|[^\w.])([A-Za-z_]\w*)\.output\b").expect("valid regex");
+    // String literals are data, not names: `{{ "stack" }}` is valid on v2.
+    let literal = regex::Regex::new(r#""(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"#).expect("valid regex");
+    let declared_re = regex::Regex::new(
+        r"\{%-?\s*(?:for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\b|set(?:_global)?\s+(\w+)\s*=)",
+    )
+    .expect("valid regex");
+    let declared: Vec<&str> = texts
+        .iter()
+        .flat_map(|t| declared_re.captures_iter(t))
+        .flat_map(|c| [c.get(1), c.get(2), c.get(3)])
+        .flatten()
+        .map(|m| m.as_str())
+        .collect();
+    let mut found: Vec<String> = Vec::new();
+    for text in texts {
+        for cap in expr.captures_iter(text) {
+            let raw = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .map_or("", |m| m.as_str())
+                .trim_matches('-');
+            let inner = literal.replace_all(raw, "\"\"");
+            let inner = inner.as_ref();
+            for (pattern, label, name) in &rules {
+                if pattern.is_match(inner) && !declared.contains(name) {
+                    found.push((*label).to_string());
+                }
+            }
+            for c in step_field.captures_iter(inner) {
+                let field = c.get(2).map_or("", |m| m.as_str());
+                if !V2_STEP_FIELDS.contains(&field) {
+                    found.push(format!("{{{{ steps.<name>.{field} }}}}"));
+                }
+            }
+            for c in shorthand.captures_iter(inner) {
+                let name = c.get(2).map_or("", |m| m.as_str());
+                if !["steps", "scope", "vars", "args", "target"].contains(&name) {
+                    found.push("{{ <name>.output }}".to_string());
+                }
+            }
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
     let workflow_path = resolve_workflow_path(&args.workflow)?;
 
@@ -1467,8 +1592,25 @@ pub async fn validate(args: ValidateArgs) -> anyhow::Result<()> {
 
     let errors = validator::validate(&workflow);
     if errors.is_empty() {
+        // BUG-CLI-13: `validate` used to apply only the v1 rules, so it
+        // approved workflows the default engine then refused at run time.
+        // Check what `execute --engine v2` checks before any step runs.
+        if args.engine == "v2" {
+            let mut with_defaults = workflow.clone();
+            with_defaults.config = crate::config::apply_defaults(&with_defaults.config);
+            let v2 = harness_adapter::adapt(&with_defaults)
+                .map_err(|e| e.to_string())
+                .and_then(|wf| wf.validate().map_err(|e| e.to_string()))
+                .and_then(|()| v1_only_template_namespaces(&workflow_path));
+            if let Err(e) = v2 {
+                eprintln!("Validation errors (--engine v2, the default):");
+                eprintln!("  - {}", display_text(&e));
+                bail!("not runnable on --engine v2; it passes `stepyard validate --engine v1`");
+            }
+        }
         println!(
-            "\x1b[32m✓\x1b[0m Workflow is valid: {}",
+            "\x1b[32m✓\x1b[0m Workflow is valid for --engine {}: {}",
+            args.engine,
             display_text(&workflow.name)
         );
         Ok(())
@@ -2121,6 +2263,65 @@ sandbox:
         assert_eq!(got.dns, ["1.1.1.1"]);
         assert_eq!(got.network.allow, ["api.anthropic.com"]);
         assert_eq!(got.network.deny, ["0.0.0.0/0"]);
+    }
+
+    #[test]
+    fn v1_only_template_uses_finds_what_v2_cannot_render() {
+        let uses = super::v1_only_template_uses;
+        // v2-renderable templates: nothing reported.
+        for ok in [
+            "{{ steps.a.stdout }} {{ steps.b.response }} {{ steps.c.exit_code }}",
+            "{{ target | shell_quote }} {{ vars.X }} {{ args.Y }} {{ scope.value }}",
+            "{% if a != b %}x{% endif %} {{ a != b }} plain session_id text",
+            "{{ scope.index }} {{- steps.x.stderr -}}",
+        ] {
+            assert!(uses(&[ok]).is_empty(), "{ok}: {:?}", uses(&[ok]));
+        }
+        assert_eq!(uses(&["{{ stack.tools.lint }}"]), ["{{ stack.* }}"]);
+        assert_eq!(uses(&["{{- prompts.fix -}}"]), ["{{ prompts.* }}"]);
+        assert_eq!(uses(&["{{ session_id }}"]), ["{{ session_id }}"]);
+        assert_eq!(
+            uses(&["{{ steps.list.output | join(sep=',') }}"]),
+            ["{{ steps.<name>.output }}"]
+        );
+        assert_eq!(
+            uses(&["{{ steps.a.session_id }}"]),
+            ["{{ steps.<name>.session_id }}"]
+        );
+        assert_eq!(uses(&["{{ list.output }}"]), ["{{ <name>.output }}"]);
+        assert_eq!(
+            uses(&["{{ from(\"a-b\").stdout }}"]),
+            ["{{ from(\"<name>\") }}"]
+        );
+        assert_eq!(uses(&["{{ foo.bar? }}"]), ["the `?`/`!` accessors"]);
+        assert_eq!(uses(&["{{ foo.bar! | upper }}"]), ["the `?`/`!` accessors"]);
+        // Any step field v2 does not expose, also inside `{% … %}`.
+        assert_eq!(
+            uses(&["{{ steps.tpl.rendered }}"]),
+            ["{{ steps.<name>.rendered }}"]
+        );
+        assert_eq!(
+            uses(&["{% for i in steps.loop.iterations %}{{ i }}{% endfor %}"]),
+            ["{{ steps.<name>.iterations }}"]
+        );
+        assert_eq!(
+            uses(&["{%- if stack.name == \"rust\" -%}x{% endif %}"]),
+            ["{{ stack.* }}"]
+        );
+        assert!(
+            uses(&["{{ steps.stack.stdout }} {% if steps.a.exit_code == 0 %}{% endif %}"])
+                .is_empty()
+        );
+        // String literals and loop/set variables with these names are valid
+        // on v2 and must not be reported.
+        for ok in [
+            "{{ \"stack\" }} {{ 'session_id: ' ~ steps.a.stdout }}",
+            "{% if steps.a.stdout == \"prompts.x\" %}{% endif %}",
+            "{% for stack in [\"a\", \"b\"] %}{{ stack }}{% endfor %}",
+            "{% set session_id = steps.a.stdout %}{{ session_id }}",
+        ] {
+            assert!(uses(&[ok]).is_empty(), "{ok}: {:?}", uses(&[ok]));
+        }
     }
 
     #[test]

@@ -50,9 +50,11 @@
 //! scope-body dispatch so scoped chat steps adapt through the same helper
 //! as top-level chat steps.
 //!
-//! Executors for `call` / `repeat` / `map` landed in the scope-runner commit.
-//! `parallel` is the only v1 kind still rejected outright with
-//! [`AdapterError::UnsupportedStepType`].
+//! `parallel` is adapted as well: [`adapt`] turns each top-level
+//! `parallel` body into a synthesised scope named `__parallel_<index>`, run
+//! by the same scope runner as `call` / `repeat` / `map`. Like those, it is
+//! a container, so `parallel` inside another scope body is rejected with
+//! [`AdapterError::NestedScopesNotSupported`].
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -804,7 +806,6 @@ fn parse_chat_timeout_duration(s: &StepDef) -> Result<Option<Duration>, AdapterE
 /// [`agent_config_str`] for the same reason — v1 silently returned
 /// `None` on non-string payloads; v2 surfaces the mismatch so a
 /// misspelled YAML shape doesn't drop a flag on the floor.
-#[allow(dead_code)] // wired into adapt_step in PR 5c
 fn chat_config_str<'a>(s: &'a StepDef, key: &'static str) -> Result<Option<&'a str>, AdapterError> {
     match s.config.get(key) {
         None | Some(serde_yaml::Value::Null) => Ok(None),
@@ -820,7 +821,6 @@ fn chat_config_str<'a>(s: &'a StepDef, key: &'static str) -> Result<Option<&'a s
 /// swallowed non-integer payloads (a stray string on `max_tokens` would
 /// ship as "no override"); the adapter errors instead so a typo in the
 /// YAML surfaces at load time.
-#[allow(dead_code)] // wired into adapt_step in PR 5c
 fn chat_config_u64(s: &StepDef, key: &'static str) -> Result<Option<u64>, AdapterError> {
     match s.config.get(key) {
         None | Some(serde_yaml::Value::Null) => Ok(None),
@@ -843,7 +843,6 @@ fn chat_config_u64(s: &StepDef, key: &'static str) -> Result<Option<u64>, Adapte
 /// today). Accepts both integer and float YAML numbers so
 /// `temperature: 0` and `temperature: 0.7` both work — v1 parity at
 /// `src/steps/chat.rs:350-354`.
-#[allow(dead_code)] // wired into adapt_step in PR 5c
 fn chat_config_f64(s: &StepDef, key: &'static str) -> Result<Option<f64>, AdapterError> {
     match s.config.get(key) {
         None | Some(serde_yaml::Value::Null) => Ok(None),
@@ -868,7 +867,6 @@ fn chat_config_f64(s: &StepDef, key: &'static str) -> Result<Option<f64>, Adapte
 /// through to [`ChatProvider::OpenAiCompatible`] only when `base_url:`
 /// is set — v1's escape hatch for self-hosted gateways. Without it, an
 /// unknown name is treated as a typo.
-#[allow(dead_code)] // wired into adapt_step in PR 5c
 fn parse_chat_provider(
     step_name: &str,
     value: &str,
@@ -913,7 +911,6 @@ fn parse_chat_provider(
 /// `"none"` normalize to `None` at the adapter boundary — the runtime
 /// only sees a strategy when one was actually requested. Default counts
 /// match `src/steps/chat.rs:34-57` (10, 10, 2+5, 50_000).
-#[allow(dead_code)] // wired into adapt_step in PR 5c
 fn parse_chat_truncation(s: &StepDef) -> Result<Option<ChatTruncation>, AdapterError> {
     let Some(strategy) = chat_config_str(s, "truncation_strategy")? else {
         return Ok(None);

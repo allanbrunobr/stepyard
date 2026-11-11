@@ -1,0 +1,3 @@
+fn f() {
+    tracing::warn!(api_key = %key, "bad");
+}

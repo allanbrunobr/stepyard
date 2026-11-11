@@ -17,7 +17,7 @@
 //! * [`SandboxId`] — newtype over `uuid::Uuid`. The container identifier
 //!   that crosses process boundaries.
 //!
-//! # Invariants (NFC3, Invariante 3 of ARCHITECTURE.md)
+//! # Invariants (invariant 5 of ARCHITECTURE.md)
 //!
 //! * Containers are cattle. Destroying and recreating a sandbox never loses
 //!   state that matters — anything load-bearing is in the `Session` log.
@@ -102,7 +102,7 @@ pub struct ExecOptions {
 /// The contract every sandbox backend implements.
 ///
 /// Implementors are `Send + Sync` so the harness can share a single
-/// orchestrator across concurrent sessions (Invariante 9).
+/// orchestrator across concurrent sessions (ARCHITECTURE invariant 7).
 #[async_trait]
 pub trait SandboxLifecycle: Send + Sync {
     /// Create a brand-new sandbox for this `session_id`.
@@ -220,7 +220,7 @@ pub trait SandboxLifecycle: Send + Sync {
 /// [`SandboxLifecycle`] trait-object surface.
 ///
 /// The harness shares `Arc<dyn SandboxLifecycle>` across tasks
-/// (Invariante 9). These checks are never invoked; the compiler typechecks
+/// (ARCHITECTURE invariant 7). These checks are never invoked; the compiler typechecks
 /// them so that any change which makes a method's returned future `!Send`
 /// (e.g. switching to `#[async_trait(?Send)]`) breaks the build before
 /// the harness can spawn it.
@@ -375,5 +375,141 @@ mod tests {
             .expect_err("default interactive exec should be unsupported");
 
         assert!(matches!(err, SandboxError::InteractiveNotSupported));
+    }
+}
+
+/// `docker run` / `podman run` hardening flags for session containers
+/// (SEG-RUST-15). Conservative on purpose: the setup script still runs
+/// `chown` and the agent runs with `--user`, so the default capability set
+/// stays minus what nothing here uses; `no-new-privileges` stops setuid
+/// binaries from regaining privileges, and a pids limit stops fork bombs.
+pub const HARDENING_ARGS: &[&str] = &[
+    "--security-opt",
+    "no-new-privileges",
+    "--pids-limit",
+    "4096",
+    "--cap-drop",
+    "NET_RAW",
+    "--cap-drop",
+    "MKNOD",
+    "--cap-drop",
+    "AUDIT_WRITE",
+    "--cap-drop",
+    "SETFCAP",
+    "--cap-drop",
+    "SYS_CHROOT",
+];
+
+/// Split a step's env into the `--env NAME` argv elements and the
+/// `(NAME, value)` pairs to set on the container CLI process (SEG-RUST-12).
+///
+/// `docker exec --env NAME` / `podman exec --env NAME` copy the value from
+/// the CLI's own environment, so values never appear on the argv, which any
+/// local user can read with `ps`. Keys are sorted for deterministic argv.
+///
+/// Exception: a name the container CLI itself reads (see
+/// [`governs_container_cli`]) is not set on the CLI process, or a step's
+/// `PATH`, `HOME` or `DOCKER_HOST` meant for the container would decide which
+/// `docker` binary runs, which daemon it talks to or which config it loads.
+/// Those pass as `--env NAME=VALUE` on the argv, as before SEG-RUST-12.
+pub fn env_by_name(
+    env: &std::collections::HashMap<String, String>,
+) -> (Vec<String>, Vec<(String, String)>) {
+    let mut pairs: Vec<(String, String)> =
+        env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut argv = Vec::with_capacity(pairs.len() * 2);
+    let mut by_name = Vec::with_capacity(pairs.len());
+    for (k, v) in pairs {
+        argv.push("--env".to_string());
+        if governs_container_cli(&k) {
+            argv.push(format!("{k}={v}"));
+        } else {
+            argv.push(k.clone());
+            by_name.push((k, v));
+        }
+    }
+    (argv, by_name)
+}
+
+/// Whether the docker/podman CLI (or the ssh it may spawn for a remote
+/// daemon) reads this variable for its own behaviour.
+pub fn governs_container_cli(name: &str) -> bool {
+    const EXACT: &[&str] = &["PATH", "HOME", "TMPDIR", "SHELL", "USER"];
+    const PREFIXES: &[&str] = &[
+        "DOCKER_",
+        "CONTAINER_",
+        "CONTAINERS_",
+        "PODMAN_",
+        "BUILDKIT_",
+        "BUILDX_",
+        "XDG_",
+        "SSH_",
+        "LD_",
+        "DYLD_",
+    ];
+    let upper = name.to_ascii_uppercase();
+    EXACT.contains(&name)
+        || PREFIXES.iter().any(|p| name.starts_with(p))
+        || upper.ends_with("_PROXY")
+}
+
+#[cfg(test)]
+mod env_by_name_tests {
+    use super::env_by_name;
+
+    #[test]
+    fn values_stay_off_the_argv() {
+        let env = [
+            ("TOKEN".to_string(), "s3cr3t".to_string()),
+            ("A".to_string(), "x=y".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let (argv, pairs) = env_by_name(&env);
+        assert_eq!(argv, ["--env", "A", "--env", "TOKEN"]);
+        assert!(!argv.iter().any(|a| a.contains("s3cr3t") || a.contains('=')));
+        assert_eq!(
+            pairs,
+            vec![
+                ("A".into(), "x=y".into()),
+                ("TOKEN".into(), "s3cr3t".into())
+            ]
+        );
+    }
+
+    /// A step env meant for the container must not reconfigure the host's
+    /// container CLI: those names travel on the argv, not on the CLI process.
+    #[test]
+    fn names_the_container_cli_reads_stay_off_its_environment() {
+        let env = [
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("HOME".to_string(), "/root".to_string()),
+            (
+                "DOCKER_HOST".to_string(),
+                "tcp://elsewhere:2375".to_string(),
+            ),
+            ("https_proxy".to_string(), "http://p:3128".to_string()),
+            ("TOKEN".to_string(), "s3cr3t".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let (argv, pairs) = env_by_name(&env);
+        assert_eq!(
+            argv,
+            [
+                "--env",
+                "DOCKER_HOST=tcp://elsewhere:2375",
+                "--env",
+                "HOME=/root",
+                "--env",
+                "PATH=/usr/bin:/bin",
+                "--env",
+                "TOKEN",
+                "--env",
+                "https_proxy=http://p:3128",
+            ]
+        );
+        assert_eq!(pairs, vec![("TOKEN".into(), "s3cr3t".into())]);
     }
 }

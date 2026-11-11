@@ -14,6 +14,10 @@ use uuid::Uuid;
 #[test]
 fn v1_renders_both_vars_and_args_for_cli_variables() {
     let Ok(url) = std::env::var("DATABASE_URL") else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] DATABASE_URL not set");
         return;
     };

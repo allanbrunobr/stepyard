@@ -27,6 +27,13 @@ pub enum MockCall {
     Destroy {
         id: SandboxId,
     },
+    /// `destroy_by_session` (TEST-01). On Docker `destroy(id)` is a no-op and
+    /// only this call removes the container, so tests must be able to tell
+    /// them apart. The mock still delegates to `destroy` afterwards (the
+    /// trait's default contract), so a `Destroy` record follows.
+    DestroyBySession {
+        session_id: Uuid,
+    },
     Exec {
         id: SandboxId,
         cmd: String,
@@ -139,6 +146,14 @@ impl SandboxLifecycle for MockLifecycle {
     async fn destroy(&self, id: &SandboxId) -> Result<(), SandboxError> {
         self.calls.lock().await.push(MockCall::Destroy { id: *id });
         Ok(())
+    }
+
+    async fn destroy_by_session(&self, session_id: Uuid) -> Result<(), SandboxError> {
+        self.calls
+            .lock()
+            .await
+            .push(MockCall::DestroyBySession { session_id });
+        self.destroy(&SandboxId::from(session_id)).await
     }
 
     async fn exec(&self, id: &SandboxId, cmd: &[String]) -> Result<ExecOutput, SandboxError> {

@@ -243,7 +243,7 @@ impl CancelToken {
 /// The key design property: between two `step` calls the engine holds no
 /// state about what has already run. `step` always asks the session log
 /// "how many steps have completed?" and executes the next one. This is
-/// what makes `resume` and `cancel` trivially correct (Invariante 11).
+/// what makes `resume` and `cancel` trivially correct (ARCHITECTURE invariant 8).
 pub struct Engine {
     session: Session,
     executor: Arc<dyn StepExecutor>,
@@ -624,6 +624,18 @@ impl Engine {
     /// (`StepCompleted` | `StepFailed`) into the session log. Returns
     /// [`StepOutcome::WorkflowCompleted`] once every step has a completion
     /// event in the log.
+    ///
+    /// Runs inside a `session` tracing span carrying `session_id`, so every
+    /// diagnostic log line emitted while the step runs can be matched to its
+    /// session log. The span is ERROR level only so that a filter such as
+    /// `RUST_LOG=warn` keeps it: an INFO span would be filtered out and the
+    /// warnings logged under it would lose their `session_id`.
+    #[tracing::instrument(
+        name = "session",
+        level = "error",
+        skip_all,
+        fields(session_id = %self.session.id().as_uuid())
+    )]
     pub async fn step(&mut self) -> Result<StepOutcome, EngineError> {
         // Ask the log how far we are. "Completed" counts only include
         // successful StepCompleted events; a StepFailed means the workflow
@@ -1133,7 +1145,7 @@ impl Engine {
                 // gate step's `{{ steps.X.stdout }}` survives a process crash
                 // and reloads via `progress_from_log` — without the snapshot
                 // the harness would need per-session memory between steps and
-                // break Invariante 11 on resume (PR 2 of Task #31).
+                // break ARCHITECTURE invariant 8 on resume (PR 2 of Task #31).
                 let snapshot = stepyard_core::StepOutputSnapshot {
                     stdout: output.stdout.clone(),
                     stderr: output.stderr.clone(),
@@ -2251,7 +2263,7 @@ impl Engine {
         // compute_progress relies on. If the assistant append
         // fails, the next scan sees only the staged user turn for
         // this step_name, and the next `step_started` will drop it
-        // on rerun (Invariante 11).
+        // on rerun (ARCHITECTURE invariant 8).
         self.emit(Event::ChatMessageAppended {
             step_name: step.name.clone(),
             session: session_bucket,
@@ -2289,6 +2301,7 @@ impl Engine {
     // ── Internals ───────────────────────────────────────────────────────
 
     pub(crate) async fn emit(&self, event: Event) -> Result<(), EngineError> {
+        let event = cap_step_output(event, max_step_output_bytes());
         let payload = serde_json::to_value(&event)
             .map_err(|e| EngineError::InvalidState(format!("serialize: {e}")))?;
         self.session.append(payload).await?;
@@ -2303,7 +2316,14 @@ impl Engine {
     async fn finalise_success(&mut self) -> Result<(), EngineError> {
         if self.session.status() == SessionStatus::Running {
             self.sync_container_workspace_back().await;
-            self.finalize_workspace_success_if_configured().await?;
+            if let Err(err) = self.finalize_workspace_success_if_configured().await {
+                // A merge conflict or git failure at finalization used to
+                // return before any terminal status, leaving the session
+                // `running` forever (BUG-HARNESS-06). The MergeConflict event
+                // is already in the log; record the failure before reporting.
+                self.session.fail().await?;
+                return Err(err);
+            }
             let duration_ms = self
                 .started_at
                 .map(|t| t.elapsed().as_millis() as u64)
@@ -2422,7 +2442,7 @@ pub(crate) struct Progress {
     /// Captured Claude CLI `session_id` keyed by top-level agent step
     /// name, rebuilt on every scan. The v2 agent executor consumes this
     /// to resolve explicit `resume: <step_name>` / `fork_session:
-    /// <step_name>` argv from the log alone — Invariante 11 means the
+    /// <step_name>` argv from the log alone — ARCHITECTURE invariant 8 means the
     /// live-run `SessionManager` is gone after a crash, so the session
     /// log is the only source of truth. PR 5a of Task #31.
     ///
@@ -2452,7 +2472,7 @@ pub(crate) struct Progress {
     /// `session` field on [`Event::ChatMessageAppended`]). Each bucket
     /// holds the **committed** turns in log-append order, so a post-
     /// crash replay of a `session: shared` chat step sees the same
-    /// conversation the pre-crash run durably produced — Invariante 11
+    /// conversation the pre-crash run durably produced — ARCHITECTURE invariant 8
     /// means there's no in-memory chat history between `step` calls,
     /// so the log is the only source of truth (PR 5b of Task #31).
     ///
@@ -2519,7 +2539,7 @@ fn compute_progress(events: &[SessionEvent]) -> Result<Progress, EngineError> {
     // 5a gave `agent_session_ids`. Turns from a step that crashes
     // before completion, fails, or is still in flight are discarded;
     // a `step_started` for the same `step_name` clears the stage so a
-    // post-resume rerun re-stages from scratch (Invariante 11).
+    // post-resume rerun re-stages from scratch (ARCHITECTURE invariant 8).
     let mut chat_sessions: HashMap<String, Vec<ChatMessage>> = HashMap::new();
     let mut pending_chat_turns: HashMap<String, Vec<(String, ChatMessage)>> = HashMap::new();
 
@@ -2781,6 +2801,62 @@ pub(crate) enum CmdOutcome {
     IdleTimedOut { idle_ms: u64 },
 }
 
+/// Default cap on `stdout` and `stderr` each, per step, in the session log.
+pub const DEFAULT_MAX_STEP_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// `STEPYARD_MAX_STEP_OUTPUT_BYTES`, or [`DEFAULT_MAX_STEP_OUTPUT_BYTES`].
+pub fn max_step_output_bytes() -> usize {
+    std::env::var("STEPYARD_MAX_STEP_OUTPUT_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|n: &usize| *n > 0)
+        .unwrap_or(DEFAULT_MAX_STEP_OUTPUT_BYTES)
+}
+
+/// Cap the output a `StepCompleted` event carries into the session log
+/// (BUG-HARNESS-08). Every step's full stdout/stderr used to be persisted —
+/// a build log of hundreds of MB went into one JSONB row — and the log is
+/// replayed in full several times per step, so the cost grew with every
+/// step. Each stream keeps its first `max` bytes (cut on a char boundary)
+/// plus a marker saying how much was dropped; later steps see the same
+/// capped value, because they read outputs back from the log.
+///
+/// The same cap applies to the other events that carry a step's output: the
+/// error of a `StepFailed` (a failing `cmd` puts its whole stderr there) and
+/// the content of a `ChatMessageAppended` (a chat reply).
+pub fn cap_step_output(mut event: Event, max: usize) -> Event {
+    match event {
+        Event::StepCompleted {
+            output: Some(ref mut snap),
+            ..
+        } => {
+            cap_text(&mut snap.stdout, max);
+            cap_text(&mut snap.stderr, max);
+        }
+        Event::StepFailed { ref mut error, .. } => cap_text(error, max),
+        Event::ChatMessageAppended {
+            ref mut content, ..
+        } => cap_text(content, max),
+        _ => {}
+    }
+    event
+}
+
+fn cap_text(text: &mut String, max: usize) {
+    if text.len() <= max {
+        return;
+    }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let dropped = text.len() - end;
+    text.truncate(end);
+    text.push_str(&format!(
+        "\n…[stepyard: output truncated, {dropped} more bytes; raise STEPYARD_MAX_STEP_OUTPUT_BYTES to keep more]"
+    ));
+}
+
 /// Overlay `defaults` < `workflow_env` < `step_env` (later layers win) and
 /// expand any exact-form `${VAR}` value against the host process env.
 ///
@@ -2817,6 +2893,12 @@ pub fn resolve_env(
         // Copy the captured var name out of `v` before mutating `v`.
         let var_name_opt = parse_host_var(v.as_str()).map(str::to_string);
         if let Some(var_name) = var_name_opt {
+            if !host_var_allowed(&var_name) {
+                return Err(EngineError::InvalidState(format!(
+                    "`${{{var_name}}}` looks like a secret: a workflow may read it from the \
+                     host only if you list it in {ENV_ALLOW_VAR} (comma-separated names)"
+                )));
+            }
             let resolved = std::env::var(&var_name).map_err(|_| {
                 EngineError::InvalidState(format!("host env variable not set: {var_name}"))
             })?;
@@ -2824,6 +2906,43 @@ pub fn resolve_env(
         }
     }
     Ok(env)
+}
+
+/// Environment variable in which the *user* lists host variables that
+/// workflows may read through `${VAR}` even though their name looks like a
+/// secret (SEG-RUST-05). A workflow file cannot set it.
+pub const ENV_ALLOW_VAR: &str = "STEPYARD_ENV_ALLOW";
+
+/// Whether a workflow, defaults file or step may expand `${name}` from the
+/// host. Workflow YAML and the analysed repository's `.stepyard/defaults.yaml`
+/// are not trusted, and the expanded value lands in commands that may run in
+/// a container or be sent elsewhere, so names that look like credentials are
+/// refused unless the user allow-lists them.
+pub fn host_var_allowed(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    let secret_like = [
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRIVATE",
+        "AUTH",
+        "COOKIE",
+        "SESSION",
+        "DATABASE_URL",
+        "_KEY",
+        "APIKEY",
+    ]
+    .iter()
+    .any(|marker| upper.contains(marker))
+        || upper.ends_with("KEY");
+    if !secret_like {
+        return true;
+    }
+    std::env::var(ENV_ALLOW_VAR)
+        .map(|list| list.split(',').any(|item| item.trim() == name))
+        .unwrap_or(false)
 }
 
 /// Match the exact-form `${VAR}` pattern and return the inner key.
@@ -3533,5 +3652,125 @@ mod send_check {
         assert_send_future(Engine::resume_existing(
             config, pool, session_id, workflow, lifecycle,
         ));
+    }
+
+    /// P2-1 (analysis 2026-11-09, SEG-RUST-05): `${VAR}` with a secret-like
+    /// name is refused unless the user allow-lists it.
+    #[test]
+    fn secret_like_host_vars_need_the_user_allowlist() {
+        for benign in ["HOME", "CI", "LANG", "STEPYARD_TARGET_DIR"] {
+            assert!(host_var_allowed(benign), "{benign}");
+        }
+        for secret in [
+            "GH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "DATABASE_URL",
+            "DB_PASSWORD",
+            "SSH_PRIVATE_KEY_PATH",
+            "OPENAI_APIKEY",
+        ] {
+            assert!(!host_var_allowed(secret), "{secret}");
+        }
+        let err = resolve_env(
+            &Defaults::default(),
+            &HashMap::from([("T".to_string(), "${GH_TOKEN}".to_string())]),
+            &HashMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains(ENV_ALLOW_VAR), "{err}");
+    }
+
+    /// BUG-HARNESS-08: step output is capped before it reaches the log.
+    #[test]
+    fn step_output_is_capped_on_a_char_boundary_with_a_marker() {
+        let big = format!("é{}", "a".repeat(3000));
+        let event = Event::StepCompleted {
+            step_name: "s".into(),
+            step_type: "cmd".into(),
+            duration_ms: 1,
+            timestamp: chrono::Utc::now(),
+            input_tokens: None,
+            output_tokens: None,
+            cost_usd: None,
+            sandboxed: false,
+            output: Some(StepOutputSnapshot {
+                stdout: big.clone(),
+                stderr: "short".into(),
+                exit_code: 0,
+            }),
+            scope_context: None,
+            gate_outcome: None,
+            agent_session_id: None,
+        };
+        // 1 byte: the cut falls inside the 2-byte "é" and must back off to 0.
+        let Event::StepCompleted {
+            output: Some(snap), ..
+        } = cap_step_output(event.clone(), 1)
+        else {
+            unreachable!()
+        };
+        assert!(snap
+            .stdout
+            .starts_with("\n…[stepyard: output truncated, 3002 more bytes"));
+        assert!(snap
+            .stderr
+            .starts_with("s\n…[stepyard: output truncated, 4 more bytes"));
+        let Event::StepCompleted {
+            output: Some(snap), ..
+        } = cap_step_output(event.clone(), 1000)
+        else {
+            unreachable!()
+        };
+        assert!(snap.stdout.starts_with(&big[..1000]));
+        assert!(snap.stdout.contains("2002 more bytes"));
+        assert_eq!(snap.stderr, "short", "a stream under the cap is untouched");
+        let Event::StepCompleted {
+            output: Some(snap), ..
+        } = cap_step_output(event, 1 << 20)
+        else {
+            unreachable!()
+        };
+        assert_eq!(snap.stdout, big, "under the default cap nothing changes");
+        // A failing cmd carries its stderr in `StepFailed.error`; a chat
+        // reply is the content of `ChatMessageAppended`. Both are capped.
+        let Event::StepFailed { error, .. } = cap_step_output(
+            Event::StepFailed {
+                step_name: "s".into(),
+                step_type: "cmd".into(),
+                error: big.clone(),
+                duration_ms: 1,
+                timestamp: chrono::Utc::now(),
+                sandboxed: false,
+            },
+            1000,
+        ) else {
+            unreachable!()
+        };
+        assert!(error.starts_with(&big[..1000]));
+        assert!(error.contains("2002 more bytes"), "{error}");
+        let Event::ChatMessageAppended { content, .. } = cap_step_output(
+            Event::ChatMessageAppended {
+                step_name: "s".into(),
+                session: "c".into(),
+                role: stepyard_core::ChatRole::Assistant,
+                content: big.clone(),
+                timestamp: chrono::Utc::now(),
+            },
+            1000,
+        ) else {
+            unreachable!()
+        };
+        assert!(content.starts_with(&big[..1000]));
+        assert!(content.contains("2002 more bytes"), "{content}");
+        let other = Event::WorkflowStarted {
+            timestamp: chrono::Utc::now(),
+        };
+        assert_eq!(
+            serde_json::to_value(cap_step_output(other.clone(), 1)).unwrap(),
+            serde_json::to_value(other).unwrap(),
+            "other events pass through unchanged"
+        );
     }
 }

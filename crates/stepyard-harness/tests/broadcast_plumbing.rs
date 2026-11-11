@@ -40,6 +40,10 @@ async fn pool() -> Option<sqlx::PgPool> {
 #[tokio::test]
 async fn every_engine_subscribes_to_shared_shutdown_tx() {
     let Some(pool) = pool().await else {
+        assert!(
+            std::env::var_os("STEPYARD_REQUIRE_DB").is_none(),
+            "STEPYARD_HARNESS_DATABASE_URL not set but STEPYARD_REQUIRE_DB is set: a database test must not skip"
+        );
         eprintln!("[skip] STEPYARD_HARNESS_DATABASE_URL not set");
         return;
     };

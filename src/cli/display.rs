@@ -1,6 +1,3 @@
-// Public API — new items used after worktree merge; suppress dead_code lint until then
-#![allow(dead_code)]
-
 use std::time::Duration;
 
 use colored::Colorize;

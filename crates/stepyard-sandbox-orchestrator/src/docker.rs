@@ -94,6 +94,7 @@ impl SandboxLifecycle for DockerLifecycle {
         let mut command = Command::new("docker");
         command
             .args(["run", "-d", "--name", &name])
+            .args(crate::HARDENING_ARGS)
             .arg("--label")
             .arg(format!("session_id={session_id}"));
         for volume in &opts.volumes {
@@ -216,14 +217,13 @@ impl SandboxLifecycle for DockerLifecycle {
         let name = Self::container_name(*id.as_uuid());
         let mut pairs: Vec<(&String, &String)> = env.iter().collect();
         pairs.sort_by(|a, b| a.0.cmp(b.0));
-        let env_values: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        // Names only on the argv; values go through the CLI's env (SEG-RUST-12).
+        let (env_argv, env_values) = crate::env_by_name(env);
 
-        let mut docker_args: Vec<&str> =
-            Vec::with_capacity(2 + env_values.len() * 2 + 1 + cmd.len());
+        let mut docker_args: Vec<&str> = Vec::with_capacity(2 + env_argv.len() + 1 + cmd.len());
         docker_args.push("exec");
-        for value in &env_values {
-            docker_args.push("--env");
-            docker_args.push(value);
+        for arg in &env_argv {
+            docker_args.push(arg);
         }
         docker_args.push(&name);
         for arg in cmd {
@@ -241,6 +241,7 @@ impl SandboxLifecycle for DockerLifecycle {
 
         let output = Command::new("docker")
             .args(&docker_args)
+            .envs(env_values.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .output()
             .await
             .map_err(|e| SandboxError::ExecFailed(e.to_string()))?;
@@ -267,13 +268,13 @@ impl SandboxLifecycle for DockerLifecycle {
         let name = Self::container_name(*id.as_uuid());
         let mut pairs: Vec<(&String, &String)> = opts.env.iter().collect();
         pairs.sort_by(|a, b| a.0.cmp(b.0));
-        let env_values: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        // Names only on the argv; values go through the CLI's env (SEG-RUST-12).
+        let (env_argv, env_values) = crate::env_by_name(&opts.env);
 
         let mut command = Command::new("docker");
         command.arg("exec");
-        for value in &env_values {
-            command.arg("--env").arg(value);
-        }
+        command.args(&env_argv);
+        command.envs(env_values.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         command.arg(&name);
         command.args(cmd);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());

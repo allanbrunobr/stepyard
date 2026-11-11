@@ -25,8 +25,8 @@ steps:
     # ... type-specific fields below
     config:                  # optional — step-inline overrides (Layer 4, see CONFIG.md)
       key: value
-    output_type: text | json | integer | lines | boolean  # optional — parses output for template access
-    async_exec: true | false # optional — run concurrently, await later (see STEP-TYPES.md#async)
+    output_type: text | json | integer | lines | boolean  # optional, v1 only — parses output for template access
+    async_exec: true | false # optional, v1 only — run concurrently, await later (see STEP-TYPES.md#async)
 ```
 
 ### Type-specific fields
@@ -73,12 +73,13 @@ Available in any rendered string (`run`, `prompt`, `condition`, `message`, `item
 | `{{ args.<key> }}`                    | Values set via `--var KEY=VALUE`                             |
 | `{{ steps.<name>.stdout / stderr / exit_code }}` | Step outputs (cmd)                                |
 | `{{ steps.<name>.response }}`         | Agent/chat response text                                     |
-| `{{ steps.<name>.session_id }}`       | Captured Claude CLI session id (agent steps)                 |
-| `{{ steps.<name>.output }}`           | Parsed output (see `output_type:`)                           |
-| `{{ <name>.output }}`                 | Shorthand — top-level access to any step                     |
-| `{{ from("<name>").output }}`         | Alternate accessor (useful for names with dashes)            |
-| `{{ session_id }}`                    | First captured Claude session for the workflow run           |
+| `{{ steps.<name>.session_id }}`       | Captured Claude CLI session id (agent steps) — **v1 only**   |
+| `{{ steps.<name>.output }}`           | Parsed output (see `output_type:`) — **v1 only**             |
+| `{{ <name>.output }}`                 | Shorthand — top-level access to any step — **v1 only**       |
+| `{{ from("<name>").output }}`         | Alternate accessor (useful for names with dashes) — **v1 only** |
+| `{{ session_id }}`                    | First captured Claude session for the workflow run — **v1 only** |
 | `{{ scope.value }} / scope.index`     | Inside repeat/map/call scopes                                |
+| `{{ stack.* }}`                       | Detected stack info when `prompts/registry.yaml` exists — **v1 only** |
 
 **Quoting in `run:` commands.** `cmd` steps run with `sh -c`, so a value that
 comes from outside the workflow (the target, file names from the repository,
@@ -88,9 +89,9 @@ value contains. Do not wrap it in more quotes: write `cat -- {{ scope.value |
 shell_quote }}`, not `cat "{{ scope.value | shell_quote }}"`. Tera's
 `get_env` is disabled in Stepyard templates; pass values with `--var KEY=VALUE`.
 
-| `{{ stack.* }}`                       | Detected stack info when `prompts/registry.yaml` exists      |
+### Template operators (v1 only)
 
-### Template operators
+The v2 engine renders plain Tera paths; `stepyard validate` refuses these operators on v2.
 
 - `?` — safe accessor: `{{ foo.bar? }}` returns `""` if missing instead of failing.
 - `!` — strict accessor: `{{ foo.bar! }}` fails the step if missing (default for bare paths).
@@ -112,6 +113,9 @@ stepyard execute hello.yaml -- world
 ```
 
 ## Full example with all top-level fields
+
+This example uses `output_type` and `{{ steps.list_files.output }}`, which are
+**v1 only**: run it with `--engine v1` (`stepyard validate` refuses it on v2).
 
 ```yaml
 name: review-pr
@@ -156,7 +160,7 @@ steps:
 
 ## Validation
 
-Run `stepyard validate workflow.yaml` to check syntax before execution. Validation catches:
+Run `stepyard validate workflow.yaml` to check a workflow before execution. By default it also runs the checks of the v2 engine (the one `execute` uses by default), including a best-effort refusal of the names and operators marked **v1 only** above and of step fields v2 does not have, in the workflow file only (not in prompt template files, Rhai scripts, or anything a render would catch); `--engine v1` applies only the v1 rules. Validation catches:
 
 - Missing required fields (`name`, `steps`, step-type–specific fields)
 - Unknown `type:` values
