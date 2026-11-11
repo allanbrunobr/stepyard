@@ -1521,30 +1521,47 @@ fn v1_only_template_uses(texts: &[&str]) -> Vec<String> {
     const V2_STEP_FIELDS: &[&str] = &["stdout", "stderr", "exit_code", "response"];
     let expr = regex::Regex::new(r"(?s)\{\{(.*?)\}\}|\{%(.*?)%\}").expect("valid regex");
     // `(^|[^\w.])` keeps `steps.stack.stdout` (a step named `stack`) out.
-    let rules: [(&str, &str); 5] = [
-        (r"(^|[^\w.])stack\b", "{{ stack.* }}"),
-        (r"(^|[^\w.])prompts\.", "{{ prompts.* }}"),
-        (r"(^|[^\w.])session_id\b", "{{ session_id }}"),
-        (r"(^|[^\w.])from\s*\(", "{{ from(\"<name>\") }}"),
-        (r"[\w\]][?!]\s*(\||$)", "the `?`/`!` accessors"),
+    // Third field: the top-level name a rule is about, so a loop or `set`
+    // variable with that name (valid on v2) is not reported.
+    let rules: [(&str, &str, &str); 5] = [
+        (r"(^|[^\w.])stack\b", "{{ stack.* }}", "stack"),
+        (r"(^|[^\w.])prompts\.", "{{ prompts.* }}", "prompts"),
+        (r"(^|[^\w.])session_id\b", "{{ session_id }}", "session_id"),
+        (r"(^|[^\w.])from\s*\(", "{{ from(\"<name>\") }}", ""),
+        (r"[\w\]][?!]\s*(\||$)", "the `?`/`!` accessors", ""),
     ];
-    let rules: Vec<(regex::Regex, &str)> = rules
+    let rules: Vec<(regex::Regex, &str, &str)> = rules
         .iter()
-        .map(|(p, l)| (regex::Regex::new(p).expect("valid regex"), *l))
+        .map(|(p, l, n)| (regex::Regex::new(p).expect("valid regex"), *l, *n))
         .collect();
     let step_field =
         regex::Regex::new(r"(^|[^\w.])steps\.[\w-]+\.([A-Za-z_]\w*)").expect("valid regex");
     let shorthand = regex::Regex::new(r"(^|[^\w.])([A-Za-z_]\w*)\.output\b").expect("valid regex");
+    // String literals are data, not names: `{{ "stack" }}` is valid on v2.
+    let literal = regex::Regex::new(r#""(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'"#).expect("valid regex");
+    let declared_re = regex::Regex::new(
+        r"\{%-?\s*(?:for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\b|set(?:_global)?\s+(\w+)\s*=)",
+    )
+    .expect("valid regex");
+    let declared: Vec<&str> = texts
+        .iter()
+        .flat_map(|t| declared_re.captures_iter(t))
+        .flat_map(|c| [c.get(1), c.get(2), c.get(3)])
+        .flatten()
+        .map(|m| m.as_str())
+        .collect();
     let mut found: Vec<String> = Vec::new();
     for text in texts {
         for cap in expr.captures_iter(text) {
-            let inner = cap
+            let raw = cap
                 .get(1)
                 .or_else(|| cap.get(2))
                 .map_or("", |m| m.as_str())
                 .trim_matches('-');
-            for (pattern, label) in &rules {
-                if pattern.is_match(inner) {
+            let inner = literal.replace_all(raw, "\"\"");
+            let inner = inner.as_ref();
+            for (pattern, label, name) in &rules {
+                if pattern.is_match(inner) && !declared.contains(name) {
                     found.push((*label).to_string());
                 }
             }
@@ -2295,6 +2312,16 @@ sandbox:
             uses(&["{{ steps.stack.stdout }} {% if steps.a.exit_code == 0 %}{% endif %}"])
                 .is_empty()
         );
+        // String literals and loop/set variables with these names are valid
+        // on v2 and must not be reported.
+        for ok in [
+            "{{ \"stack\" }} {{ 'session_id: ' ~ steps.a.stdout }}",
+            "{% if steps.a.stdout == \"prompts.x\" %}{% endif %}",
+            "{% for stack in [\"a\", \"b\"] %}{{ stack }}{% endfor %}",
+            "{% set session_id = steps.a.stdout %}{{ session_id }}",
+        ] {
+            assert!(uses(&[ok]).is_empty(), "{ok}: {:?}", uses(&[ok]));
+        }
     }
 
     #[test]
