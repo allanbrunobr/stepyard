@@ -284,11 +284,12 @@ Details: [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 
 | Feature | Status in v2 |
 |---------|--------------|
-| `{{ stack.* }}`, `{{ prompts.* }}`, and the template names and step outputs marked **v1 only** in [YAML-SPEC](docs/YAML-SPEC.md) and [STEP-TYPES](docs/STEP-TYPES.md) (`steps.X.output`, `.rendered`, `.iterations`, …) | Not rendered; `stepyard validate` refuses them. Use `--engine v1` |
+| `{{ stack.* }}`, `{{ prompts.* }}`, and the template names and step outputs marked **v1 only** in [YAML-SPEC](docs/YAML-SPEC.md) and [STEP-TYPES](docs/STEP-TYPES.md) (`steps.X.output`, `.rendered`, `.iterations`, …) | Not rendered. `stepyard validate` refuses them when they appear in the workflow file (not in prompt template files). Use `--engine v1` |
 | `--dry-run`, `--repo`, `--resume`, `--json` | Rejected with an error. Use `--engine v1` (or `stepyard inspect` for a dry run) |
 | `--quiet` | No effect (a warning says so; `--verbose` works: it prints cmd output) |
 | `parallel:` on `map` | Ignored. Items run one after another (v1 also runs them one after another by default) |
 | `config.events.dashboard` | Not sent. Dashboard events work only with v1 |
+| `config.patterns` | Ignored: a step does not take the model or settings of a matching name pattern |
 | `--timeout` | Has no effect in either engine (a warning says so). Set `config.global.timeout` or a step `timeout:` |
 
 ## CLI overview

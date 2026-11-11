@@ -160,7 +160,7 @@ steps:
 
 ## Validation
 
-Run `stepyard validate workflow.yaml` to check a workflow before execution. By default it also runs the checks of the v2 engine (the one `execute` uses by default), including a refusal of the names and operators marked **v1 only** above; `--engine v1` applies only the v1 rules. Validation catches:
+Run `stepyard validate workflow.yaml` to check a workflow before execution. By default it also runs the checks of the v2 engine (the one `execute` uses by default), including a best-effort refusal of the names and operators marked **v1 only** above and of step fields v2 does not have, in the workflow file only (not in prompt template files, Rhai scripts, or anything a render would catch); `--engine v1` applies only the v1 rules. Validation catches:
 
 - Missing required fields (`name`, `steps`, step-type–specific fields)
 - Unknown `type:` values

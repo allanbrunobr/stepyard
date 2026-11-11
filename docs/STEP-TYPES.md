@@ -89,7 +89,7 @@ is available as `{{ scope.value }}` in the first iteration.
   initial_value: "first attempt"
 ```
 
-**Outputs:** v2: `stdout` (the scope's `outputs:` rendered for the last iteration). v1 only: `iterations` (list of per-iteration outputs), `final_value`.
+**Outputs:** v1 only: `iterations` (list of per-iteration outputs), `final_value`. What v2 puts in the step's `stdout` is a known gap: after a gate `break` in a later iteration, `outputs:` is rendered with the previous iteration's steps (see `docs/p3-progresso.md`).
 
 ## `map` — collection processing
 
@@ -106,7 +106,7 @@ expression producing one). `parallel:` controls concurrency.
 
 Each scope invocation gets `{{ scope.value }}` (the item) and `{{ scope.index }}`.
 
-**Outputs:** v2: `stdout` (the scope's `outputs:` for the last item). v1 only: `iterations` (one per item), `final_value` (last).
+**Outputs:** v1 only: `iterations` (one per item), `final_value` (last). On v2 the step's `stdout` is a JSON array with each item's output and `outputs:` is ignored, a known gap (see `docs/p3-progresso.md`).
 
 ## `parallel` — concurrent nested steps
 
@@ -127,8 +127,9 @@ Runs a fixed set of nested steps concurrently and waits for all.
       run: "cargo fmt --check"
 ```
 
-A failure in any branch fails the parent step. Outputs are stored by child `name`
-in `steps.checks.<name>`.
+A failure in any branch fails the parent step. Reading a branch's output from a
+later step is a known gap: neither engine exposes `steps.checks.<name>` (see
+`docs/p3-progresso.md`).
 
 ## `call` — single scope invocation
 
@@ -141,7 +142,7 @@ Runs a scope once. Useful for grouping reusable logic without looping.
   initial_value: "{{ target }}"
 ```
 
-**Outputs:** v2: `stdout` (the scope's `outputs:`). v1 only: `iterations: [single]`, `final_value`.
+**Outputs:** v2: `stdout` is the scope's `outputs:` rendered after the run, or the last scope step's `stdout` when there is no `outputs:`. v1 only: `iterations: [single]`, `final_value`.
 
 ## `template` — Tera file rendering
 
@@ -180,9 +181,14 @@ value. Useful for light data shaping between steps without spawning a shell.
 - name: total
   type: script
   run: |
-    let tokens = steps.plan.stats.input_tokens + steps.plan.stats.output_tokens;
-    tokens
+    let count = ctx_get("count.stdout");
+    "files changed: " + count
 ```
+
+Earlier step outputs are read with `ctx_get("<step>.stdout")` (also
+`.stderr` and `.exit_code`) and the target with `ctx_get("target")`; there
+is no `steps.*` variable in the script, and `ctx_get` returns `()` for a
+missing key.
 
 **Outputs:** the evaluated Rhai value (coerced to JSON), as `stdout` on v2.
 

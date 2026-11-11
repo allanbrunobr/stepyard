@@ -184,6 +184,10 @@ steps:
       model: claude-haiku-4-5 # step-inline wins even over pattern
 ```
 
+On v2 (the default) `config.patterns` is ignored, so `lint_check` runs with
+the `agent` layer's model; run this example with `--engine v1` to get the
+pattern layer.
+
 ## Running the examples
 
 ```bash

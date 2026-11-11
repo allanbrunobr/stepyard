@@ -352,6 +352,19 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
   - um teste que valida cada workflow completo da EXAMPLES para o motor que o título declara.
 - **Mutante:** sem a checagem de campo, 2 testes falham.
 
+**Sexta rodada, no `f20079d`: 9 achados vivos.** Separei o que este PR introduziu do que já existia.
+- **Introduzido aqui, corrigido:**
+  - **Frases sobre o v2 escritas sem medir.** Na rodada anterior, descrevi na STEP-TYPES a saída do `repeat` e do `map` no v2 a partir de um trecho de código, e as duas descrições estavam erradas. Agora só sobra o que está ligado a uma linha de código ou a uma medição.
+  - **Saída de um `call` no v2.** É o `outputs:` renderizado, ou o `stdout` do último passo. Medi com um teste novo (`tests/cli_v2_call_stdout.rs`, com Postgres), e é nisso que se apoia a correção do `flaky-test-fix.yaml`.
+  - **Exemplo de `script`.** Agora usa `ctx_get("<passo>.stdout")`, a forma que os dois motores implementam.
+  - **Falso positivo do `validate`.** Ele recusava um literal de texto (`{{ "stack" }}`) ou uma variável de `for`/`set` chamada `stack` ou `session_id`. Agora os literais são ignorados, e os nomes declarados no próprio workflow também. Caso no teste; mutante morto.
+  - **A promessa do `validate`.** O README e a YAML-SPEC agora dizem que a checagem é de melhor esforço, só no arquivo do workflow: os arquivos `.md.tera` e o Rhai ficam de fora.
+- **Já existia, agora documentado como lacuna** (ver "O que ficou de fora"):
+  - o `repeat` com `break`;
+  - o `map` ignora `outputs:`;
+  - `config.patterns` não vale no v2;
+  - o `parallel` não tem `steps.checks.<nome>`.
+
 ## O que ficou de fora da P3
 
 ### Pulado por ordem (decisão do Allan ou major de dependência)
@@ -374,6 +387,13 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **BUG-HARNESS-03** (item 3): o `parallel` só grava `StepStarted`/`StepCompleted` dos sub-passos no fim. A correção muda a ordem dos eventos no log. Precisa ser conferida contra a invariante 2 (pareamento por passo de nível superior), a contagem de progresso e retomada, o contrato do dashboard (`tests/fixtures/dashboard-event.json`) e o limite de saída do item 3. Não a comecei para não deixá-la pela metade.
 - **Releitura completa do log** várias vezes por passo (item 3): agora limitada por passo, mas ainda linear no número de passos.
 - **Limite de saída no v1** (item 3): o erro de um passo que falha entra inteiro no log de sessão do v1. Fica para a desativação do v1.
+
+### Defeitos antigos do motor v2 achados pela revisão pré-PR (documentados, não corrigidos)
+Todos são anteriores a este PR. A STEP-TYPES, a EXAMPLES e o README agora os descrevem como lacuna, em vez de prometer o contrário.
+- **`repeat` com `break` depois da primeira iteração.** O `outputs:` é renderizado com os passos da iteração anterior. O `break` não incrementa `next_iteration` (`scope.rs`, ramo `Break` contra o `Completed`), e o `synthesise` usa `next_iteration - 1`. Cenário: um `cmd` com `fail_on_error: false` que passa na segunda tentativa, seguido de um gate `break` e de `outputs: "{{ scope.index }}:{{ steps.work.stdout }}"`.
+- **`map` ignora `outputs:`.** O `stdout` é um array JSON com a saída de cada item (`scope.rs`, `serde_json::to_string(&collected)`).
+- **`config.patterns` não vale no v2.** O adaptador não lê a camada de padrões, então o exemplo 8 da EXAMPLES só aplica o modelo do padrão no v1.
+- **`parallel`.** Nenhum motor expõe `steps.<parallel>.<ramo>`.
 - **G3 e Rule7a mais amplos** (item 2): exigem um mecanismo de exceção por linha no `audit-patterns.sh`.
 - **MANUT-09** (item 5): restam 24 `allow(dead_code)` em 7 arquivos sobre código de fato morto, mais 2 para alvos não-Unix e 2 em `tests/support`.
 - **MANUT-12** (item 8): continuam cerca de 500 referências de história de planejamento (`Story N`, `PR N`, `Task #N`, `Round N`, `Epic N`). Melhor tratá-las depois da desativação do v1.
