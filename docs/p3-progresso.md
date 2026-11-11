@@ -340,6 +340,18 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 - **YAML-SPEC**: `{{ session_id }}`, `{{ steps.X.session_id }}` e a seção de operadores agora levam a marca v1 only.
 - **README**: o run posterior marca a sessão órfã como `failed` só no build PostgreSQL. No build SQLite (o binário pré-compilado), ela fica `running`.
 
+**Quinta rodada, no `83b53b9`: 8 achados vivos, da mesma classe.** Em vez de ir somando nomes a uma lista de proibidos, fechei a classe: no v2, `validate` só aceita os quatro campos que um passo tem (`stdout`, `stderr`, `exit_code`, `response`), olhando dentro de `{{ … }}` e de `{% … %}`.
+- **O que entrou:**
+  - A STEP-TYPES marca como v1 only os campos de saída que só o v1 tem (`duration`, `session_id`, `stats`, `model`, `iterations`, `final_value`, `rendered`) e diz onde o v2 põe cada resultado (`stdout`). O exemplo do `template` agora usa `.stdout`.
+  - A EXAMPLES marca como v1 only os exemplos 4, 6 e 7.
+  - A ARCHITECTURE para de prometer `failed` para a sessão órfã no build SQLite e aponta para as marcas v1 only.
+  - O README lista essas marcas em "Known limitations of v2".
+  - **O `validate` achou um defeito antigo:** o `workflows/flaky-test-fix.yaml` usava `{{ steps.X.outputs }}`, campo que não existe em nenhum dos dois motores. Agora usa `.stdout`, onde o v2 põe a saída do `call`.
+- **Testes:**
+  - casos novos no teste unitário, inclusive `{% for … in steps.X.iterations %}` e um passo chamado `stack`, que não pode ser acusado;
+  - um teste que valida cada workflow completo da EXAMPLES para o motor que o título declara.
+- **Mutante:** sem a checagem de campo, 2 testes falham.
+
 ## O que ficou de fora da P3
 
 ### Pulado por ordem (decisão do Allan ou major de dependência)

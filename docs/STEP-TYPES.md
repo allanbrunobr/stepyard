@@ -15,7 +15,7 @@ Runs `/bin/sh -c "<run>"` and captures stdout, stderr, exit code.
   output_type: integer
 ```
 
-**Outputs:** `stdout`, `stderr`, `exit_code`, `duration`.
+**Outputs:** `stdout`, `stderr`, `exit_code`; `duration` is v1 only.
 Non-zero exit fails the step unless wrapped in a `gate` with `on_fail: continue`.
 
 ## `agent` — Claude Code CLI
@@ -34,7 +34,7 @@ the streaming response.
     system_prompt_append: "Reply in JSON."
 ```
 
-**Outputs:** `response` (final text), `session_id`, `stats` (tokens, cost, duration).
+**Outputs:** `response` (final text); `session_id` and `stats` (tokens, cost, duration) are v1 only.
 
 ### Session management
 
@@ -58,7 +58,7 @@ Calls the Anthropic (or OpenAI-compatible) API directly. No CLI, no session.
     session: review           # optional — grouped multi-turn history
 ```
 
-**Outputs:** `response`, `model`, `stats`. Requires `ANTHROPIC_API_KEY`.
+**Outputs:** `response`; `model` and `stats` are v1 only. Requires `ANTHROPIC_API_KEY`.
 
 ## `gate` — conditional branch
 
@@ -89,7 +89,7 @@ is available as `{{ scope.value }}` in the first iteration.
   initial_value: "first attempt"
 ```
 
-**Outputs:** `iterations` (list of per-iteration outputs), `final_value`.
+**Outputs:** v2: `stdout` (the scope's `outputs:` rendered for the last iteration). v1 only: `iterations` (list of per-iteration outputs), `final_value`.
 
 ## `map` — collection processing
 
@@ -106,7 +106,7 @@ expression producing one). `parallel:` controls concurrency.
 
 Each scope invocation gets `{{ scope.value }}` (the item) and `{{ scope.index }}`.
 
-**Outputs:** `iterations` (one per item), `final_value` (last).
+**Outputs:** v2: `stdout` (the scope's `outputs:` for the last item). v1 only: `iterations` (one per item), `final_value` (last).
 
 ## `parallel` — concurrent nested steps
 
@@ -141,7 +141,7 @@ Runs a scope once. Useful for grouping reusable logic without looping.
   initial_value: "{{ target }}"
 ```
 
-**Outputs:** `iterations: [single]`, `final_value`.
+**Outputs:** v2: `stdout` (the scope's `outputs:`). v1 only: `iterations: [single]`, `final_value`.
 
 ## `template` — Tera file rendering
 
@@ -161,14 +161,14 @@ With a prompt template used as a dynamic path:
   prompt: "fix-lint/{{ stack.name }}"   # → prompts/fix-lint/react.md.tera
 ```
 
-**Outputs:** `rendered` (string). Typically fed to a subsequent agent step:
+**Outputs:** the rendered text, as `stdout` on v2 and as `rendered` on v1 (v1 only). Typically fed to a subsequent agent step:
 
 ```yaml
 - name: prompt_file
   type: template
 - name: run_agent
   type: agent
-  prompt: "{{ steps.prompt_file.rendered }}"
+  prompt: "{{ steps.prompt_file.stdout }}"   # v1: .rendered
 ```
 
 ## `script` — inline Rhai
@@ -184,7 +184,7 @@ value. Useful for light data shaping between steps without spawning a shell.
     tokens
 ```
 
-**Outputs:** the evaluated Rhai value (coerced to JSON).
+**Outputs:** the evaluated Rhai value (coerced to JSON), as `stdout` on v2.
 
 ## Async execution (`async_exec`)
 

@@ -24,9 +24,9 @@ There are two engines in the same binary:
 |---|---|---|
 | Code | `src/engine/`, `src/steps/` | `crates/stepyard-harness/` |
 | State | In memory | Append-only session log, replayed on every step |
-| Crash recovery | No | The log survives a crash and can be replayed (`Engine::resume_existing` in the library), but the CLI has no resume command: a later `stepyard execute` marks a session whose owner is gone as `failed` and starts a new one |
+| Crash recovery | No | The log survives a crash and can be replayed (`Engine::resume_existing` in the library), but the CLI has no resume command: a later `stepyard execute` starts a new session; the PostgreSQL build also marks a session whose owner is gone as `failed`, the SQLite build leaves it `running` |
 | Sandbox | Copies the project into the container and copies results back | Copies the project into the session container. `cmd` and `agent` run there; changes are copied back. `chat` stays on the host |
-| Features | All | Same YAML; a few features are still v1-only (README, "Known limitations of v2") |
+| Features | All | Same YAML; a few features are still v1-only (README, "Known limitations of v2"; template names and step outputs marked **v1 only** in docs/YAML-SPEC.md and docs/STEP-TYPES.md) |
 
 v1 is the original engine. v2 is the rewrite around a durable session log; it
 is the default and new work goes there. The CLI translates the shared YAML
@@ -150,7 +150,7 @@ Still missing on v2:
 
 - Dashboard events (`config.events.dashboard` is sent only by v1).
 - Nested scopes.
-- `{{ stack.* }}` and `{{ prompts.* }}`.
+- `{{ stack.* }}`, `{{ prompts.* }}` and the other template names and step outputs marked **v1 only** in docs/YAML-SPEC.md and docs/STEP-TYPES.md.
 - `--repo`.
 - `--dry-run`.
 

@@ -284,7 +284,7 @@ Details: [`docs/DOCKER-SANDBOX.md`](docs/DOCKER-SANDBOX.md).
 
 | Feature | Status in v2 |
 |---------|--------------|
-| `{{ stack.* }}`, `{{ prompts.* }}` | Not rendered. Use `--engine v1` |
+| `{{ stack.* }}`, `{{ prompts.* }}`, and the template names and step outputs marked **v1 only** in [YAML-SPEC](docs/YAML-SPEC.md) and [STEP-TYPES](docs/STEP-TYPES.md) (`steps.X.output`, `.rendered`, `.iterations`, …) | Not rendered; `stepyard validate` refuses them. Use `--engine v1` |
 | `--dry-run`, `--repo`, `--resume`, `--json` | Rejected with an error. Use `--engine v1` (or `stepyard inspect` for a dry run) |
 | `--quiet` | No effect (a warning says so; `--verbose` works: it prints cmd output) |
 | `parallel:` on `map` | Ignored. Items run one after another (v1 also runs them one after another by default) |

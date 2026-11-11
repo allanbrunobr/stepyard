@@ -73,7 +73,7 @@ steps:
     initial_value: "initial"
 ```
 
-### 4. Map over files
+### 4. Map over files (v1 only: `output_type` and `.output`)
 
 ```yaml
 name: review-pr
@@ -121,7 +121,7 @@ steps:
         run: "cargo fmt --check"
 ```
 
-### 6. Prompt templates (external files)
+### 6. Prompt templates (external files; v1 only: `.rendered` and `{{ stack }}`)
 
 ```yaml
 name: stack-aware-lint
@@ -145,7 +145,7 @@ Tools: lint={{ stack.tools.lint }}, test={{ stack.tools.test }}
 
 See `tests/fixtures/template_step.yaml` for a full example.
 
-### 7. Stack-aware dynamic prompt
+### 7. Stack-aware dynamic prompt (v1 only)
 
 ```yaml
 steps:
