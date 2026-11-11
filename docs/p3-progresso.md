@@ -373,7 +373,11 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
 **Oitava rodada, no `fefe2e8`, só estática: 4 achados vivos, todos de texto deste PR, corrigidos.**
 - **Herança de `config.agent` no v2.** Na sétima rodada escrevi aqui que as chaves de agent e chat vêm de `config.agent`/`config.chat` no v2. Do `config.agent` o passo herda só `model` e `command` (`INHERITED_AGENT_KEYS`), mais o `timeout` pelas quatro camadas. Do `config.chat` herda `provider`, `model`, `api_key_env`, `base_url`, `temperature`, `max_tokens` e `timeout` (`INHERITED_CHAT_KEYS`). O resto fica registrado em "Defeitos antigos do motor v2".
 - **`ctx_get` de um `gate` no v2.** A STEP-TYPES dizia "for every step type", mas um `gate` não grava saída (`output: None` em `engine.rs` e `scope.rs`), então não tem chave.
-- **`ctx_get` no v1.** Eu tinha escrito que só o `cmd` tem `.stdout`. No v1, `script`, `call` e `repeat` também devolvem a variante `Cmd` do `StepOutput`; quem não tem é `agent`/`chat` (`.response`) e `template` (`.rendered`).
+- **`ctx_get` no v1.** Eu tinha escrito que só o `cmd` tem `.stdout`. No v1, `script` também devolve a variante `Cmd` do `StepOutput`; quem não tem `.stdout` é `agent`/`chat` (`.response`), `template` (`.rendered`), `gate` (`.passed`, `.message`) e `call`/`repeat`, que devolvem `Scope` (`.iterations`, `.final_value`; `src/steps/call.rs` e `repeat.rs`). A STEP-TYPES remete às saídas de cada tipo, sem lista própria.
+
+**Nona rodada, no `64fb2d2`, só estática: 1 achado vivo deste PR, corrigido.**
+- **Registro da oitava rodada errado.** O item acima (e a mensagem do commit `64fb2d2`) dizia que no v1 `call` e `repeat` devolvem `Cmd`. Devolvem `Scope`. Corrigi o texto; a mensagem do commit fica como está.
+- **Anterior ao PR, só registro (precisa de execução):** no v1, o `flaky-test-fix.yaml` lê `steps.test_run_1.stdout` de um `call`, que no v1 não tem `.stdout`. Já quebrava antes (lia `.outputs`, que não existe em nenhum motor). O README ainda o lista como "v1, v2".
 - **Prefixo do log em texto.** A CONFIG, o comentário de `init_tracing` em `src/main.rs` e o item 9 diziam que a linha *começa* com `session{session_id=…}:`. O formato padrão do `tracing-subscriber` escreve o nível antes dos spans: a linha é ` WARN session{session_id=…}: …`. O prefixo existe, mas depois do nível.
 
 ## O que ficou de fora da P3
@@ -412,7 +416,7 @@ Todos são anteriores a este PR. A STEP-TYPES, a EXAMPLES e o README agora os de
 - **`model` de `config.patterns` no v2.** O adaptador aplica do padrão só `timeout` (cmd e agent) e `fail_on_error` (cmd). O `model` e as demais chaves de agent e chat do padrão ficam de fora, então o exemplo 8 da EXAMPLES só aplica o modelo do padrão no v1.
 - **`config.agent` no v2 só passa `model`, `command` e `timeout`.** `system_prompt_append`, `session`, `resume` e `fork_session` só valem no próprio passo (`permissions` fica de fora de propósito). Os workflows `refactor.yaml` e `flaky-test-fix.yaml` põem suas regras em `config.agent.system_prompt_append`, e no v2 os passos agent rodam sem elas. Do `config.chat`, `session` e `truncation_*` também não passam.
 - **`parallel`.** Nenhum motor expõe `steps.<parallel>.<ramo>`.
-- **`ctx_get` difere entre motores.** No v2 todo passo que grava saída (todos menos o `gate`) tem `.stdout`/`.stderr`/`.exit_code`; no v1 `agent`/`chat` têm `.response` e `template` tem `.rendered`, não `.stdout`.
+- **`ctx_get` difere entre motores.** No v2 todo passo que grava saída (todos menos o `gate`) tem `.stdout`/`.stderr`/`.exit_code`; no v1 `agent`/`chat` têm `.response`, `template` tem `.rendered` e `call`/`repeat` têm `.iterations`/`.final_value`, não `.stdout`. Pela leitura do código, o `flaky-test-fix.yaml` (que lê `.stdout` de um `call` num template) deve falhar no v1, embora o README o liste como "v1, v2"; não medi.
 
 ### Ainda abertos da P2 (fora do escopo desta rodada)
 - **BUG-CLI-08**: evento `WorkflowFailed` no core.

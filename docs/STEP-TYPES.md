@@ -189,9 +189,9 @@ On v2 (the default) earlier step outputs are read with
 `ctx_get("<step>.stdout")` (also `.stderr` and `.exit_code`), and the target
 with `ctx_get("target")`; there is no `steps.*` variable in the script, and
 `ctx_get` returns `()` for a missing key. A `gate` records no output, so it
-has no keys. On `--engine v1` the keys are each step's own output fields:
-`agent` and `chat` have `.response` (not `.stdout`) and `template` has
-`.rendered`.
+has no keys. On `--engine v1` the keys are the fields of each step's own v1
+output (see each type's **Outputs**): for example `agent` and `chat` have
+`.response`, not `.stdout`.
 
 **Outputs:** the evaluated Rhai value (coerced to JSON), as `stdout` on v2.
 
