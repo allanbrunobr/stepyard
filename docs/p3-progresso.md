@@ -373,7 +373,7 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
   - o que o v2 aplica de `config.patterns`;
   - o `parallel` não tem `steps.checks.<nome>`.
 
-**Sétima a 12ª rodadas.** Da 7ª à 11ª foram só estáticas, sem build no M5. Cada uma achou erros no texto que eu tinha escrito para fechar a rodada anterior, e nenhuma achou defeito de código deste PR. A 12ª rodou depois da verificação completa no M1. Ela achou dois comportamentos deste PR que a doc descrevia de forma estreita demais. O estado final de cada assunto está na doc de uso e em "Defeitos antigos do motor v2", abaixo; este registro só aponta onde.
+**Sétima a 13ª rodadas.** Da 7ª à 11ª foram só estáticas, sem build no M5. Cada uma achou erros no texto que eu tinha escrito para fechar a rodada anterior, e nenhuma achou defeito de código deste PR. A 12ª rodou depois da verificação completa no M1. Ela achou dois comportamentos deste PR que a doc descrevia de forma estreita demais. A 13ª, por decisão do coordenador, cobriu só o texto mudado depois da 12ª. O estado final de cada assunto está na doc de uso e em "Defeitos antigos do motor v2", abaixo; este registro só aponta onde.
 - **7ª, no `5aeacf1`, corrigida em `fefe2e8`:** o que o v2 aplica de `config.patterns`; a ordem das seções desta página; o `ctx_get` no v1.
 - **8ª, no `fefe2e8`, corrigida em `64fb2d2`:** a herança de `config.agent` no v2; o `ctx_get` de um `gate`; o `ctx_get` no v1; a posição do prefixo de sessão no log em texto.
 - **9ª, no `64fb2d2`, corrigida em `f733f32`:** o `ctx_get` de `call`/`repeat` no v1. A mensagem do commit `64fb2d2` ficou com o erro.
@@ -383,7 +383,8 @@ O CI agora também roda em PR para qualquer base, para que um PR empilhado tenha
   - **O limite de 1 MiB (item 3) vale para a saída de todo tipo de passo.** Inclui o array do `map`, e a CONFIG falava só em `cmd`, `agent` e `chat`. Um `map` cujo `items:` lê uma saída cortada recebe o texto cortado com o marcador, não a lista, e não falha (`parse_items` não tem caminho de erro). A CONFIG passa a dizer as duas coisas. Lido, não medido.
   - **O job `msrv` (item 10) checa só as features padrão no 1.88.** A CONTRIBUTING prometia que qualquer `cargo update` que subisse a MSRV reprovaria o CI. Agora ela diz que `sqlite` e `slack` ficam de fora e dá os dois comandos para checar à mão. A correção de verdade são dois `cargo check` a mais no job, mudança em `.github/` que fica para o Allan.
   - **Anterior ao PR, só registrado:** o env de um passo `agent` no contêiner, em "Defeitos antigos", abaixo.
-- **O que não foi medido.** As afirmações novas dessas rodadas vêm da leitura do código, salvo onde um teste é citado. Quatro delas têm sonda escrita, fora do repositório, para a vez do M1: o `fail_on_error` de um padrão no v2, o `system_prompt_append` de `config.agent` no v2, a linha de log em texto com o span de sessão e as chaves do `ctx_get` no v1.
+- **13ª, só sobre o delta `4e003f9..58a2082`, estática e sem o M1, corrigida no commit seguinte:** a CONFIG chamava de "agregado" o `stdout` de `call` e `repeat`. Só o `map` junta as iterações, num array JSON. O `call` e o `repeat` guardam o `outputs:` renderizado ou a saída do último passo.
+- **O que não foi medido.** As afirmações novas dessas rodadas vêm da leitura do código, salvo onde um teste é citado. Quatro delas têm sonda escrita, fora do repositório, que não rodou na vez do M1 de 11/11 (falta autorização): o `fail_on_error` de um padrão no v2, o `system_prompt_append` de `config.agent` no v2, a linha de log em texto com o span de sessão e as chaves do `ctx_get` no v1.
 
 ## O que ficou de fora da P3
 

@@ -179,7 +179,7 @@ or which daemon it talks to; those values are visible in `ps`.
 ## Step output kept in the session log
 
 On `--engine v2` (the default), the output of every step type (stdout and
-stderr, each, including the aggregated `stdout` of `map`, `call` and `repeat`,
+stderr, each, including the `stdout` of `map` (the JSON array of every item's output), `call` and `repeat`,
 the error of a failed step and a chat reply) is kept in the session log up to
 `STEPYARD_MAX_STEP_OUTPUT_BYTES` (default 1 MiB). The v1
 engine (`--engine v1`, also used by remote dispatch and the Slack bot) does
